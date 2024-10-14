@@ -5,7 +5,7 @@ CAPONE is a cluster API implementation for OpenNebula. CAPI is an API and toolse
 ## Documentation
 [Documentation for capone is in the project Wiki](https://github.com/OpenNebula/cluster-api-provider-opennebula/wiki)
 
-For a quick start, please read the [requirements](https://github.com/OpenNebula/one-apps/wiki/quick_start).
+For a quick start, please read the [requirements](https://github.com/OpenNebula/one-apps/wiki/capi_quick).
 
 ## Contributing
 
