@@ -1,0 +1,64 @@
+/*
+Copyright 2024, OpenNebula Project, OpenNebula Systems.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package v1beta1
+
+import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
+// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+
+// ONEClusterSpec defines the desired state of ONECluster
+type ONEClusterSpec struct {
+	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
+	// Important: Run "make" to regenerate code after modifying this file
+
+	// Foo is an example field of ONECluster. Edit onecluster_types.go to remove/update
+	Foo string `json:"foo,omitempty"`
+}
+
+// ONEClusterStatus defines the observed state of ONECluster
+type ONEClusterStatus struct {
+	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
+	// Important: Run "make" to regenerate code after modifying this file
+}
+
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+
+// ONECluster is the Schema for the oneclusters API
+type ONECluster struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   ONEClusterSpec   `json:"spec,omitempty"`
+	Status ONEClusterStatus `json:"status,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+
+// ONEClusterList contains a list of ONECluster
+type ONEClusterList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []ONECluster `json:"items"`
+}
+
+func init() {
+	SchemeBuilder.Register(&ONECluster{}, &ONEClusterList{})
+}

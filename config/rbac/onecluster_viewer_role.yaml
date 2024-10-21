@@ -1,35 +1,23 @@
----
+# permissions for end users to view oneclusters.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: manager-role
+  labels:
+    app.kubernetes.io/name: cluster-api-provider-opennebula
+    app.kubernetes.io/managed-by: kustomize
+  name: onecluster-viewer-role
 rules:
 - apiGroups:
   - infrastructure.cluster.x-k8s.io
   resources:
   - oneclusters
-  - onemachines
   verbs:
-  - create
-  - delete
   - get
   - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - infrastructure.cluster.x-k8s.io
   resources:
-  - oneclusters/finalizers
-  - onemachines/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - infrastructure.cluster.x-k8s.io
-  resources:
   - oneclusters/status
-  - onemachines/status
   verbs:
   - get
-  - patch
-  - update

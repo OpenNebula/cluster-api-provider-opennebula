@@ -1,0 +1,6 @@
+## Append samples of your project ##
+resources:
+- infrastructure_v1beta1_onecluster.yaml
+- infrastructure_v1beta1_onemachine.yaml
+- infrastructure_v1beta1_onemachinetemplate.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

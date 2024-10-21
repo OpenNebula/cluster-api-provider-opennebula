@@ -1,13 +1,15 @@
----
+# permissions for end users to edit onemachines.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: manager-role
+  labels:
+    app.kubernetes.io/name: cluster-api-provider-opennebula
+    app.kubernetes.io/managed-by: kustomize
+  name: onemachine-editor-role
 rules:
 - apiGroups:
   - infrastructure.cluster.x-k8s.io
   resources:
-  - oneclusters
   - onemachines
   verbs:
   - create
@@ -20,16 +22,6 @@ rules:
 - apiGroups:
   - infrastructure.cluster.x-k8s.io
   resources:
-  - oneclusters/finalizers
-  - onemachines/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - infrastructure.cluster.x-k8s.io
-  resources:
-  - oneclusters/status
   - onemachines/status
   verbs:
   - get
-  - patch
-  - update
