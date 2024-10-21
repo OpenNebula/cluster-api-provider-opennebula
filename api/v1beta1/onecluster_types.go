@@ -18,24 +18,34 @@ package v1beta1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+
+const (
+	ClusterFinalizer = "onecluster.infrastructure.cluster.x-k8s.io"
+)
 
 // ONEClusterSpec defines the desired state of ONECluster
 type ONEClusterSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// +optional
+	ControlPlaneEndpoint clusterv1.APIEndpoint `json:"controlPlaneEndpoint"`
 
-	// Foo is an example field of ONECluster. Edit onecluster_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	// +required
+	SecretName string `json:"secretName"`
 }
 
 // ONEClusterStatus defines the observed state of ONECluster
 type ONEClusterStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// +optional
+	Ready bool `json:"ready"`
+
+	// +optional
+	FailureDomains clusterv1.FailureDomains `json:"failureDomains,omitempty"`
+
+	// +optional
+	Conditions clusterv1.Conditions `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -48,6 +58,16 @@ type ONECluster struct {
 
 	Spec   ONEClusterSpec   `json:"spec,omitempty"`
 	Status ONEClusterStatus `json:"status,omitempty"`
+}
+
+// GetConditions returns the set of conditions for this object.
+func (c *ONECluster) GetConditions() clusterv1.Conditions {
+	return c.Status.Conditions
+}
+
+// SetConditions sets the conditions on this object.
+func (c *ONECluster) SetConditions(conditions clusterv1.Conditions) {
+	c.Status.Conditions = conditions
 }
 
 // +kubebuilder:object:root=true
