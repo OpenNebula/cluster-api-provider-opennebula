@@ -18,24 +18,37 @@ package v1beta1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+
+const (
+	MachineFinalizer = "onemachine.infrastructure.cluster.x-k8s.io"
+)
 
 // ONEMachineSpec defines the desired state of ONEMachine
 type ONEMachineSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// +optional
+	ProviderID *string `json:"providerID,omitempty"`
 
-	// Foo is an example field of ONEMachine. Edit onemachine_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	// +required
+	TemplateName string `json:"templateName"`
+
+	// +optional
+	UserData *string `json:"userData,omitempty"`
 }
 
 // ONEMachineStatus defines the observed state of ONEMachine
 type ONEMachineStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// +optional
+	Ready bool `json:"ready"`
+
+	// +optional
+	Addresses []clusterv1.MachineAddress `json:"addresses,omitempty"`
+
+	// +optional
+	Conditions clusterv1.Conditions `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -48,6 +61,14 @@ type ONEMachine struct {
 
 	Spec   ONEMachineSpec   `json:"spec,omitempty"`
 	Status ONEMachineStatus `json:"status,omitempty"`
+}
+
+func (c *ONEMachine) GetConditions() clusterv1.Conditions {
+	return c.Status.Conditions
+}
+
+func (c *ONEMachine) SetConditions(conditions clusterv1.Conditions) {
+	c.Status.Conditions = conditions
 }
 
 // +kubebuilder:object:root=true

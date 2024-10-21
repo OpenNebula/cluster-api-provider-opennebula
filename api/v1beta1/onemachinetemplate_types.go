@@ -18,25 +18,27 @@ package v1beta1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // ONEMachineTemplateSpec defines the desired state of ONEMachineTemplate
 type ONEMachineTemplateSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// +required
+	Template ONEMachineTemplateResource `json:"template"`
+}
 
-	// Foo is an example field of ONEMachineTemplate. Edit onemachinetemplate_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+type ONEMachineTemplateResource struct {
+	// +optional
+	ObjectMeta clusterv1.ObjectMeta `json:"metadata.omitempty"`
+
+	// +required
+	Spec ONEMachineSpec `json:"spec"`
 }
 
 // ONEMachineTemplateStatus defines the observed state of ONEMachineTemplate
-type ONEMachineTemplateStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-}
+type ONEMachineTemplateStatus struct{}
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
