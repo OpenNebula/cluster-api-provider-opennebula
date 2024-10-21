@@ -1,0 +1,9 @@
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: ONEMachineTemplate
+metadata:
+  labels:
+    app.kubernetes.io/name: cluster-api-provider-opennebula
+    app.kubernetes.io/managed-by: kustomize
+  name: onemachinetemplate-sample
+spec:
+  # TODO(user): Add fields here
