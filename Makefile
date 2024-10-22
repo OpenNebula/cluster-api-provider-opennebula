@@ -1,3 +1,6 @@
+-include .env
+export
+
 # Image URL to use all building/pushing image targets
 IMG ?= localhost:5005/capi-opennebula-controller:latest
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
@@ -116,7 +119,7 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
-	mkdir -p dist
+	install -d dist
 	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
 	$(KUSTOMIZE) build config/default > dist/install.yaml
 
@@ -143,45 +146,139 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	$(KUSTOMIZE) build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
 
+define CTLPTL_CLUSTER_YAML
+---
+apiVersion: ctlptl.dev/v1alpha1
+kind: Registry
+name: ctlptl-registry
+port: 5005
+---
+apiVersion: ctlptl.dev/v1alpha1
+kind: Cluster
+product: kind
+registry: ctlptl-registry
+kindV1Alpha4Cluster:
+  nodes:
+  - role: control-plane
+    extraMounts:
+    - hostPath: /var/run/docker.sock
+      containerPath: /var/run/docker.sock
+endef
+
+.PHONY: ctlptl-apply
+ctlptl-apply: export CTLPTL_CLUSTER_YAML := $(CTLPTL_CLUSTER_YAML)
+ctlptl-apply: ctlptl
+	$(CTLPTL) apply -f- <<< "$$CTLPTL_CLUSTER_YAML"
+
+.PHONY: ctlptl-delete
+ctlptl-delete: export CTLPTL_CLUSTER_YAML := $(CTLPTL_CLUSTER_YAML)
+ctlptl-delete: ctlptl
+	$(CTLPTL) delete -f- <<< "$$CTLPTL_CLUSTER_YAML"
+
+.PHONY: clusterctl-init
+clusterctl-init: clusterctl
+	$(CLUSTERCTL) init
+
+.PHONY: one-apply
+one-apply: kustomize envsubst kubectl
+	$(KUSTOMIZE) build kustomize/v1beta1/default/ | $(ENVSUBST) | $(KUBECTL) apply -f-
+
+.PHONY: one-delete
+one-delete: kubectl
+	$(KUBECTL) delete cluster/$(CLUSTER_NAME)
+
+.PHONY: one-calico
+one-calico: kubectl clusterctl
+	$(KUBECTL) --kubeconfig <($(CLUSTERCTL) get kubeconfig $(CLUSTER_NAME)) apply -f \
+	https://raw.githubusercontent.com/projectcalico/calico/v$(CALICO_VERSION)/manifests/calico.yaml
+
 ##@ Dependencies
 
 ## Location to install dependencies to
 LOCALBIN ?= $(shell pwd)/bin
 $(LOCALBIN):
-	mkdir -p $(LOCALBIN)
+	install -d $(LOCALBIN)
 
 ## Tool Binaries
-KUBECTL ?= kubectl
-KUSTOMIZE ?= $(LOCALBIN)/kustomize
+CLUSTERCTL ?= $(LOCALBIN)/clusterctl
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
+CTLPTL ?= $(LOCALBIN)/ctlptl
+ENVSUBST ?= $(LOCALBIN)/envsubst
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
+KIND ?= $(LOCALBIN)/kind
+KUBECTL ?= $(LOCALBIN)/kubectl
+KUSTOMIZE ?= $(LOCALBIN)/kustomize
 
 ## Tool Versions
-KUSTOMIZE_VERSION ?= v5.4.3
-CONTROLLER_TOOLS_VERSION ?= v0.16.1
+CALICO_VERSION ?= 3.26.1
+CLUSTERCTL_VERSION ?= 1.8.4
+CONTROLLER_TOOLS_VERSION ?= 0.16.1
+CTLPTL_VERSION ?= 0.8.34
+ENVSUBST_VERSION ?= 1.4.2
 ENVTEST_VERSION ?= release-0.19
-GOLANGCI_LINT_VERSION ?= v1.59.1
+GOLANGCI_LINT_VERSION ?= 1.59.1
+KIND_VERSION ?= 0.24.0
+KUBECTL_VERSION ?= 1.31.1
+KUSTOMIZE_VERSION ?= 5.4.3
 
-.PHONY: kustomize
-kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
-$(KUSTOMIZE): $(LOCALBIN)
-	$(call go-install-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v5,$(KUSTOMIZE_VERSION))
+.PHONY: clusterctl
+clusterctl: $(CLUSTERCTL)
+$(CLUSTERCTL): $(LOCALBIN)
+	@[ -f $@-v$(CLUSTERCTL_VERSION) ] || \
+	{ curl -fsSL https://github.com/kubernetes-sigs/cluster-api/releases/download/v$(CLUSTERCTL_VERSION)/clusterctl-linux-amd64 \
+	| install -m u=rwx,go= -o $(USER) -D /dev/fd/0 $@-v$(CLUSTERCTL_VERSION); }
+	@ln -sf $@-v$(CLUSTERCTL_VERSION) $@
 
 .PHONY: controller-gen
-controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
+controller-gen: $(CONTROLLER_GEN)
 $(CONTROLLER_GEN): $(LOCALBIN)
-	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen,$(CONTROLLER_TOOLS_VERSION))
+	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen,v$(CONTROLLER_TOOLS_VERSION))
+
+.PHONY: ctlptl
+ctlptl: $(CTLPTL)
+$(CTLPTL): $(LOCALBIN)
+	@[ -f $@-v$(CTLPTL_VERSION) ] || \
+	{ curl -fsSL https://github.com/tilt-dev/ctlptl/releases/download/v$(CTLPTL_VERSION)/ctlptl.$(CTLPTL_VERSION).linux.x86_64.tar.gz \
+	| tar -xzO -f- ctlptl \
+	| install -m u=rwx,go= -o $(USER) -D /dev/fd/0 $@-v$(CTLPTL_VERSION); }
+	@ln -sf $@-v$(CTLPTL_VERSION) $@
+
+.PHONY: envsubst
+envsubst: $(ENVSUBST)
+$(ENVSUBST): $(LOCALBIN)
+	$(call go-install-tool,$(ENVSUBST),github.com/a8m/envsubst/cmd/envsubst,v$(ENVSUBST_VERSION))
 
 .PHONY: envtest
-envtest: $(ENVTEST) ## Download setup-envtest locally if necessary.
+envtest: $(ENVTEST)
 $(ENVTEST): $(LOCALBIN)
 	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,$(ENVTEST_VERSION))
 
 .PHONY: golangci-lint
-golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
+golangci-lint: $(GOLANGCI_LINT)
 $(GOLANGCI_LINT): $(LOCALBIN)
-	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
+	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/cmd/golangci-lint,v$(GOLANGCI_LINT_VERSION))
+
+.PHONY: kind
+kind: $(KIND)
+$(KIND): $(LOCALBIN)
+	@[ -f $@-v$(KIND_VERSION) ] || \
+	{ curl -fsSL https://github.com/kubernetes-sigs/kind/releases/download/v$(KIND_VERSION)/kind-linux-amd64 \
+	| install -m u=rwx,go= -o $(USER) -D /dev/fd/0 $@-v$(KIND_VERSION); }
+	@ln -sf $@-v$(KIND_VERSION) $@
+
+.PHONY: kubectl
+kubectl: $(KUBECTL)
+$(KUBECTL): $(LOCALBIN)
+	@[ -f $@-v$(KUBECTL_VERSION) ] || \
+	{ curl -fsSL https://dl.k8s.io/release/v$(KUBECTL_VERSION)/bin/linux/amd64/kubectl \
+	| install -m u=rwx,go= -o $(USER) -D /dev/fd/0 $@-v$(KUBECTL_VERSION); }
+	@ln -sf $@-v$(KUBECTL_VERSION) $@
+
+.PHONY: kustomize
+kustomize: $(KUSTOMIZE)
+$(KUSTOMIZE): $(LOCALBIN)
+	$(call go-install-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v5,v$(KUSTOMIZE_VERSION))
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary
