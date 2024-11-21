@@ -27,7 +27,6 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	apimachinerytypes "k8s.io/apimachinery/pkg/types"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,7 +34,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	"sigs.k8s.io/cluster-api/controllers/remote"
 	utilexp "sigs.k8s.io/cluster-api/exp/util"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/annotations"
@@ -51,8 +49,7 @@ import (
 // ONEMachineReconciler reconciles a ONEMachine object
 type ONEMachineReconciler struct {
 	client.Client
-	Scheme  *runtime.Scheme
-	Tracker *remote.ClusterCacheTracker
+	Scheme *runtime.Scheme
 }
 
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=onemachines,verbs=get;list;watch;create;update;patch;delete
@@ -161,12 +158,7 @@ func (r *ONEMachineReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, r.reconcileDelete(ctx, oneCluster, machine, oneMachine, externalMachine)
 	}
 
-	res, err := r.reconcileNormal(ctx, cluster, oneCluster, machine, oneMachine, externalMachine)
-	if errors.Is(err, remote.ErrClusterLocked) {
-		log.V(5).Info("Requeuing because another worker has the lock on the ClusterCacheTracker")
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
-	}
-	return res, err
+	return r.reconcileNormal(ctx, cluster, oneCluster, machine, oneMachine, externalMachine)
 }
 
 func (r *ONEMachineReconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Cluster, oneCluster *infrav1.ONECluster, machine *clusterv1.Machine, oneMachine *infrav1.ONEMachine, externalMachine *cloud.Machine) (res ctrl.Result, retErr error) {
@@ -224,12 +216,21 @@ func (r *ONEMachineReconciler) reconcileNormal(ctx context.Context, cluster *clu
 
 	externalMachine.ByName(oneMachine.Name)
 	if !externalMachine.Exists() {
-		userData := string(dataSecret.Data["value"])
-		if oneMachine.Spec.UserData != nil {
-			userData += "\n"
-			userData += *oneMachine.Spec.UserData
+		var network *infrav1.ONEVirtualNetwork
+		if oneCluster.Spec.PrivateNetwork != nil {
+			network = oneCluster.Spec.PrivateNetwork
+		} else {
+			network = oneCluster.Spec.PublicNetwork
 		}
-		if err := externalMachine.FromTemplate(oneMachine.Spec.TemplateName, &userData); err != nil {
+
+		// Registers VR backends only for Control-Plane Nodes.
+		var router *infrav1.ONEVirtualRouter
+		if _, ok := oneMachine.GetLabels()[clusterv1.MachineControlPlaneLabel]; ok {
+			router = oneCluster.Spec.VirtualRouter
+		}
+
+		userData := string(dataSecret.Data["value"])
+		if err := externalMachine.FromTemplate(oneMachine.Spec.TemplateName, &userData, network, router); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -239,36 +240,9 @@ func (r *ONEMachineReconciler) reconcileNormal(ctx context.Context, cluster *clu
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
-	remoteClient, err := r.Tracker.GetClient(ctx, client.ObjectKeyFromObject(cluster))
-	if err != nil {
-		return ctrl.Result{}, errors.Wrap(err, "failed to generate workload cluster client")
-	}
-	if err := cloudProviderNodePatch(ctx, remoteClient, *externalMachine.NodeName(), *externalMachine.ProviderID()); err != nil {
-		log.Error(err, "Failed to patch the Kubernetes node with the machine providerID")
-		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-	}
-
 	oneMachine.Spec.ProviderID = externalMachine.ProviderID()
 	oneMachine.Status.Ready = true
 	return ctrl.Result{}, nil
-}
-
-func cloudProviderNodePatch(ctx context.Context, c client.Client, nodeName, providerID string) error {
-	log := ctrl.LoggerFrom(ctx)
-
-	node := &corev1.Node{}
-	if err := c.Get(ctx, apimachinerytypes.NamespacedName{Name: nodeName}, node); err != nil {
-		return errors.Wrap(err, "unable to complete Cloud Provider tasks: failed to retrieve node")
-	}
-
-	patchHelper, err := patch.NewHelper(node, c)
-	if err != nil {
-		return err
-	}
-
-	log.Info("Setting Kubernetes node providerID")
-	node.Spec.ProviderID = providerID
-	return patchHelper.Patch(ctx, node)
 }
 
 func setMachineAddress(oneMachine *infrav1.ONEMachine, address string) {

@@ -18,6 +18,10 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"net"
+
+	"github.com/pkg/errors"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -31,6 +35,7 @@ import (
 	"sigs.k8s.io/cluster-api/util/patch"
 
 	infrav1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/v1beta1"
+	"github.com/OpenNebula/cluster-api-provider-opennebula/internal/cloud"
 )
 
 // ONEClusterReconciler reconciles a ONECluster object
@@ -90,8 +95,19 @@ func (r *ONEClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}()
 
+	var externalRouter *cloud.Router
+	if oneCluster.Spec.VirtualRouter != nil {
+		cloudClients, err := cloud.NewClients(ctx, r.Client, oneCluster)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		vrName := fmt.Sprintf("%s-%s", oneCluster.Name, oneCluster.UID)
+		replicas := oneCluster.Spec.VirtualRouter.Replicas
+		externalRouter = cloud.NewRouter(cloudClients, &vrName, replicas)
+	}
+
 	if !oneCluster.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, r.reconcileDelete(ctx, oneCluster)
+		return ctrl.Result{}, r.reconcileDelete(ctx, oneCluster, externalRouter)
 	}
 
 	if !controllerutil.ContainsFinalizer(oneCluster, infrav1.ClusterFinalizer) {
@@ -99,15 +115,60 @@ func (r *ONEClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 
-	return ctrl.Result{}, r.reconcileNormal(ctx, oneCluster)
+	return ctrl.Result{}, r.reconcileNormal(ctx, oneCluster, externalRouter)
 }
 
-func (r *ONEClusterReconciler) reconcileNormal(ctx context.Context, oneCluster *infrav1.ONECluster) error {
+func (r *ONEClusterReconciler) reconcileNormal(ctx context.Context, oneCluster *infrav1.ONECluster, externalRouter *cloud.Router) error {
+	if externalRouter != nil {
+		externalRouter.ByName(*externalRouter.Name)
+		if !externalRouter.Exists() {
+			if err := externalRouter.FromTemplate(
+				oneCluster.Spec.VirtualRouter,
+				oneCluster.Spec.PublicNetwork,
+				oneCluster.Spec.PrivateNetwork,
+			); err != nil {
+				return errors.Wrap(err, "failed to create VR")
+			}
+		}
+
+		if oneCluster.Spec.ControlPlaneEndpoint.Host == "" {
+			if len(externalRouter.FloatingIPs) > 0 && net.ParseIP(externalRouter.FloatingIPs[0]) != nil {
+				oneCluster.Spec.ControlPlaneEndpoint.Host = externalRouter.FloatingIPs[0]
+			}
+		}
+		// TODO: use webhook?
+		if oneCluster.Spec.ControlPlaneEndpoint.Port == 0 {
+			oneCluster.Spec.ControlPlaneEndpoint.Port = 6443
+		}
+
+		if oneCluster.Spec.PrivateNetwork != nil {
+			if oneCluster.Spec.PrivateNetwork.FloatingIP == nil {
+				ipIndex := 0
+				if oneCluster.Spec.PublicNetwork != nil {
+					ipIndex++
+				}
+				oneCluster.Spec.PrivateNetwork.FloatingIP = &externalRouter.FloatingIPs[ipIndex]
+			}
+			if oneCluster.Spec.PrivateNetwork.Gateway == nil {
+				oneCluster.Spec.PrivateNetwork.Gateway = oneCluster.Spec.PrivateNetwork.FloatingIP
+			}
+			if oneCluster.Spec.PrivateNetwork.DNS == nil {
+				oneCluster.Spec.PrivateNetwork.DNS = oneCluster.Spec.PrivateNetwork.FloatingIP
+			}
+		}
+	}
+
 	oneCluster.Status.Ready = true
 	return nil
 }
 
-func (r *ONEClusterReconciler) reconcileDelete(ctx context.Context, oneCluster *infrav1.ONECluster) error {
+func (r *ONEClusterReconciler) reconcileDelete(ctx context.Context, oneCluster *infrav1.ONECluster, externalRouter *cloud.Router) error {
+	if externalRouter != nil {
+		externalRouter.ByName(*externalRouter.Name)
+		if err := externalRouter.Delete(); err != nil {
+			return errors.Wrap(err, "failed to delete VR")
+		}
+	}
 	controllerutil.RemoveFinalizer(oneCluster, infrav1.ClusterFinalizer)
 	return nil
 }

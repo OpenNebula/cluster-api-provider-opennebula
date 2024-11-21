@@ -34,9 +34,6 @@ type ONEMachineSpec struct {
 
 	// +required
 	TemplateName string `json:"templateName"`
-
-	// +optional
-	UserData *string `json:"userData,omitempty"`
 }
 
 // ONEMachineStatus defines the observed state of ONEMachine

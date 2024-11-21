@@ -53,8 +53,52 @@ spec:
                 - host
                 - port
                 type: object
+              privateNetwork:
+                properties:
+                  dns:
+                    type: string
+                  floatingIP:
+                    type: string
+                  floatingOnly:
+                    type: boolean
+                  gateway:
+                    type: string
+                  name:
+                    type: string
+                required:
+                - name
+                type: object
+              publicNetwork:
+                properties:
+                  dns:
+                    type: string
+                  floatingIP:
+                    type: string
+                  floatingOnly:
+                    type: boolean
+                  gateway:
+                    type: string
+                  name:
+                    type: string
+                required:
+                - name
+                type: object
               secretName:
                 type: string
+              virtualRouter:
+                properties:
+                  extraContext:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  replicas:
+                    format: int32
+                    type: integer
+                  templateName:
+                    type: string
+                required:
+                - templateName
+                type: object
             required:
             - secretName
             type: object

@@ -34,6 +34,43 @@ type ONEClusterSpec struct {
 
 	// +required
 	SecretName string `json:"secretName"`
+
+	// +optional
+	PublicNetwork *ONEVirtualNetwork `json:"publicNetwork,omitempty"`
+
+	// +optional
+	PrivateNetwork *ONEVirtualNetwork `json:"privateNetwork,omitempty"`
+
+	// +optional
+	VirtualRouter *ONEVirtualRouter `json:"virtualRouter,omitempty"`
+}
+
+type ONEVirtualNetwork struct {
+	// +required
+	Name string `json:"name"`
+
+	// +optional
+	FloatingIP *string `json:"floatingIP,omitempty"`
+
+	// +optional
+	FloatingOnly *bool `json:"floatingOnly,omitempty"`
+
+	// +optional
+	Gateway *string `json:"gateway,omitempty"`
+
+	// +optional
+	DNS *string `json:"dns,omitempty"`
+}
+
+type ONEVirtualRouter struct {
+	// +required
+	TemplateName string `json:"templateName"`
+
+	// +optional
+	Replicas *int32 `json:"replicas,omitempty"`
+
+	// +optional
+	ExtraContext map[string]string `json:"extraContext,omitempty"`
 }
 
 // ONEClusterStatus defines the observed state of ONECluster

@@ -146,12 +146,17 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	$(KUSTOMIZE) build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
 
+.PHONY: logs
+logs:
+	kubectl -n capone-system logs -f pod/$$(kubectl -n capone-system get pods -o json | jq -r '[.items[].metadata.name|select(startswith("capone-controller-manager-"))]|first')
+
 define CTLPTL_CLUSTER_YAML
 ---
 apiVersion: ctlptl.dev/v1alpha1
 kind: Registry
 name: ctlptl-registry
 port: 5005
+listenAddress: 0.0.0.0
 ---
 apiVersion: ctlptl.dev/v1alpha1
 kind: Cluster
@@ -287,11 +292,11 @@ $(KUSTOMIZE): $(LOCALBIN)
 define go-install-tool
 @[ -f "$(1)-$(3)" ] || { \
 set -e; \
-package=$(2)@$(3) ;\
-echo "Downloading $${package}" ;\
-rm -f $(1) || true ;\
-GOBIN=$(LOCALBIN) go install $${package} ;\
-mv $(1) $(1)-$(3) ;\
-} ;\
+package=$(2)@$(3); \
+echo "Downloading $${package}"; \
+rm -f $(1) ||:; \
+GOBIN=$(LOCALBIN) go install $${package}; \
+mv $(1) $(1)-$(3); \
+}; \
 ln -sf $(1)-$(3) $(1)
 endef
