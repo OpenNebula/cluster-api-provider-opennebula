@@ -43,8 +43,6 @@ spec:
                 type: string
               templateName:
                 type: string
-              userData:
-                type: string
             required:
             - templateName
             type: object

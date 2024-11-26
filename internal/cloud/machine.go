@@ -17,13 +17,14 @@ limitations under the License.
 package cloud
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strings"
 
-	"encoding/base64"
+	infrav1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/v1beta1"
 
 	"github.com/OpenNebula/one/src/oca/go/src/goca"
-	vmkeys "github.com/OpenNebula/one/src/oca/go/src/goca/schemas/vm/keys"
+	goca_vm "github.com/OpenNebula/one/src/oca/go/src/goca/schemas/vm"
 )
 
 type Machine struct {
@@ -46,15 +47,15 @@ func (m *Machine) ByID(vmID int) error {
 	if err != nil {
 		return fmt.Errorf("Failed to fetch VM: %w", err)
 	}
+	m.ID = vm.ID
+	m.Name = &vm.Name
 
-	address4, err := vm.Template.GetStrFromVec(vmkeys.ContextVec, "ETH0_IP")
+	address4, err := vm.Template.GetStrFromVec("CONTEXT", "ETH0_IP")
 	if err != nil {
 		return fmt.Errorf("Failed to fetch VM: %w", err)
 	}
-
-	m.ID = vm.ID
-	m.Name = &vm.Name
 	m.Address4 = address4
+
 	return nil
 }
 
@@ -67,43 +68,75 @@ func (m *Machine) ByName(vmName string) error {
 	return m.ByID(vmID)
 }
 
-func (m *Machine) FromTemplate(templateName string, maybeUserData *string) error {
+func (m *Machine) FromTemplate(templateName string, userData *string, network *infrav1.ONEVirtualNetwork, router *infrav1.ONEVirtualRouter) error {
 	if m.Exists() {
 		return nil
 	}
 
-	templateID, err := m.ctrl.Templates().ByName(templateName)
+	vmTemplateID, err := m.ctrl.Templates().ByName(templateName)
 	if err != nil {
 		return fmt.Errorf("Failed to find VM template: %w", err)
 	}
-
-	template, err := m.ctrl.Template(templateID).Info(false, true)
+	vmTemplate, err := m.ctrl.Template(vmTemplateID).Info(false, true)
 	if err != nil {
 		return fmt.Errorf("Failed to fetch VM template: %w", err)
 	}
 
 	if m.Name != nil {
-		template.Template.AddPair(string(vmkeys.Name), *m.Name)
+		vmTemplate.Template.Add("NAME", *m.Name)
 	}
-	if maybeUserData != nil {
-		contextVec, err := template.Template.GetVector(string(vmkeys.ContextVec))
-		if err != nil {
-			return fmt.Errorf("Failed to get context vector: %w", err)
+	if network != nil {
+		// Overwrite NIC 0, leave others intact.
+		nicVec := ensureNIC(&vmTemplate.Template, 0)
+		nicVec.Del("NETWORK")
+		nicVec.AddPair("NETWORK", network.Name)
+		if network.Gateway != nil {
+			nicVec.Del("GATEWAY")
+			nicVec.AddPair("GATEWAY", *network.Gateway)
 		}
-
-		contextVec.Del("USER_DATA_ENCODING")
-		contextVec.AddPair("USER_DATA_ENCODING", "base64")
-
-		contextVec.Del("USER_DATA")
-		contextVec.AddPair("USER_DATA", base64.StdEncoding.EncodeToString([]byte(*maybeUserData)))
+		if network.DNS != nil {
+			nicVec.Del("DNS")
+			nicVec.AddPair("DNS", *network.DNS)
+		}
 	}
 
-	vmID, err := m.ctrl.VMs().Create(template.Template.String(), false)
+	contextVec, err := vmTemplate.Template.GetVector("CONTEXT")
+	if err != nil {
+		return fmt.Errorf("Failed to get context vector: %w", err)
+	}
+	contextMap := map[string]string{}
+	if router != nil {
+		// Mark this machine as a Control-Plane backend in the VR (dynamic LB).
+		contextMap["BACKEND"] = "YES"
+	}
+	if userData != nil {
+		contextMap["USER_DATA_ENCODING"] = "base64"
+		contextMap["USER_DATA"] = base64.StdEncoding.EncodeToString([]byte(*userData))
+	}
+	updateContext(contextVec, &contextMap)
+
+	vmID, err := m.ctrl.VMs().Create(vmTemplate.Template.String(), false)
 	if err != nil {
 		return fmt.Errorf("Failed to create VM: %w", err)
 	}
+	if err := m.ByID(vmID); err != nil {
+		return fmt.Errorf("Failed to create VM: %w", err)
+	}
 
-	return m.ByID(vmID)
+	if router != nil {
+		// Mark this machine as a Control-Plane backend in the VR (dynamic LB).
+		update := goca_vm.NewTemplate()
+		update.Add("ONEGATE_HAPROXY_LB0_IP", "<ETH0_EP0>")
+		update.Add("ONEGATE_HAPROXY_LB0_PORT", "6443")
+		update.Add("ONEGATE_HAPROXY_LB0_SERVER_HOST", m.Address4)
+		update.Add("ONEGATE_HAPROXY_LB0_SERVER_PORT", "6443")
+
+		if err := m.ctrl.VM(m.ID).Update(update.String(), 1); err != nil {
+			return fmt.Errorf("Failed to update VM: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (m *Machine) Delete() error {
@@ -124,8 +157,12 @@ func (m *Machine) NodeName() *string {
 		return nil
 	}
 
-	nodeName := fmt.Sprintf("ip-%s", strings.Replace(m.Address4, ".", "-", -1))
-	return &nodeName
+	if m.Name != nil {
+		return m.Name
+	} else {
+		nodeName := fmt.Sprintf("ip-%s", strings.Replace(m.Address4, ".", "-", -1))
+		return &nodeName
+	}
 }
 
 func (m *Machine) ProviderID() *string {
