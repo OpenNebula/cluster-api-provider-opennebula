@@ -123,10 +123,10 @@ metadata:
 spec:
   secretName: "${CLUSTER_NAME}"
   publicNetwork:
-    name: service
+    name: "${PUBLIC_NETWORK_NAME}"
     floatingIP: "${CONTROL_PLANE_HOST}"
   privateNetwork:
-    name: private
+    name: "${PRIVATE_NETWORK_NAME}"
   virtualRouter:
     templateName: "${ROUTER_TEMPLATE_NAME}"
     extraContext: {}
@@ -180,8 +180,15 @@ data:
     stringData:
       config.yaml: |
         opennebula:
-          ONE_XMLRPC: "${ONE_XMLRPC}"
-          ONE_AUTH: "${ONE_AUTH}"
+          endpoint:
+            ONE_XMLRPC: "${ONE_XMLRPC}"
+            ONE_AUTH: "${ONE_AUTH}"
+          publicNetwork:
+            name: "${PUBLIC_NETWORK_NAME}"
+          privateNetwork:
+            name: "${PRIVATE_NETWORK_NAME}"
+          virtualRouter:
+            templateName: "${ROUTER_TEMPLATE_NAME}"
     ---
     apiVersion: v1
     kind: ServiceAccount
@@ -226,10 +233,11 @@ data:
               command:
                 - /opennebula-cloud-controller-manager
                 - --cloud-provider=opennebula
+                - --cluster-name=${CLUSTER_NAME}
                 - --cloud-config=/etc/one/config.yaml
                 - --leader-elect=true
                 - --use-service-account-credentials
-                - --controllers=cloud-node,cloud-node-lifecycle
+                - --controllers=cloud-node,cloud-node-lifecycle,service-lb-controller
               volumeMounts:
                 - name: cloud-config
                   mountPath: /etc/one/

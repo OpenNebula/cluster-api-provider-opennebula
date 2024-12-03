@@ -88,6 +88,11 @@ func (in *ONEClusterList) DeepCopyObject() runtime.Object {
 func (in *ONEClusterSpec) DeepCopyInto(out *ONEClusterSpec) {
 	*out = *in
 	out.ControlPlaneEndpoint = in.ControlPlaneEndpoint
+	if in.VirtualRouter != nil {
+		in, out := &in.VirtualRouter, &out.VirtualRouter
+		*out = new(ONEVirtualRouter)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.PublicNetwork != nil {
 		in, out := &in.PublicNetwork, &out.PublicNetwork
 		*out = new(ONEVirtualNetwork)
@@ -96,11 +101,6 @@ func (in *ONEClusterSpec) DeepCopyInto(out *ONEClusterSpec) {
 	if in.PrivateNetwork != nil {
 		in, out := &in.PrivateNetwork, &out.PrivateNetwork
 		*out = new(ONEVirtualNetwork)
-		(*in).DeepCopyInto(*out)
-	}
-	if in.VirtualRouter != nil {
-		in, out := &in.VirtualRouter, &out.VirtualRouter
-		*out = new(ONEVirtualRouter)
 		(*in).DeepCopyInto(*out)
 	}
 }

@@ -22,27 +22,27 @@ import (
 
 	infrav1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/v1beta1"
 
-	"github.com/OpenNebula/one/src/oca/go/src/goca"
+	goca "github.com/OpenNebula/one/src/oca/go/src/goca"
 	goca_vr "github.com/OpenNebula/one/src/oca/go/src/goca/schemas/virtualrouter"
 )
 
 type Router struct {
 	ctrl        *goca.Controller
 	ID          int
-	Name        *string
-	Replicas    int32
+	Name        string
+	Replicas    int
 	FloatingIPs []string
 }
 
-func NewRouter(cc *Clients, maybeName *string, maybeReplicas *int32) *Router {
-	var replicas int32 = 1
+func NewRouter(cc *Clients, name string, maybeReplicas *int32) *Router {
+	replicas := 1
 	if maybeReplicas != nil {
-		replicas = *maybeReplicas
+		replicas = int(*maybeReplicas)
 	}
 	return &Router{
 		ctrl:     goca.NewController(cc.RPC2),
 		ID:       -1,
-		Name:     maybeName,
+		Name:     name,
 		Replicas: replicas,
 	}
 }
@@ -57,7 +57,7 @@ func (r *Router) ByID(vrID int) error {
 		return fmt.Errorf("Failed to fetch VR: %w", err)
 	}
 	r.ID = vr.ID
-	r.Name = &vr.Name
+	r.Name = vr.Name
 
 	for _, nicVec := range getNICs(&vr.Template) {
 		if vrIP, err := nicVec.GetStr("VROUTER_IP"); err == nil {
@@ -92,9 +92,8 @@ func (r *Router) FromTemplate(virtualRouter *infrav1.ONEVirtualRouter, publicNet
 	}
 
 	vrTemplate := goca_vr.NewTemplate()
-	if r.Name != nil {
-		vrTemplate.Add("NAME", *r.Name)
-	}
+	vrTemplate.Add("NAME", r.Name)
+
 	// Overwrite NIC 0 or 0 and 1, leave others intact.
 	nicIndex := -1
 	if publicNetwork != nil {
@@ -135,15 +134,21 @@ func (r *Router) FromTemplate(virtualRouter *infrav1.ONEVirtualRouter, publicNet
 		return fmt.Errorf("Failed to create VR: %w", err)
 	}
 
+	contextVec, err := vmTemplate.Template.GetVector("CONTEXT")
+	if err != nil {
+		return fmt.Errorf("Failed to get context vector: %w", err)
+	}
+	contextMap := map[string]string{}
+	contextMap["ONEAPP_VNF_HAPROXY_ENABLED"] = "YES"
+	contextMap["ONEAPP_VNF_HAPROXY_ONEGATE_ENABLED"] = "YES"
+	contextMap["ONEAPP_VNF_HAPROXY_LB0_IP"] = "<ETH0_EP0>"
+	contextMap["ONEAPP_VNF_HAPROXY_LB0_PORT"] = "6443"
+	updateContext(contextVec, &contextMap)
 	if virtualRouter.ExtraContext != nil {
-		contextVec, err := vmTemplate.Template.GetVector("CONTEXT")
-		if err != nil {
-			return fmt.Errorf("Failed to get context vector: %w", err)
-		}
 		updateContext(contextVec, &virtualRouter.ExtraContext)
 	}
 	if _, err := r.ctrl.VirtualRouter(r.ID).Instantiate(
-		int(r.Replicas),
+		r.Replicas,
 		vmTemplateID,
 		"",    // name
 		false, // hold
