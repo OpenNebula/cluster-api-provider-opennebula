@@ -79,12 +79,12 @@ func ensureNIC(maybeTemplate interface{}, index int) *goca_dyn.Vector {
 	if index < len(nics) {
 		return nics[index]
 	} else {
-		var nic *goca_dyn.Vector
+		var nicVec *goca_dyn.Vector
 		for k := len(nics); k <= index; k++ {
-			nic = &goca_dyn.Vector{XMLName: xml.Name{Local: "NIC"}}
-			template.Elements = append(template.Elements, nic)
+			nicVec = &goca_dyn.Vector{XMLName: xml.Name{Local: "NIC"}}
+			template.Elements = append(template.Elements, nicVec)
 		}
-		return nic
+		return nicVec
 	}
 }
 

@@ -95,19 +95,20 @@ func (r *ONEClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}()
 
+	cloudClients, err := cloud.NewClients(ctx, r.Client, oneCluster)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	var externalRouter *cloud.Router
 	if oneCluster.Spec.VirtualRouter != nil {
-		cloudClients, err := cloud.NewClients(ctx, r.Client, oneCluster)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		vrName := fmt.Sprintf("%s-%s", oneCluster.Name, oneCluster.UID)
+		vrName := fmt.Sprintf("%s-cp", oneCluster.Name)
 		replicas := oneCluster.Spec.VirtualRouter.Replicas
-		externalRouter = cloud.NewRouter(cloudClients, &vrName, replicas)
+		externalRouter = cloud.NewRouter(cloudClients, vrName, replicas)
 	}
+	externalCleanup := cloud.NewCleanup(cloudClients, oneCluster.Name)
 
 	if !oneCluster.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, r.reconcileDelete(ctx, oneCluster, externalRouter)
+		return ctrl.Result{}, r.reconcileDelete(ctx, oneCluster, externalRouter, externalCleanup)
 	}
 
 	if !controllerutil.ContainsFinalizer(oneCluster, infrav1.ClusterFinalizer) {
@@ -120,7 +121,7 @@ func (r *ONEClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 func (r *ONEClusterReconciler) reconcileNormal(ctx context.Context, oneCluster *infrav1.ONECluster, externalRouter *cloud.Router) error {
 	if externalRouter != nil {
-		externalRouter.ByName(*externalRouter.Name)
+		externalRouter.ByName(externalRouter.Name)
 		if !externalRouter.Exists() {
 			if err := externalRouter.FromTemplate(
 				oneCluster.Spec.VirtualRouter,
@@ -162,11 +163,22 @@ func (r *ONEClusterReconciler) reconcileNormal(ctx context.Context, oneCluster *
 	return nil
 }
 
-func (r *ONEClusterReconciler) reconcileDelete(ctx context.Context, oneCluster *infrav1.ONECluster, externalRouter *cloud.Router) error {
+func (r *ONEClusterReconciler) reconcileDelete(ctx context.Context, oneCluster *infrav1.ONECluster, externalRouter *cloud.Router, externalCleanup *cloud.Cleanup) error {
 	if externalRouter != nil {
-		externalRouter.ByName(*externalRouter.Name)
+		externalRouter.ByName(externalRouter.Name)
 		if err := externalRouter.Delete(); err != nil {
 			return errors.Wrap(err, "failed to delete VR")
+		}
+	}
+	if externalCleanup != nil {
+		if err := externalCleanup.DeleteLBVirtualRouter(); err != nil {
+			return errors.Wrap(err, "failed to cleanup LB virtual router")
+		}
+		if err := externalCleanup.DeleteVRReservation(); err != nil {
+			return errors.Wrap(err, "failed to cleanup VR reservation")
+		}
+		if err := externalCleanup.DeleteLBReservation(); err != nil {
+			return errors.Wrap(err, "failed to cleanup LB reservation")
 		}
 	}
 	controllerutil.RemoveFinalizer(oneCluster, infrav1.ClusterFinalizer)

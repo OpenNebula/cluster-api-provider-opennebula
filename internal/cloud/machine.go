@@ -23,7 +23,7 @@ import (
 
 	infrav1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/v1beta1"
 
-	"github.com/OpenNebula/one/src/oca/go/src/goca"
+	goca "github.com/OpenNebula/one/src/oca/go/src/goca"
 	goca_vm "github.com/OpenNebula/one/src/oca/go/src/goca/schemas/vm"
 )
 
