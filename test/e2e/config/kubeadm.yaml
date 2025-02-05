@@ -47,7 +47,7 @@ providers:
         type: kustomize
         contract: v1beta1
         replacements:
-          - old: "ghcr.io/opennebula/cluster-api-provider-opennebula:latest"
+          - old: "ghcr.io/opennebula/cluster-api-provider-opennebula:.+"
             new: "ghcr.io/opennebula/cluster-api-provider-opennebula:e2e"
         files:
           - sourcePath: "../../../metadata.yaml"
