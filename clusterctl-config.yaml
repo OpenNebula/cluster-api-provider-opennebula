@@ -1,0 +1,4 @@
+providers:
+  - name: opennebula
+    type: InfrastructureProvider
+    url: "https://github.com/OpenNebula/cluster-api-provider-opennebula/releases/download/latest/infrastructure-components.yaml"
