@@ -95,17 +95,20 @@ func (r *ONEClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}()
 
-	cloudClients, err := cloud.NewClients(ctx, r.Client, oneCluster)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	var externalRouter *cloud.Router
+	var (
+		externalRouter  *cloud.Router
+		externalCleanup *cloud.Cleanup
+	)
 	if oneCluster.Spec.VirtualRouter != nil {
+		cloudClients, err := cloud.NewClients(ctx, r.Client, oneCluster)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
 		vrName := fmt.Sprintf("%s-cp", oneCluster.Name)
 		replicas := oneCluster.Spec.VirtualRouter.Replicas
 		externalRouter = cloud.NewRouter(cloudClients, vrName, replicas)
+		externalCleanup = cloud.NewCleanup(cloudClients, oneCluster.Name)
 	}
-	externalCleanup := cloud.NewCleanup(cloudClients, oneCluster.Name)
 
 	if !oneCluster.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, r.reconcileDelete(ctx, oneCluster, externalRouter, externalCleanup)
