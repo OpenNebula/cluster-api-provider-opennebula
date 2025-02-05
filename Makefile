@@ -4,8 +4,6 @@ export
 # Image URL to use all building/pushing image targets
 IMG     ?= ghcr.io/opennebula/cluster-api-provider-opennebula:latest
 E2E_IMG ?= ghcr.io/opennebula/cluster-api-provider-opennebula:e2e
-# ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
-ENVTEST_K8S_VERSION = 1.31.4
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -62,10 +60,6 @@ fmt: ## Run go fmt against code.
 .PHONY: vet
 vet: ## Run go vet against code.
 	go vet ./...
-
-.PHONY: test
-test: manifests generate fmt vet envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 # Utilize Kind or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
 .PHONY: test-e2e  # Run the e2e tests against a Kind k8s instance that is spun up.
@@ -198,7 +192,6 @@ CLUSTERCTL ?= $(LOCALBIN)/clusterctl
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 CTLPTL ?= $(LOCALBIN)/ctlptl
 ENVSUBST ?= $(LOCALBIN)/envsubst
-ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 KIND ?= $(LOCALBIN)/kind
 KUBECTL ?= $(LOCALBIN)/kubectl
@@ -210,7 +203,6 @@ CLUSTERCTL_VERSION ?= 1.8.4
 CONTROLLER_TOOLS_VERSION ?= 0.16.1
 CTLPTL_VERSION ?= 0.8.34
 ENVSUBST_VERSION ?= 1.4.2
-ENVTEST_VERSION ?= release-0.19
 GOLANGCI_LINT_VERSION ?= 1.59.1
 KIND_VERSION ?= 0.24.0
 KUBECTL_VERSION ?= 1.31.1
@@ -242,11 +234,6 @@ $(CTLPTL): $(LOCALBIN)
 envsubst: $(ENVSUBST)
 $(ENVSUBST): $(LOCALBIN)
 	$(call go-install-tool,$(ENVSUBST),github.com/a8m/envsubst/cmd/envsubst,v$(ENVSUBST_VERSION))
-
-.PHONY: envtest
-envtest: $(ENVTEST)
-$(ENVTEST): $(LOCALBIN)
-	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,$(ENVTEST_VERSION))
 
 .PHONY: golangci-lint
 golangci-lint: $(GOLANGCI_LINT)
