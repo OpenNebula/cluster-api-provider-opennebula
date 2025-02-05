@@ -1,0 +1,43 @@
+---
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: "${{ github.actor }}"
+          password: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Build image
+        run: docker build . --tag "ghcr.io/${GITHUB_REPOSITORY,,}:$GITHUB_REF_NAME"
+
+      - name: Push image
+        run: docker push "ghcr.io/${GITHUB_REPOSITORY,,}:$GITHUB_REF_NAME"
+
+      - name: Tag image (latest)
+        run: docker tag "ghcr.io/${GITHUB_REPOSITORY,,}:$GITHUB_REF_NAME" "ghcr.io/${GITHUB_REPOSITORY,,}:latest"
+
+      - name: Push image (latest)
+        run: docker push "ghcr.io/${GITHUB_REPOSITORY,,}:latest"
+
+      - name: Generate manifests
+        run: make release "CLOSEST_TAG:=$GITHUB_REF_NAME"
+
+      - name: Create release
+        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes "_releases/$GITHUB_REF_NAME"/*.yaml

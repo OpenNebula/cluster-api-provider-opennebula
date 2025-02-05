@@ -146,7 +146,8 @@ ifndef ignore-not-found
 ignore-not-found = false
 endif
 
-.PHONY: install uninstall deploy undeploy logs ctlptl-apply ctlptl-delete clusterctl-init one-apply one-delete one-flannel
+.PHONY: install uninstall deploy undeploy logs ctlptl-apply ctlptl-delete \
+        clusterctl-init clusterctl-init-full one-apply one-delete one-flannel
 
 install: manifests $(KUSTOMIZE) $(KUBECTL) # Install CRDs into the K8s cluster specified in ~/.kube/config.
 	$(KUSTOMIZE) build config/crd | $(KUBECTL) apply -f-
@@ -174,6 +175,9 @@ ctlptl-delete: $(CTLPTL) $(KIND)
 
 clusterctl-init: $(CLUSTERCTL)
 	$(CLUSTERCTL) init
+
+clusterctl-init-full: $(CLUSTERCTL)
+	$(CLUSTERCTL) init --config=clusterctl-config.yaml --infrastructure=opennebula:$(CLOSEST_TAG)
 
 one-apply: $(KUSTOMIZE) $(ENVSUBST) $(KUBECTL)
 	$(KUSTOMIZE) build kustomize/v1beta1/default-dev | $(ENVSUBST) | $(KUBECTL) apply -f-
