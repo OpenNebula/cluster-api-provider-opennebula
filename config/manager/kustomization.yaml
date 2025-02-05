@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: ghcr.io/opennebula/cluster-api-provider-opennebula
-  newTag: latest
+  newTag: v0.1.0

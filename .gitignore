@@ -1,13 +1,17 @@
 # If you prefer the allow list template instead of the deny list, see community template:
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
+
+_artifacts/
+_releases/
+bin/
+.env
+
 # Binaries for programs and plugins
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-bin/*
 Dockerfile.cross
 
 # Test binary, built with `go test -c`
@@ -20,9 +24,6 @@ Dockerfile.cross
 go.work
 go.work.sum
 
-# env file
-.env
-
 # Kubernetes Generated files - skip generated files, except for vendored files
 !vendor/**/zz_generated.*
 
@@ -32,6 +33,3 @@ go.work.sum
 *.swp
 *.swo
 *~
-
-# E2E testing
-_artifacts
