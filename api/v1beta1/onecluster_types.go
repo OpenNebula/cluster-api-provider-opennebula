@@ -43,6 +43,12 @@ type ONEClusterSpec struct {
 
 	// +optional
 	PrivateNetwork *ONEVirtualNetwork `json:"privateNetwork,omitempty"`
+
+	// +optional
+	Images []*ONEImage `json:"images,omitempty"`
+
+	// +optional
+	Templates []*ONETemplate `json:"templates,omitempty"`
 }
 
 type ONEVirtualRouter struct {
@@ -71,6 +77,22 @@ type ONEVirtualNetwork struct {
 
 	// +optional
 	DNS *string `json:"dns,omitempty"`
+}
+
+type ONETemplate struct {
+	// +required
+	TemplateName string `json:"templateName"`
+
+	// +required
+	TemplateContent string `json:"templateContent,omitempty"`
+}
+
+type ONEImage struct {
+	// +required
+	ImageName string `json:"imageName,omitempty"`
+
+	// +required
+	ImageContent string `json:"imageContent,omitempty"`
 }
 
 // ONEClusterStatus defines the observed state of ONECluster

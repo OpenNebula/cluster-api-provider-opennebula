@@ -96,8 +96,10 @@ func (r *ONEClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}()
 
 	var (
-		externalRouter  *cloud.Router
-		externalCleanup *cloud.Cleanup
+		externalRouter    *cloud.Router
+		externalCleanup   *cloud.Cleanup
+		externalImages    *cloud.Images
+		externalTemplates *cloud.Templates
 	)
 	if oneCluster.Spec.VirtualRouter != nil {
 		cloudClients, err := cloud.NewClients(ctx, r.Client, oneCluster)
@@ -108,6 +110,8 @@ func (r *ONEClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		replicas := oneCluster.Spec.VirtualRouter.Replicas
 		externalRouter = cloud.NewRouter(cloudClients, vrName, replicas)
 		externalCleanup = cloud.NewCleanup(cloudClients, oneCluster.Name)
+		externalImages = cloud.NewImages(cloudClients)
+		externalTemplates = cloud.NewTemplates(cloudClients)
 	}
 
 	if !oneCluster.DeletionTimestamp.IsZero() {
@@ -119,10 +123,10 @@ func (r *ONEClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 
-	return ctrl.Result{}, r.reconcileNormal(ctx, oneCluster, externalRouter)
+	return ctrl.Result{}, r.reconcileNormal(ctx, oneCluster, externalRouter, externalImages, externalTemplates)
 }
 
-func (r *ONEClusterReconciler) reconcileNormal(ctx context.Context, oneCluster *infrav1.ONECluster, externalRouter *cloud.Router) error {
+func (r *ONEClusterReconciler) reconcileNormal(ctx context.Context, oneCluster *infrav1.ONECluster, externalRouter *cloud.Router, externalImages *cloud.Images, externalTemplates *cloud.Templates) error {
 	if externalRouter != nil {
 		externalRouter.ByName(externalRouter.Name)
 		if !externalRouter.Exists() {
@@ -161,7 +165,26 @@ func (r *ONEClusterReconciler) reconcileNormal(ctx context.Context, oneCluster *
 			}
 		}
 	}
+	if externalImages != nil {
+		for _, image := range oneCluster.Spec.Images {
+			if image.ImageName != "" && image.ImageContent != "" {
+				if err := externalImages.CreateImage(image.ImageName, image.ImageContent); err != nil {
+					return errors.Wrap(err, "failed to create images")
+				}
+			}
+		}
+	}
 
+	if externalTemplates != nil {
+		for _, template := range oneCluster.Spec.Templates {
+			if template.TemplateName != "" && template.TemplateContent != "" {
+				clusterTemplateName := template.TemplateName + "-" + string(oneCluster.UID)
+				if err := externalTemplates.CreateTemplate(clusterTemplateName, template.TemplateContent); err != nil {
+					return errors.Wrap(err, "failed to create templates")
+				}
+			}
+		}
+	}
 	oneCluster.Status.Ready = true
 	return nil
 }

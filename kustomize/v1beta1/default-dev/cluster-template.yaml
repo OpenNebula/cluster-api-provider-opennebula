@@ -19,7 +19,7 @@ metadata:
 spec:
   template:
     spec:
-      templateName: "${MACHINE_TEMPLATE_NAME}"
+      templateName: "${MASTER_TEMPLATE_NAME}"
 ---
 apiVersion: controlplane.cluster.x-k8s.io/v1beta1
 kind: KubeadmControlPlane
@@ -73,7 +73,7 @@ metadata:
 spec:
   template:
     spec:
-      templateName: "${MACHINE_TEMPLATE_NAME}"
+      templateName: "${WORKER_TEMPLATE_NAME}"
 ---
 apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
 kind: KubeadmConfigTemplate
@@ -130,6 +130,60 @@ spec:
   virtualRouter:
     templateName: "${ROUTER_TEMPLATE_NAME}"
     extraContext: {}
+  images:
+    - imageName: "${MASTER_TEMPLATE_NAME}"
+      imageContent: |
+        PATH="https://community-marketplace.opennebula.io//appliance/d197d8d4-dab6-4f7e-a1fd-90e87e4365d5/download/0"
+        DEV_PREFIX="vd"
+    - imageName: "${WORKER_TEMPLATE_NAME}"
+      imageContent: |
+        PATH="https://community-marketplace.opennebula.io//appliance/d197d8d4-dab6-4f7e-a1fd-90e87e4365d5/download/0"
+        DEV_PREFIX="vd"
+  templates:
+    - templateName: "${MASTER_TEMPLATE_NAME}"
+      templateContent: |
+        CONTEXT=[
+          BACKEND="YES",
+          NETWORK="YES",
+          SET_HOSTNAME="$NAME",
+          SSH_PUBLIC_KEY="$USER[SSH_PUBLIC_KEY]",
+          TOKEN="YES" ]
+        CPU="1"
+        DISK=[
+          IMAGE="${MASTER_TEMPLATE_NAME}" ]
+        GRAPHICS=[
+          LISTEN="0.0.0.0",
+          TYPE="vnc" ]
+        HYPERVISOR="kvm"
+        LXD_SECURITY_PRIVILEGED="true"
+        MEMORY="3072"
+        OS=[
+          ARCH="x86_64",
+          FIRMWARE_SECURE="YES" ]
+        SCHED_REQUIREMENTS="HYPERVISOR=kvm"
+        VCPU="2"
+    - templateName: "${WORKER_TEMPLATE_NAME}"
+      templateContent: |
+        CONTEXT=[
+          BACKEND="YES",
+          NETWORK="YES",
+          SET_HOSTNAME="$NAME",
+          SSH_PUBLIC_KEY="$USER[SSH_PUBLIC_KEY]",
+          TOKEN="YES" ]
+        CPU="1"
+        DISK=[
+          IMAGE="${WORKER_TEMPLATE_NAME}" ]
+        GRAPHICS=[
+          LISTEN="0.0.0.0",
+          TYPE="vnc" ]
+        HYPERVISOR="kvm"
+        LXD_SECURITY_PRIVILEGED="true"
+        MEMORY="3072"
+        OS=[
+          ARCH="x86_64",
+          FIRMWARE_SECURE="YES" ]
+        SCHED_REQUIREMENTS="HYPERVISOR=kvm"
+        VCPU="2"
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: Cluster
