@@ -37,7 +37,7 @@ func (t *Images) CreateImage(imageName, imageContent string) error {
 	}
 
 	if existingImageID < 0 {
-		imageSpec := addTemplateName(imageName, imageContent)
+		imageSpec := fmt.Sprintf("NAME = \"%s\"\n%s", imageName, imageContent)
 		if _, err = t.ctrl.Images().Create(imageSpec, 1); err != nil {
 			return fmt.Errorf("Failed to create image: %w", err)
 		}

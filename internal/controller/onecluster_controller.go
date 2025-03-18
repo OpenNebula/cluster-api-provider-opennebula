@@ -178,8 +178,7 @@ func (r *ONEClusterReconciler) reconcileNormal(ctx context.Context, oneCluster *
 	if externalTemplates != nil {
 		for _, template := range oneCluster.Spec.Templates {
 			if template.TemplateName != "" && template.TemplateContent != "" {
-				clusterTemplateName := template.TemplateName + "-" + string(oneCluster.UID)
-				if err := externalTemplates.CreateTemplate(clusterTemplateName, template.TemplateContent); err != nil {
+				if err := externalTemplates.CreateTemplate(template.TemplateName, template.TemplateContent, string(oneCluster.UID)); err != nil {
 					return errors.Wrap(err, "failed to create templates")
 				}
 			}

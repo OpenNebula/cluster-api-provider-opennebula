@@ -18,7 +18,6 @@ package cloud
 
 import (
 	"encoding/xml"
-	"fmt"
 	"unsafe"
 
 	goca_dyn "github.com/OpenNebula/one/src/oca/go/src/goca/dynamic"
@@ -97,8 +96,4 @@ func updateContext(contextVec *goca_dyn.Vector, contextMap *map[string]string) *
 		}
 	}
 	return contextVec
-}
-
-func addTemplateName(templateName string, templateContent string) string {
-	return fmt.Sprintf("NAME = \"%s\"\n%s", templateName, templateContent)
 }
