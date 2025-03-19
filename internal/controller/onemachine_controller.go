@@ -153,15 +153,16 @@ func (r *ONEMachineReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 	externalMachine := cloud.NewMachine(cloudClients, &name)
+	externalImages := cloud.NewImages(cloudClients)
 
 	if !oneMachine.ObjectMeta.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, r.reconcileDelete(ctx, oneCluster, machine, oneMachine, externalMachine)
 	}
 
-	return r.reconcileNormal(ctx, cluster, oneCluster, machine, oneMachine, externalMachine)
+	return r.reconcileNormal(ctx, cluster, oneCluster, machine, oneMachine, externalMachine, externalImages)
 }
 
-func (r *ONEMachineReconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Cluster, oneCluster *infrav1.ONECluster, machine *clusterv1.Machine, oneMachine *infrav1.ONEMachine, externalMachine *cloud.Machine) (res ctrl.Result, retErr error) {
+func (r *ONEMachineReconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Cluster, oneCluster *infrav1.ONECluster, machine *clusterv1.Machine, oneMachine *infrav1.ONEMachine, externalMachine *cloud.Machine, externalImages *cloud.Images) (res ctrl.Result, retErr error) {
 	log := log.FromContext(ctx)
 
 	if !cluster.Status.InfrastructureReady {
@@ -214,8 +215,9 @@ func (r *ONEMachineReconciler) reconcileNormal(ctx context.Context, cluster *clu
 		return ctrl.Result{}, errors.Wrap(err, "Failed to get data secret")
 	}
 
+	imageReady, _ := externalImages.ImageReady(oneCluster.Spec.VirtualRouter.TemplateName)
 	externalMachine.ByName(oneMachine.Name)
-	if !externalMachine.Exists() {
+	if !externalMachine.Exists() && imageReady {
 		var network *infrav1.ONEVirtualNetwork
 		if oneCluster.Spec.PrivateNetwork != nil {
 			network = oneCluster.Spec.PrivateNetwork
@@ -233,15 +235,16 @@ func (r *ONEMachineReconciler) reconcileNormal(ctx context.Context, cluster *clu
 		if err := externalMachine.FromTemplate(oneMachine.Spec.TemplateName, &userData, network, router); err != nil {
 			return ctrl.Result{}, err
 		}
-	}
-	setMachineAddress(oneMachine, externalMachine.Address4)
 
-	if cluster.Spec.ControlPlaneRef != nil && !conditions.IsTrue(cluster, clusterv1.ControlPlaneInitializedCondition) {
-		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-	}
+		setMachineAddress(oneMachine, externalMachine.Address4)
 
-	oneMachine.Spec.ProviderID = externalMachine.ProviderID()
-	oneMachine.Status.Ready = true
+		if cluster.Spec.ControlPlaneRef != nil && !conditions.IsTrue(cluster, clusterv1.ControlPlaneInitializedCondition) {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+
+		oneMachine.Spec.ProviderID = externalMachine.ProviderID()
+		oneMachine.Status.Ready = true
+	}
 	return ctrl.Result{}, nil
 }
 

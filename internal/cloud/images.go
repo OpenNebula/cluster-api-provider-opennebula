@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	goca "github.com/OpenNebula/one/src/oca/go/src/goca"
+	img "github.com/OpenNebula/one/src/oca/go/src/goca/schemas/image"
 )
 
 type Images struct {
@@ -44,4 +45,20 @@ func (t *Images) CreateImage(imageName, imageContent string) error {
 	}
 
 	return nil
+}
+
+func (t *Images) ImageReady(imageName string) (bool, error) {
+	existingImageID, err := t.ctrl.Images().ByName(imageName)
+	if err != nil {
+		return false, fmt.Errorf("Failed to find Image template: %s, %w", imageName, err)
+	}
+	image, err := t.ctrl.Image(existingImageID).Info(true)
+	if err != nil {
+		return false, fmt.Errorf("Failed to get Image info: %w", err)
+	}
+	state, err := image.State()
+	if err != nil {
+		return false, fmt.Errorf("Failed to get Image state: %w", err)
+	}
+	return state == img.Ready || state == img.Used, nil
 }
