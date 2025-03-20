@@ -34,23 +34,23 @@ func NewTemplates(cc *Clients, clusterUID string) *Templates {
 	}
 }
 
-func (m *Templates) CreateTemplate(templateName, templateContent string) error {
-	existingID, err := m.ctrl.Templates().ByName(templateName)
+func (t *Templates) CreateTemplate(templateName, templateContent string) error {
+	existingID, err := t.ctrl.Templates().ByName(templateName)
 	if err != nil && err.Error() != "resource not found" {
 		return err
 	}
 
 	createNew := existingID < 0
-	templateClusterUID := templateName + "-" + m.clusterUID
+	templateClusterUID := templateName + "-" + t.clusterUID
 	if existingID >= 0 {
-		vmTemplate, err := m.ctrl.Template(existingID).Info(false, true)
+		vmTemplate, err := t.ctrl.Template(existingID).Info(false, true)
 		if err != nil {
 			return fmt.Errorf("Failed to obtain existing VM template: %w", err)
 		}
 
 		existingClusterUID, err := vmTemplate.Template.Get("CLUSTER_UID")
 		if err != nil || existingClusterUID != templateClusterUID {
-			if err = m.ctrl.Template(existingID).Delete(); err != nil {
+			if err = t.ctrl.Template(existingID).Delete(); err != nil {
 				return fmt.Errorf("Failed to delete existing VM template: %w", err)
 			}
 			createNew = true
@@ -60,7 +60,7 @@ func (m *Templates) CreateTemplate(templateName, templateContent string) error {
 		templateSpec := fmt.Sprintf(
 			"NAME = \"%s\"\nCLUSTER_UID = \"%s\"\n%s",
 			templateName, templateClusterUID, templateContent)
-		if _, err = m.ctrl.Templates().Create(templateSpec); err != nil {
+		if _, err = t.ctrl.Templates().Create(templateSpec); err != nil {
 			return fmt.Errorf("Failed to create VM template: %w", err)
 		}
 	}

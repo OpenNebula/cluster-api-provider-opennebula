@@ -127,7 +127,9 @@ func (r *ONEClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 }
 
 func (r *ONEClusterReconciler) reconcileNormal(ctx context.Context, oneCluster *infrav1.ONECluster, externalRouter *cloud.Router, externalImages *cloud.Images, externalTemplates *cloud.Templates) error {
+	var imagesReady bool
 	if externalImages != nil {
+		imagesReady = true
 		for _, image := range oneCluster.Spec.Images {
 			if image.ImageName != "" && image.ImageContent != "" {
 				if err := externalImages.CreateImage(
@@ -136,6 +138,8 @@ func (r *ONEClusterReconciler) reconcileNormal(ctx context.Context, oneCluster *
 				); err != nil {
 					return errors.Wrap(err, "failed to create images")
 				}
+				imageReady, _ := externalImages.ImageReady(image.ImageName)
+				imagesReady = imagesReady && imageReady
 			}
 		}
 	}
@@ -152,10 +156,9 @@ func (r *ONEClusterReconciler) reconcileNormal(ctx context.Context, oneCluster *
 			}
 		}
 	}
-	if externalRouter != nil {
-		imageReady, _ := externalImages.ImageReady(oneCluster.Spec.VirtualRouter.TemplateName)
+	if externalRouter != nil && imagesReady {
 		externalRouter.ByName(externalRouter.Name)
-		if !externalRouter.Exists() && imageReady {
+		if !externalRouter.Exists() {
 			if err := externalRouter.FromTemplate(
 				oneCluster.Spec.VirtualRouter,
 				oneCluster.Spec.PublicNetwork,

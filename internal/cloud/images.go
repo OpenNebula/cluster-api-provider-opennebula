@@ -31,15 +31,15 @@ func NewImages(cc *Clients) *Images {
 	return &Images{ctrl: goca.NewController(cc.RPC2)}
 }
 
-func (t *Images) CreateImage(imageName, imageContent string) error {
-	existingImageID, err := t.ctrl.Images().ByName(imageName)
+func (i *Images) CreateImage(imageName, imageContent string) error {
+	existingImageID, err := i.ctrl.Images().ByName(imageName)
 	if err != nil && err.Error() != "resource not found" {
 		return err
 	}
 
 	if existingImageID < 0 {
 		imageSpec := fmt.Sprintf("NAME = \"%s\"\n%s", imageName, imageContent)
-		if _, err = t.ctrl.Images().Create(imageSpec, 1); err != nil {
+		if _, err = i.ctrl.Images().Create(imageSpec, 1); err != nil {
 			return fmt.Errorf("Failed to create image: %w", err)
 		}
 	}
@@ -47,12 +47,12 @@ func (t *Images) CreateImage(imageName, imageContent string) error {
 	return nil
 }
 
-func (t *Images) ImageReady(imageName string) (bool, error) {
-	existingImageID, err := t.ctrl.Images().ByName(imageName)
+func (i *Images) ImageReady(imageName string) (bool, error) {
+	existingImageID, err := i.ctrl.Images().ByName(imageName)
 	if err != nil {
 		return false, fmt.Errorf("Failed to find Image template: %s, %w", imageName, err)
 	}
-	image, err := t.ctrl.Image(existingImageID).Info(true)
+	image, err := i.ctrl.Image(existingImageID).Info(true)
 	if err != nil {
 		return false, fmt.Errorf("Failed to get Image info: %w", err)
 	}
