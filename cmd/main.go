@@ -40,6 +40,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	"k8s.io/klog/v2"
+
 	infrav1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/v1beta1"
 	controllers "github.com/OpenNebula/cluster-api-provider-opennebula/internal/controller"
 	corev1 "k8s.io/api/core/v1"
@@ -61,6 +63,8 @@ func init() {
 }
 
 func main() {
+	klog.InitFlags(nil)
+
 	var metricsAddr string
 	var enableLeaderElection bool
 	var probeAddr string
