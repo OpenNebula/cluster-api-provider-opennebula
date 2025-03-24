@@ -39,9 +39,9 @@ spec:
   serverConfig:
     cloudProviderName: external
     cni: canal
-    #disableComponents:
-    #  kubernetesComponents:
-    #    - cloudController
+    disableComponents:
+      kubernetesComponents:
+        - cloudController
     #TODO
   preRKE2Commands:
     - sleep 30 # fix to give OS time to become ready
@@ -254,4 +254,4 @@ data:
               operator: Exists
               effect: NoSchedule
           nodeSelector:
-            node-role.kubernetes.io/control-plane: ""
+            node-role.kubernetes.io/control-plane: "true"
