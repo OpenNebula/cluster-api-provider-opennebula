@@ -53,6 +53,18 @@ spec:
                 - host
                 - port
                 type: object
+              images:
+                items:
+                  properties:
+                    imageContent:
+                      type: string
+                    imageName:
+                      type: string
+                  required:
+                  - imageContent
+                  - imageName
+                  type: object
+                type: array
               privateNetwork:
                 properties:
                   dns:
@@ -85,6 +97,18 @@ spec:
                 type: object
               secretName:
                 type: string
+              templates:
+                items:
+                  properties:
+                    templateContent:
+                      type: string
+                    templateName:
+                      type: string
+                  required:
+                  - templateContent
+                  - templateName
+                  type: object
+                type: array
               virtualRouter:
                 properties:
                   extraContext:

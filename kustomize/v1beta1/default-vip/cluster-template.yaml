@@ -19,7 +19,7 @@ metadata:
 spec:
   template:
     spec:
-      templateName: "${MACHINE_TEMPLATE_NAME}"
+      templateName: "${MASTER_TEMPLATE_NAME}"
 ---
 apiVersion: controlplane.cluster.x-k8s.io/v1beta1
 kind: KubeadmControlPlane
@@ -154,7 +154,7 @@ metadata:
 spec:
   template:
     spec:
-      templateName: "${MACHINE_TEMPLATE_NAME}"
+      templateName: "${WORKER_TEMPLATE_NAME}"
 ---
 apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
 kind: KubeadmConfigTemplate

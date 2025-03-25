@@ -96,8 +96,10 @@ func (r *ONEClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}()
 
 	var (
-		externalRouter  *cloud.Router
-		externalCleanup *cloud.Cleanup
+		externalRouter    *cloud.Router
+		externalCleanup   *cloud.Cleanup
+		externalImages    *cloud.Images
+		externalTemplates *cloud.Templates
 	)
 	if oneCluster.Spec.VirtualRouter != nil {
 		cloudClients, err := cloud.NewClients(ctx, r.Client, oneCluster)
@@ -108,6 +110,8 @@ func (r *ONEClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		replicas := oneCluster.Spec.VirtualRouter.Replicas
 		externalRouter = cloud.NewRouter(cloudClients, vrName, replicas)
 		externalCleanup = cloud.NewCleanup(cloudClients, oneCluster.Name)
+		externalImages = cloud.NewImages(cloudClients)
+		externalTemplates = cloud.NewTemplates(cloudClients, string(oneCluster.UID))
 	}
 
 	if !oneCluster.DeletionTimestamp.IsZero() {
@@ -119,11 +123,40 @@ func (r *ONEClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 
-	return ctrl.Result{}, r.reconcileNormal(ctx, oneCluster, externalRouter)
+	return ctrl.Result{}, r.reconcileNormal(ctx, oneCluster, externalRouter, externalImages, externalTemplates)
 }
 
-func (r *ONEClusterReconciler) reconcileNormal(ctx context.Context, oneCluster *infrav1.ONECluster, externalRouter *cloud.Router) error {
-	if externalRouter != nil {
+func (r *ONEClusterReconciler) reconcileNormal(ctx context.Context, oneCluster *infrav1.ONECluster, externalRouter *cloud.Router, externalImages *cloud.Images, externalTemplates *cloud.Templates) error {
+	var imagesReady bool
+	if externalImages != nil {
+		imagesReady = true
+		for _, image := range oneCluster.Spec.Images {
+			if image.ImageName != "" && image.ImageContent != "" {
+				if err := externalImages.CreateImage(
+					image.ImageName,
+					image.ImageContent,
+				); err != nil {
+					return errors.Wrap(err, "failed to create images")
+				}
+				imageReady, _ := externalImages.ImageReady(image.ImageName)
+				imagesReady = imagesReady && imageReady
+			}
+		}
+	}
+
+	if externalTemplates != nil {
+		for _, template := range oneCluster.Spec.Templates {
+			if template.TemplateName != "" && template.TemplateContent != "" {
+				if err := externalTemplates.CreateTemplate(
+					template.TemplateName,
+					template.TemplateContent,
+				); err != nil {
+					return errors.Wrap(err, "failed to create templates")
+				}
+			}
+		}
+	}
+	if externalRouter != nil && imagesReady {
 		externalRouter.ByName(externalRouter.Name)
 		if !externalRouter.Exists() {
 			if err := externalRouter.FromTemplate(
@@ -133,36 +166,35 @@ func (r *ONEClusterReconciler) reconcileNormal(ctx context.Context, oneCluster *
 			); err != nil {
 				return errors.Wrap(err, "failed to create VR")
 			}
-		}
 
-		if oneCluster.Spec.ControlPlaneEndpoint.Host == "" {
-			if len(externalRouter.FloatingIPs) > 0 && net.ParseIP(externalRouter.FloatingIPs[0]) != nil {
-				oneCluster.Spec.ControlPlaneEndpoint.Host = externalRouter.FloatingIPs[0]
-			}
-		}
-		// TODO: use webhook?
-		if oneCluster.Spec.ControlPlaneEndpoint.Port == 0 {
-			oneCluster.Spec.ControlPlaneEndpoint.Port = 6443
-		}
-
-		if oneCluster.Spec.PrivateNetwork != nil {
-			if oneCluster.Spec.PrivateNetwork.FloatingIP == nil {
-				ipIndex := 0
-				if oneCluster.Spec.PublicNetwork != nil {
-					ipIndex++
+			if oneCluster.Spec.ControlPlaneEndpoint.Host == "" {
+				if len(externalRouter.FloatingIPs) > 0 && net.ParseIP(externalRouter.FloatingIPs[0]) != nil {
+					oneCluster.Spec.ControlPlaneEndpoint.Host = externalRouter.FloatingIPs[0]
 				}
-				oneCluster.Spec.PrivateNetwork.FloatingIP = &externalRouter.FloatingIPs[ipIndex]
 			}
-			if oneCluster.Spec.PrivateNetwork.Gateway == nil {
-				oneCluster.Spec.PrivateNetwork.Gateway = oneCluster.Spec.PrivateNetwork.FloatingIP
+			// TODO: use webhook?
+			if oneCluster.Spec.ControlPlaneEndpoint.Port == 0 {
+				oneCluster.Spec.ControlPlaneEndpoint.Port = 6443
 			}
-			if oneCluster.Spec.PrivateNetwork.DNS == nil {
-				oneCluster.Spec.PrivateNetwork.DNS = oneCluster.Spec.PrivateNetwork.FloatingIP
+
+			if oneCluster.Spec.PrivateNetwork != nil {
+				if oneCluster.Spec.PrivateNetwork.FloatingIP == nil {
+					ipIndex := 0
+					if oneCluster.Spec.PublicNetwork != nil {
+						ipIndex++
+					}
+					oneCluster.Spec.PrivateNetwork.FloatingIP = &externalRouter.FloatingIPs[ipIndex]
+				}
+				if oneCluster.Spec.PrivateNetwork.Gateway == nil {
+					oneCluster.Spec.PrivateNetwork.Gateway = oneCluster.Spec.PrivateNetwork.FloatingIP
+				}
+				if oneCluster.Spec.PrivateNetwork.DNS == nil {
+					oneCluster.Spec.PrivateNetwork.DNS = oneCluster.Spec.PrivateNetwork.FloatingIP
+				}
 			}
+			oneCluster.Status.Ready = true
 		}
 	}
-
-	oneCluster.Status.Ready = true
 	return nil
 }
 
