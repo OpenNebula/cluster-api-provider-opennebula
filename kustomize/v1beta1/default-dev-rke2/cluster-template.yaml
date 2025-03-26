@@ -72,8 +72,6 @@ metadata:
 spec:
   template:
     spec:
-      preRKE2Commands:
-        - sleep 30 # fix to give OS time to become ready
       agentConfig:
         kubelet:
           #TODO: It would be nice to add cloudProviderName to the agentConfig spec (https://docs.rke2.io/reference/linux_agent_config#cloud-provider)
