@@ -19,7 +19,7 @@ metadata:
 spec:
   template:
     spec:
-      templateName: "${MACHINE_TEMPLATE_NAME}"
+      templateName: "${MASTER_TEMPLATE_NAME}"
 ---
 #https://github.com/rancher/cluster-api-provider-rke2/blob/main/controlplane/api/v1beta1/rke2controlplane_types.go#L46
 apiVersion: controlplane.cluster.x-k8s.io/v1beta1
@@ -61,7 +61,7 @@ metadata:
 spec:
   template:
     spec:
-      templateName: "${MACHINE_TEMPLATE_NAME}"
+      templateName: "${WORKER_TEMPLATE_NAME}"
 ---
 #https://github.com/rancher/cluster-api-provider-rke2/blob/a2e35699da1cd6eb0e0cda66431933f3b602499e/bootstrap/api/v1beta1/rke2configtemplate_types.go#L35
 apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
