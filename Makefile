@@ -81,7 +81,7 @@ clean:
 
 # Development
 
-.PHONY: manifests generate fmt vet test-e2e lint lint-fix
+.PHONY: manifests generate fmt vet test-e2e test-e2e-no-cleanup test-e2e-rke2 test-e2e-rke2-no-cleanup lint lint-fix
 
 manifests: $(CONTROLLER_GEN) # Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
@@ -98,12 +98,22 @@ vet:
 test-e2e: docker-build docker-build-e2e $(KUSTOMIZE)
 	$(KUSTOMIZE) build kustomize/v1beta1/default-e2e \
 	| install -m u=rw,go=r -D /dev/fd/0 $(ARTIFACTS_DIR)/infrastructure/cluster-template.yaml
+	go test ./test/e2e/kubeadm -v -ginkgo.v --args -e2e.skip-resource-cleanup=true
+
+test-e2e-no-cleanup: docker-build docker-build-e2e $(KUSTOMIZE)
+	$(KUSTOMIZE) build kustomize/v1beta1/default-e2e \
+	| install -m u=rw,go=r -D /dev/fd/0 $(ARTIFACTS_DIR)/infrastructure/cluster-template.yaml
 	go test ./test/e2e/kubeadm -v -ginkgo.v
 
 test-e2e-rke2: docker-build docker-build-e2e $(KUSTOMIZE)
 	$(KUSTOMIZE) build kustomize/v1beta1/default-e2e-rke2 \
 	| install -m u=rw,go=r -D /dev/fd/0 $(ARTIFACTS_DIR)/infrastructure/cluster-template.yaml
 	go test ./test/e2e/rke2 -v -ginkgo.v
+
+test-e2e-rke2-no-cleanup: docker-build docker-build-e2e $(KUSTOMIZE)
+	$(KUSTOMIZE) build kustomize/v1beta1/default-e2e-rke2 \
+	| install -m u=rw,go=r -D /dev/fd/0 $(ARTIFACTS_DIR)/infrastructure/cluster-template.yaml
+	go test ./test/e2e/rke2 -v -ginkgo.v --args -e2e.skip-resource-cleanup=true
 
 lint: $(GOLANGCI_LINT)
 	$(GOLANGCI_LINT) run

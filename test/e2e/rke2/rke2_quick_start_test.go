@@ -17,12 +17,19 @@ limitations under the License.
 package e2e
 
 import (
+	"context"
+
 	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
 )
 
 var _ = Describe("Cluster-API Quick-Start (RKE2)", func() {
-	It("RKE2 Quick-Start", func() {
-		Expect(true).To(BeTrue())
+	QuickStartSpec(context.Background(), func() QuickStartSpecInput {
+		return QuickStartSpecInput{
+			E2EConfig:             e2eConfig,
+			ClusterctlConfigPath:  clusterctlConfigPath,
+			BootstrapClusterProxy: bootstrapClusterProxy,
+			ArtifactFolder:        artifactFolder,
+			SkipCleanup:           skipCleanup,
+		}
 	})
 })

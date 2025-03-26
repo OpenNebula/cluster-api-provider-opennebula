@@ -111,7 +111,7 @@ var _ = SynchronizedAfterSuite(func() {}, func() {
 		By("Deleting VRs created for the test...")
 		helpers.WaitForVRsToBeDeleted(
 			ctx,
-			"quick-start-[^-]+-cp", //TODO: check name
+			"quick-start-[^-]+-cp",
 			e2eConfig,
 			24, // retries
 			5,  // seconds
@@ -238,7 +238,7 @@ func initBootstrapCluster() {
 	}
 
 	//TODO: not sure if needed
-	//Expect(os.MkdirAll(input4.LogFolder, 0755)).To(Succeed(), "Failed to create log folder %s", input4.LogFolder)
+	//Expect(os.MkdirAll(bootstrapClusterInitInput.LogFolder, 0755)).To(Succeed(), "Failed to create log folder %s", bootstrapClusterInitInput.LogFolder)
 
 	clusterctl.InitManagementClusterAndWatchControllerLogs(
 		ctx,
