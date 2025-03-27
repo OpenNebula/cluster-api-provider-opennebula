@@ -1,0 +1,6 @@
+name: opennebula-infrastructure
+config:
+  image: "ghcr.io/opennebula/cluster-api-provider-opennebula"
+  live_reload_deps: ["cmd/main.go", "go.mod", "go.sum", "api", "cmd", "internal", "config", "pkg"]
+  go_main: cmd/main.go
+  label: CAPONE
