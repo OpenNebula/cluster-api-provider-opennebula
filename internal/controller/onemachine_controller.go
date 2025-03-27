@@ -144,15 +144,15 @@ func (r *ONEMachineReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 
-	name := machine.Name
-	if labels.IsMachinePoolOwned(oneMachine) {
-		name = oneMachine.Name
-	}
 	cloudClients, err := cloud.NewClients(ctx, r.Client, oneCluster)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	externalMachine := cloud.NewMachine(cloudClients, &name)
+	name := generateExternalMachineName(machine, oneMachine)
+	externalMachine, err := cloud.NewMachine(cloudClients, cloud.WithMachineName(name))
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to initialize cloud machine: %w", err)
+	}
 
 	if !oneMachine.ObjectMeta.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, r.reconcileDelete(ctx, oneCluster, machine, oneMachine, externalMachine)
@@ -186,7 +186,7 @@ func (r *ONEMachineReconciler) reconcileNormal(ctx context.Context, cluster *clu
 	}
 
 	if oneMachine.Spec.ProviderID != nil {
-		if err := externalMachine.ByName(oneMachine.Name); err != nil {
+		if err := externalMachine.ByName(externalMachine.Name); err != nil {
 			return ctrl.Result{}, err
 		}
 
@@ -214,7 +214,7 @@ func (r *ONEMachineReconciler) reconcileNormal(ctx context.Context, cluster *clu
 		return ctrl.Result{}, errors.Wrap(err, "Failed to get data secret")
 	}
 
-	externalMachine.ByName(oneMachine.Name)
+	externalMachine.ByName(externalMachine.Name)
 	if !externalMachine.Exists() {
 		var network *infrav1.ONEVirtualNetwork
 		if oneCluster.Spec.PrivateNetwork != nil {
@@ -252,8 +252,15 @@ func setMachineAddress(oneMachine *infrav1.ONEMachine, address string) {
 	}
 }
 
+func generateExternalMachineName(machine *clusterv1.Machine, oneMachine *infrav1.ONEMachine) string {
+	if labels.IsMachinePoolOwned(oneMachine) {
+		return oneMachine.Name
+	}
+	return machine.Name
+}
+
 func (r *ONEMachineReconciler) reconcileDelete(ctx context.Context, oneCluster *infrav1.ONECluster, machine *clusterv1.Machine, oneMachine *infrav1.ONEMachine, externalMachine *cloud.Machine) error {
-	externalMachine.ByName(oneMachine.Name)
+	externalMachine.ByName(externalMachine.Name)
 	if err := externalMachine.Delete(); err != nil {
 		return errors.Wrap(err, "failed to delete ONEMachine")
 	}

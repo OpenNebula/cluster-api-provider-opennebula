@@ -30,12 +30,29 @@ import (
 type Machine struct {
 	ctrl     *goca.Controller
 	ID       int
-	Name     *string
+	Name     string
 	Address4 string
 }
 
-func NewMachine(cc *Clients, maybeName *string) *Machine {
-	return &Machine{ctrl: goca.NewController(cc.RPC2), ID: -1, Name: maybeName}
+type MachineOption func(*Machine)
+
+func NewMachine(clients *Clients, options ...MachineOption) (*Machine, error) {
+
+	if clients == nil {
+		return nil, fmt.Errorf("clients reference is nil")
+	}
+
+	m := &Machine{ctrl: goca.NewController(clients.RPC2), ID: -1}
+	for _, option := range options {
+		option(m)
+	}
+	return m, nil
+}
+
+func WithMachineName(name string) MachineOption {
+	return func(m *Machine) {
+		m.Name = name
+	}
 }
 
 func (m *Machine) Exists() bool {
@@ -48,7 +65,7 @@ func (m *Machine) ByID(vmID int) error {
 		return fmt.Errorf("Failed to fetch VM: %w", err)
 	}
 	m.ID = vm.ID
-	m.Name = &vm.Name
+	m.Name = vm.Name
 
 	address4, err := vm.Template.GetStrFromVec("CONTEXT", "ETH0_IP")
 	if err != nil {
@@ -82,9 +99,10 @@ func (m *Machine) FromTemplate(templateName string, userData *string, network *i
 		return fmt.Errorf("Failed to fetch VM template: %w", err)
 	}
 
-	if m.Name != nil {
-		vmTemplate.Template.Add("NAME", *m.Name)
+	if len(m.Name) > 0 {
+		vmTemplate.Template.Add("NAME", m.Name)
 	}
+
 	if network != nil {
 		// Overwrite NIC 0, leave others intact.
 		nicVec := ensureNIC(&vmTemplate.Template, 0)
@@ -152,16 +170,16 @@ func (m *Machine) Delete() error {
 	return nil
 }
 
-func (m *Machine) NodeName() *string {
+func (m *Machine) NodeName() (string, error) {
 	if !m.Exists() {
-		return nil
+		return "", fmt.Errorf("Machine does not exist yet")
 	}
 
-	if m.Name != nil {
-		return m.Name
+	if len(m.Name) > 0 {
+		return m.Name, nil
 	} else {
 		nodeName := fmt.Sprintf("ip-%s", strings.Replace(m.Address4, ".", "-", -1))
-		return &nodeName
+		return nodeName, nil
 	}
 }
 
