@@ -144,6 +144,8 @@ spec:
         PATH="https://community-marketplace.opennebula.io//appliance/d197d8d4-dab6-4f7e-a1fd-90e87e4365d5/download/0"
         DEV_PREFIX="vd"
   templates:
+    # NOTE: Please escape OpenNebula context variables with additional $ sign,
+    #       i.e. "$USER[SSH_PUBLIC_KEY]" becomes "$$USER[SSH_PUBLIC_KEY]".
     - templateName: "${ROUTER_TEMPLATE_NAME}"
       templateContent: |
         CONTEXT = [
@@ -154,7 +156,7 @@ spec:
           ONEAPP_VNF_NAT4_ENABLED = "YES",
           ONEAPP_VNF_NAT4_INTERFACES_OUT = "eth0",
           ONEAPP_VNF_ROUTER4_ENABLED = "YES",
-          SSH_PUBLIC_KEY = "$USER[SSH_PUBLIC_KEY]",
+          SSH_PUBLIC_KEY = "$$USER[SSH_PUBLIC_KEY]",
           TOKEN = "YES" ]
         CPU = "1"
         DISK = [
@@ -175,8 +177,8 @@ spec:
         CONTEXT=[
           BACKEND="YES",
           NETWORK="YES",
-          SET_HOSTNAME="$NAME",
-          SSH_PUBLIC_KEY="$USER[SSH_PUBLIC_KEY]",
+          SET_HOSTNAME="$$NAME",
+          SSH_PUBLIC_KEY="$$USER[SSH_PUBLIC_KEY]",
           TOKEN="YES" ]
         CPU="1"
         DISK=[
@@ -197,8 +199,8 @@ spec:
         CONTEXT=[
           BACKEND="YES",
           NETWORK="YES",
-          SET_HOSTNAME="$NAME",
-          SSH_PUBLIC_KEY="$USER[SSH_PUBLIC_KEY]",
+          SET_HOSTNAME="$$NAME",
+          SSH_PUBLIC_KEY="$$USER[SSH_PUBLIC_KEY]",
           TOKEN="YES" ]
         CPU="1"
         DISK=[
