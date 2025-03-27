@@ -42,8 +42,6 @@ spec:
     disableComponents:
       kubernetesComponents:
         - cloudController
-  preRKE2Commands:
-    - sleep 30s #TODO: Let timesyncd synchronize the time after hostname change
   rolloutStrategy:
     type: "RollingUpdate"
     rollingUpdate:
@@ -143,7 +141,7 @@ spec:
           ONEAPP_VNF_NAT4_ENABLED = "YES",
           ONEAPP_VNF_NAT4_INTERFACES_OUT = "eth0",
           ONEAPP_VNF_ROUTER4_ENABLED = "YES",
-          SSH_PUBLIC_KEY = "$USER[SSH_PUBLIC_KEY]",
+          SSH_PUBLIC_KEY = "$$USER[SSH_PUBLIC_KEY]",
           TOKEN = "YES" ]
         CPU = "1"
         DISK = [
@@ -164,8 +162,9 @@ spec:
         CONTEXT=[
           BACKEND="YES",
           NETWORK="YES",
-          SET_HOSTNAME="$NAME",
-          SSH_PUBLIC_KEY="$USER[SSH_PUBLIC_KEY]",
+          SET_HOSTNAME="$$NAME",
+          SSH_PUBLIC_KEY = "$$USER[SSH_PUBLIC_KEY]",
+          START_SCRIPT_BASE64="IyEvdXNyL2Jpbi9lbnYgYmFzaAoKc2V0IC1lbyBwaXBlZmFpbAoKaW5zdGFsbF9ya2UyKCkgKAogICAgc2V0IC1lbyBwaXBlZmFpbAogICAgaWYgWyAtZCAvZXRjL3JhbmNoZXIvIF0gJiYgISBbIC1mIC9ydW4vY2x1c3Rlci1hcGkvYm9vdHN0cmFwLXN1Y2Nlc3MuY29tcGxldGUgXTsgdGhlbgogICAgICAgIHdoaWxlICEgWyAtZiAvcnVuL3N5c3RlbWQvdGltZXN5bmMvc3luY2hyb25pemVkIF07IGRvCiAgICAgICAgICAgIHNsZWVwIDUKICAgICAgICBkb25lCgogICAgICAgIHJtIC1mIC92YXIvbGliL29uZS1jb250ZXh0L2Nsb3VkaW5pdC9jbG91ZGluaXQtYm9vdC1maW5pc2hlZAogICAgICAgIC9ldGMvb25lLWNvbnRleHQuZC9uZXQtOTUtY2xvdWRpbml0LXN0YXJ0CiAgICAgICAgL2V0Yy9vbmUtY29udGV4dC5kL25ldC05Ni1jbG91ZGluaXQtZmluaXNoCiAgICBmaQopCgpleHBvcnQgLWYgaW5zdGFsbF9ya2UyCgp0aW1lb3V0IDE4MHMgIiRTSEVMTCIgLWMgaW5zdGFsbF9ya2UyCg==",
           TOKEN="YES" ]
         CPU="1"
         DISK=[
@@ -186,8 +185,9 @@ spec:
         CONTEXT=[
           BACKEND="YES",
           NETWORK="YES",
-          SET_HOSTNAME="$NAME",
-          SSH_PUBLIC_KEY="$USER[SSH_PUBLIC_KEY]",
+          SET_HOSTNAME="$$NAME",
+          SSH_PUBLIC_KEY = "$$USER[SSH_PUBLIC_KEY]",
+          START_SCRIPT_BASE64="IyEvdXNyL2Jpbi9lbnYgYmFzaAoKc2V0IC1lbyBwaXBlZmFpbAoKaW5zdGFsbF9ya2UyKCkgKAogICAgc2V0IC1lbyBwaXBlZmFpbAogICAgaWYgWyAtZCAvZXRjL3JhbmNoZXIvIF0gJiYgISBbIC1mIC9ydW4vY2x1c3Rlci1hcGkvYm9vdHN0cmFwLXN1Y2Nlc3MuY29tcGxldGUgXTsgdGhlbgogICAgICAgIHdoaWxlICEgWyAtZiAvcnVuL3N5c3RlbWQvdGltZXN5bmMvc3luY2hyb25pemVkIF07IGRvCiAgICAgICAgICAgIHNsZWVwIDUKICAgICAgICBkb25lCgogICAgICAgIHJtIC1mIC92YXIvbGliL29uZS1jb250ZXh0L2Nsb3VkaW5pdC9jbG91ZGluaXQtYm9vdC1maW5pc2hlZAogICAgICAgIC9ldGMvb25lLWNvbnRleHQuZC9uZXQtOTUtY2xvdWRpbml0LXN0YXJ0CiAgICAgICAgL2V0Yy9vbmUtY29udGV4dC5kL25ldC05Ni1jbG91ZGluaXQtZmluaXNoCiAgICBmaQopCgpleHBvcnQgLWYgaW5zdGFsbF9ya2UyCgp0aW1lb3V0IDE4MHMgIiRTSEVMTCIgLWMgaW5zdGFsbF9ya2UyCg==",
           TOKEN="YES" ]
         CPU="1"
         DISK=[
