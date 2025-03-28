@@ -29,6 +29,8 @@ metadata:
   labels:
     cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
 spec:
+  preRKE2Commands:
+    - (RETRY=60; while ! nslookup get.rke2.io; do ((--RETRY)) || break; sleep 5; done)
   replicas: ${CONTROL_PLANE_MACHINE_COUNT:=1}
   version: "${KUBERNETES_VERSION:=v1.31.4}+rke2r1"
   machineTemplate:
@@ -46,7 +48,6 @@ spec:
     type: "RollingUpdate"
     rollingUpdate:
       maxSurge: 1
-  # NOTE: OpenNebula does not support built-in DNS round-robin (yet).
   registrationMethod: "internal-first"
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
@@ -70,6 +71,8 @@ metadata:
 spec:
   template:
     spec:
+      preRKE2Commands:
+        - (RETRY=60; while ! nslookup get.rke2.io; do ((--RETRY)) || break; sleep 5; done)
       agentConfig:
         kubelet:
           #TODO: It would be nice to add cloudProviderName to the agentConfig spec (https://docs.rke2.io/reference/linux_agent_config#cloud-provider)
@@ -164,7 +167,6 @@ spec:
           NETWORK="YES",
           SET_HOSTNAME="$$NAME",
           SSH_PUBLIC_KEY = "$$USER[SSH_PUBLIC_KEY]",
-          START_SCRIPT_BASE64="IyEvdXNyL2Jpbi9lbnYgYmFzaAoKc2V0IC1lbyBwaXBlZmFpbAoKaW5zdGFsbF9ya2UyKCkgKAogICAgc2V0IC1lbyBwaXBlZmFpbAogICAgaWYgWyAtZCAvZXRjL3JhbmNoZXIvIF0gJiYgISBbIC1mIC9ydW4vY2x1c3Rlci1hcGkvYm9vdHN0cmFwLXN1Y2Nlc3MuY29tcGxldGUgXTsgdGhlbgogICAgICAgIHdoaWxlICEgWyAtZiAvcnVuL3N5c3RlbWQvdGltZXN5bmMvc3luY2hyb25pemVkIF07IGRvCiAgICAgICAgICAgIHNsZWVwIDUKICAgICAgICBkb25lCgogICAgICAgIHJtIC1mIC92YXIvbGliL29uZS1jb250ZXh0L2Nsb3VkaW5pdC9jbG91ZGluaXQtYm9vdC1maW5pc2hlZAogICAgICAgIC9ldGMvb25lLWNvbnRleHQuZC9uZXQtOTUtY2xvdWRpbml0LXN0YXJ0CiAgICAgICAgL2V0Yy9vbmUtY29udGV4dC5kL25ldC05Ni1jbG91ZGluaXQtZmluaXNoCiAgICBmaQopCgpleHBvcnQgLWYgaW5zdGFsbF9ya2UyCgp0aW1lb3V0IDE4MHMgIiRTSEVMTCIgLWMgaW5zdGFsbF9ya2UyCg==",
           TOKEN="YES" ]
         CPU="1"
         DISK=[
@@ -187,7 +189,6 @@ spec:
           NETWORK="YES",
           SET_HOSTNAME="$$NAME",
           SSH_PUBLIC_KEY = "$$USER[SSH_PUBLIC_KEY]",
-          START_SCRIPT_BASE64="IyEvdXNyL2Jpbi9lbnYgYmFzaAoKc2V0IC1lbyBwaXBlZmFpbAoKaW5zdGFsbF9ya2UyKCkgKAogICAgc2V0IC1lbyBwaXBlZmFpbAogICAgaWYgWyAtZCAvZXRjL3JhbmNoZXIvIF0gJiYgISBbIC1mIC9ydW4vY2x1c3Rlci1hcGkvYm9vdHN0cmFwLXN1Y2Nlc3MuY29tcGxldGUgXTsgdGhlbgogICAgICAgIHdoaWxlICEgWyAtZiAvcnVuL3N5c3RlbWQvdGltZXN5bmMvc3luY2hyb25pemVkIF07IGRvCiAgICAgICAgICAgIHNsZWVwIDUKICAgICAgICBkb25lCgogICAgICAgIHJtIC1mIC92YXIvbGliL29uZS1jb250ZXh0L2Nsb3VkaW5pdC9jbG91ZGluaXQtYm9vdC1maW5pc2hlZAogICAgICAgIC9ldGMvb25lLWNvbnRleHQuZC9uZXQtOTUtY2xvdWRpbml0LXN0YXJ0CiAgICAgICAgL2V0Yy9vbmUtY29udGV4dC5kL25ldC05Ni1jbG91ZGluaXQtZmluaXNoCiAgICBmaQopCgpleHBvcnQgLWYgaW5zdGFsbF9ya2UyCgp0aW1lb3V0IDE4MHMgIiRTSEVMTCIgLWMgaW5zdGFsbF9ya2UyCg==",
           TOKEN="YES" ]
         CPU="1"
         DISK=[
