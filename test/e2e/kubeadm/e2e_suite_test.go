@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/cluster-api/test/framework/clusterctl"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/OpenNebula/cluster-api-provider-opennebula/test/helpers"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -50,6 +51,10 @@ var (
 	bootstrapClusterProxy    framework.ClusterProxy
 )
 
+const (
+	cniPathVarName = "CNI"
+)
+
 func init() {
 	flag.StringVar(
 		&configPath,
@@ -61,7 +66,7 @@ func init() {
 	flag.StringVar(
 		&artifactFolder,
 		"e2e.artifacts-folder",
-		"../../_artifacts",
+		"../../../_artifacts",
 		"Folder where e2e test artifact should be stored",
 	)
 
@@ -101,10 +106,8 @@ var _ = SynchronizedBeforeSuite(func() {
 
 	Expect(os.MkdirAll(input2.RepositoryFolder, 0755)).To(Succeed(), "Failed to create repository folder %s", input2.RepositoryFolder)
 
-	cniPath := e2eConfig.GetVariable("CNI")
-
-	Expect(cniPath).To(BeAnExistingFile(), "CNI path must point to an existing file %s", cniPath)
-
+	cniPath := e2eConfig.GetVariable(cniPathVarName)
+	Expect(cniPath).To(BeAnExistingFile(), "\"%s\" variable must point to an existing file %s", cniPathVarName, cniPath)
 	input2.RegisterClusterResourceSetConfigMapTransformation(cniPath, "CNI_RESOURCES")
 
 	clusterctlConfigPath = clusterctl.CreateRepository(ctx, input2)
@@ -160,7 +163,7 @@ var _ = SynchronizedBeforeSuite(func() {
 
 var _ = SynchronizedAfterSuite(func() {}, func() {
 	if !skipCleanup {
-		WaitForVRsToBeDeleted(
+		helpers.WaitForVRsToBeDeleted(
 			ctx,
 			"quick-start-[^-]+-cp",
 			e2eConfig,

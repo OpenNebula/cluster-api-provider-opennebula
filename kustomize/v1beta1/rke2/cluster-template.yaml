@@ -1,0 +1,335 @@
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: "${CLUSTER_NAME}"
+  labels:
+    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+stringData:
+  ONE_XMLRPC: "${ONE_XMLRPC}"
+  ONE_AUTH: "${ONE_AUTH}"
+type: Opaque
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: ONEMachineTemplate
+metadata:
+  name: "${CLUSTER_NAME}-cp"
+  labels:
+    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+spec:
+  template:
+    spec:
+      templateName: "${MASTER_TEMPLATE_NAME}"
+---
+#https://github.com/rancher/cluster-api-provider-rke2/blob/main/controlplane/api/v1beta1/rke2controlplane_types.go#L46
+apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+kind: RKE2ControlPlane
+metadata:
+  name: "${CLUSTER_NAME}"
+  labels:
+    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+spec:
+  preRKE2Commands:
+    - (RETRY=60; while ! nslookup get.rke2.io; do ((--RETRY)) || break; sleep 5; done)
+  replicas: ${CONTROL_PLANE_MACHINE_COUNT:=1}
+  version: "${KUBERNETES_VERSION:=v1.31.4}+rke2r1"
+  machineTemplate:
+    infrastructureRef:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+      kind: ONEMachineTemplate
+      name: "${CLUSTER_NAME}-cp"
+  serverConfig:
+    cloudProviderName: external
+    cni: canal
+    disableComponents:
+      kubernetesComponents:
+        - cloudController
+  rolloutStrategy:
+    type: "RollingUpdate"
+    rollingUpdate:
+      maxSurge: 1
+  registrationMethod: "internal-first"
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: ONEMachineTemplate
+metadata:
+  name: "${CLUSTER_NAME}-md-0"
+  labels:
+    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+spec:
+  template:
+    spec:
+      templateName: "${WORKER_TEMPLATE_NAME}"
+---
+#https://github.com/rancher/cluster-api-provider-rke2/blob/a2e35699da1cd6eb0e0cda66431933f3b602499e/bootstrap/api/v1beta1/rke2configtemplate_types.go#L35
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+kind: RKE2ConfigTemplate
+metadata:
+  name: "${CLUSTER_NAME}-md-0"
+  labels:
+    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+spec:
+  template:
+    spec:
+      preRKE2Commands:
+        - (RETRY=60; while ! nslookup get.rke2.io; do ((--RETRY)) || break; sleep 5; done)
+      agentConfig:
+        kubelet:
+          #TODO: It would be nice to add cloudProviderName to the agentConfig spec (https://docs.rke2.io/reference/linux_agent_config#cloud-provider)
+          extraArgs:
+            - --cloud-provider=external
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  name: "${CLUSTER_NAME}-md-0"
+  labels:
+    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+spec:
+  replicas: ${WORKER_MACHINE_COUNT:=1}
+  clusterName: "${CLUSTER_NAME}"
+  selector:
+    matchLabels: {}
+  template:
+    spec:
+      clusterName: "${CLUSTER_NAME}"
+      bootstrap:
+        configRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+          kind: RKE2ConfigTemplate
+          name: "${CLUSTER_NAME}-md-0"
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: ONEMachineTemplate
+        name: "${CLUSTER_NAME}-md-0"
+      version: "${KUBERNETES_VERSION:=v1.31.4}+rke2r1"
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: ONECluster
+metadata:
+  name: "${CLUSTER_NAME}"
+  labels:
+    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+spec:
+  secretName: "${CLUSTER_NAME}"
+  publicNetwork:
+    name: "${PUBLIC_NETWORK_NAME}"
+    floatingIP: "${CONTROL_PLANE_HOST}"
+  privateNetwork:
+    name: "${PRIVATE_NETWORK_NAME}"
+  virtualRouter:
+    templateName: "${ROUTER_TEMPLATE_NAME}"
+    extraContext: {}
+  images:
+    - imageName: "${ROUTER_TEMPLATE_NAME}"
+      imageContent: |
+        PATH="https://community-marketplace.opennebula.io//appliance/2def0784-3310-479b-9533-5dd6cc0fe2b7/download/0"
+        DEV_PREFIX="vd"
+    - imageName: "${MASTER_TEMPLATE_NAME}"
+      imageContent: |
+        PATH="https://community-marketplace.opennebula.io//appliance/d197d8d4-dab6-4f7e-a1fd-90e87e4365d5/download/0"
+        DEV_PREFIX="vd"
+    - imageName: "${WORKER_TEMPLATE_NAME}"
+      imageContent: |
+        PATH="https://community-marketplace.opennebula.io//appliance/d197d8d4-dab6-4f7e-a1fd-90e87e4365d5/download/0"
+        DEV_PREFIX="vd"
+  templates:
+    - templateName: "${ROUTER_TEMPLATE_NAME}"
+      templateContent: |
+        CONTEXT = [
+          NETWORK = "YES",
+          ONEAPP_VNF_DNS_ENABLED = "YES",
+          ONEAPP_VNF_DNS_NAMESERVERS = "1.1.1.1,8.8.8.8",
+          ONEAPP_VNF_DNS_USE_ROOTSERVERS = "NO",
+          ONEAPP_VNF_NAT4_ENABLED = "YES",
+          ONEAPP_VNF_NAT4_INTERFACES_OUT = "eth0",
+          ONEAPP_VNF_ROUTER4_ENABLED = "YES",
+          SSH_PUBLIC_KEY = "$$USER[SSH_PUBLIC_KEY]",
+          TOKEN = "YES" ]
+        CPU = "1"
+        DISK = [
+          IMAGE="${ROUTER_TEMPLATE_NAME}" ]
+        GRAPHICS = [
+          LISTEN = "0.0.0.0",
+          TYPE = "vnc" ]
+        LXD_SECURITY_PRIVILEGED = "true"
+        MEMORY = "512"
+        NIC_DEFAULT = [
+          MODEL = "virtio" ]
+        OS = [
+          ARCH = "x86_64",
+          FIRMWARE_SECURE = "YES" ]
+        VROUTER = "YES"
+    - templateName: "${MASTER_TEMPLATE_NAME}"
+      templateContent: |
+        CONTEXT=[
+          BACKEND="YES",
+          NETWORK="YES",
+          SET_HOSTNAME="$$NAME",
+          SSH_PUBLIC_KEY = "$$USER[SSH_PUBLIC_KEY]",
+          TOKEN="YES" ]
+        CPU="1"
+        DISK=[
+          IMAGE="${MASTER_TEMPLATE_NAME}" ]
+        GRAPHICS=[
+          LISTEN="0.0.0.0",
+          TYPE="vnc" ]
+        HYPERVISOR="kvm"
+        LXD_SECURITY_PRIVILEGED="true"
+        MEMORY="3072"
+        OS=[
+          ARCH="x86_64",
+          FIRMWARE_SECURE="YES" ]
+        SCHED_REQUIREMENTS="HYPERVISOR=kvm"
+        VCPU="2"
+    - templateName: "${WORKER_TEMPLATE_NAME}"
+      templateContent: |
+        CONTEXT=[
+          BACKEND="YES",
+          NETWORK="YES",
+          SET_HOSTNAME="$$NAME",
+          SSH_PUBLIC_KEY = "$$USER[SSH_PUBLIC_KEY]",
+          TOKEN="YES" ]
+        CPU="1"
+        DISK=[
+          IMAGE="${WORKER_TEMPLATE_NAME}" ]
+        GRAPHICS=[
+          LISTEN="0.0.0.0",
+          TYPE="vnc" ]
+        HYPERVISOR="kvm"
+        LXD_SECURITY_PRIVILEGED="true"
+        MEMORY="3072"
+        OS=[
+          ARCH="x86_64",
+          FIRMWARE_SECURE="YES" ]
+        SCHED_REQUIREMENTS="HYPERVISOR=kvm"
+        VCPU="2"
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: "${CLUSTER_NAME}"
+  labels:
+    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+spec:
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: ONECluster
+    name: "${CLUSTER_NAME}"
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+    kind: RKE2ControlPlane
+    name: "${CLUSTER_NAME}"
+  controlPlaneEndpoint:
+    host: "${CONTROL_PLANE_HOST}"
+    port: 6443
+---
+apiVersion: addons.cluster.x-k8s.io/v1beta1
+kind: ClusterResourceSet
+metadata:
+  name: "${CLUSTER_NAME}-crs-0"
+  labels:
+    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+spec:
+  clusterSelector:
+    matchLabels:
+      cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+  resources:
+    - kind: ConfigMap
+      name: cloud-controller-manager
+  strategy: Reconcile
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloud-controller-manager
+data:
+  cloud-controller-manager.yaml: |
+    ---
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: cloud-config
+      namespace: kube-system
+    stringData:
+      config.yaml: |
+        opennebula:
+          endpoint:
+            ONE_XMLRPC: "${ONE_XMLRPC}"
+            ONE_AUTH: "${ONE_AUTH}"
+          publicNetwork:
+            name: "${PUBLIC_NETWORK_NAME}"
+          privateNetwork:
+            name: "${PRIVATE_NETWORK_NAME}"
+          virtualRouter:
+            templateName: "${ROUTER_TEMPLATE_NAME}"
+    ---
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: opennebula-cloud-controller-manager
+      namespace: kube-system
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: system:opennebula-cloud-controller-manager
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: cluster-admin
+    subjects:
+      - kind: ServiceAccount
+        name: opennebula-cloud-controller-manager
+        namespace: kube-system
+    ---
+    apiVersion: apps/v1
+    kind: DaemonSet
+    metadata:
+      labels:
+        k8s-app: cloud-controller-manager
+      name: cloud-controller-manager
+      namespace: kube-system
+    spec:
+      selector:
+        matchLabels:
+          k8s-app: cloud-controller-manager
+      template:
+        metadata:
+          labels:
+            k8s-app: cloud-controller-manager
+        spec:
+          serviceAccountName: opennebula-cloud-controller-manager
+          containers:
+            - name: cloud-controller-manager
+              image: "${CCM_IMG}"
+              imagePullPolicy: IfNotPresent
+              command:
+                - /opennebula-cloud-controller-manager
+                - --cloud-provider=opennebula
+                - --cluster-name=${CLUSTER_NAME}
+                - --cloud-config=/etc/one/config.yaml
+                - --leader-elect=true
+                - --use-service-account-credentials
+                - --controllers=cloud-node,cloud-node-lifecycle,service-lb-controller
+              volumeMounts:
+                - name: cloud-config
+                  mountPath: /etc/one/
+                  readOnly: true
+          volumes:
+            - name: cloud-config
+              secret:
+                secretName: cloud-config
+          hostNetwork: true
+          tolerations:
+            - key: node.cloudprovider.kubernetes.io/uninitialized
+              value: "true"
+              effect: NoSchedule
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+              effect: NoSchedule
+            - key: node-role.kubernetes.io/master
+              operator: Exists
+              effect: NoSchedule
+          nodeSelector:
+            node-role.kubernetes.io/control-plane: "true"
