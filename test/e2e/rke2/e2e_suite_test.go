@@ -193,10 +193,6 @@ func createBootstrapClusterProvider() {
 		LogFolder:         filepath.Join(artifactFolder, "kind"),
 	}
 
-	//TODO: This is probably not needed
-	//By(fmt.Sprintf("Creating log folder for the Kind management cluster in %s", clusterProviderInput.LogFolder))
-	//Expect(os.MkdirAll(clusterProviderInput.LogFolder, 0755)).To(Succeed(), "Failed to create log folder %s", clusterProviderInput.LogFolder)
-
 	bootstrapClusterProvider = bootstrap.CreateKindBootstrapClusterAndLoadImages(ctx, clusterProviderInput)
 	Expect(bootstrapClusterProvider).ToNot(BeNil(), "Failed to create cluster provider")
 }
@@ -236,9 +232,6 @@ func initBootstrapCluster() {
 		AddonProviders:            e2eConfig.AddonProviders(),
 		LogFolder:                 filepath.Join(artifactFolder, "clusters", bootstrapClusterProxy.GetName()),
 	}
-
-	//TODO: not sure if needed
-	//Expect(os.MkdirAll(bootstrapClusterInitInput.LogFolder, 0755)).To(Succeed(), "Failed to create log folder %s", bootstrapClusterInitInput.LogFolder)
 
 	clusterctl.InitManagementClusterAndWatchControllerLogs(
 		ctx,
