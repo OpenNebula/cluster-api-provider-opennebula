@@ -106,12 +106,12 @@ test-e2e-no-cleanup: docker-build docker-build-e2e $(KUSTOMIZE)
 	go test ./test/e2e/kubeadm -v -ginkgo.v --args -e2e.skip-resource-cleanup=true
 
 test-e2e-rke2: docker-build docker-build-e2e $(KUSTOMIZE)
-	$(KUSTOMIZE) build kustomize/v1beta1/default-e2e-rke2 \
+	$(KUSTOMIZE) build kustomize/v1beta1/rke2-e2e \
 	| install -m u=rw,go=r -D /dev/fd/0 $(ARTIFACTS_DIR)/infrastructure/cluster-template.yaml
 	go test ./test/e2e/rke2 -v -ginkgo.v
 
 test-e2e-rke2-no-cleanup: docker-build docker-build-e2e $(KUSTOMIZE)
-	$(KUSTOMIZE) build kustomize/v1beta1/default-e2e-rke2 \
+	$(KUSTOMIZE) build kustomize/v1beta1/rke2-e2e \
 	| install -m u=rw,go=r -D /dev/fd/0 $(ARTIFACTS_DIR)/infrastructure/cluster-template.yaml
 	go test ./test/e2e/rke2 -v -ginkgo.v --args -e2e.skip-resource-cleanup=true
 
@@ -150,8 +150,12 @@ release: $(KUSTOMIZE)
 	$(KUSTOMIZE) build config/default \
 	| install -m u=rw,go= -D /dev/fd/0 $(RELEASES_DIR)/$(CLOSEST_TAG)/infrastructure-components.yaml
 	# Templates
+	## default template (kubeadm)
 	$(KUSTOMIZE) build kustomize/v1beta1/default \
 	| install -m u=rw,go= -D /dev/fd/0 $(RELEASES_DIR)/$(CLOSEST_TAG)/cluster-template.yaml
+	## rke2 template
+	$(KUSTOMIZE) build kustomize/v1beta1/rke2 \
+	| install -m u=rw,go= -D /dev/fd/0 $(RELEASES_DIR)/$(CLOSEST_TAG)/cluster-template-rke2.yaml
 	# Metadata
 	install -m u=rw,go= -D metadata.yaml $(RELEASES_DIR)/$(CLOSEST_TAG)/metadata.yaml
 
@@ -201,7 +205,7 @@ one-apply: $(KUSTOMIZE) $(ENVSUBST) $(KUBECTL)
 	$(KUSTOMIZE) build kustomize/v1beta1/default-dev | $(ENVSUBST) | $(KUBECTL) apply -f-
 
 one-apply-rke2: $(KUSTOMIZE) $(ENVSUBST) $(KUBECTL)
-	$(KUSTOMIZE) build kustomize/v1beta1/default-dev-rke2 | $(ENVSUBST) | $(KUBECTL) apply -f-
+	$(KUSTOMIZE) build kustomize/v1beta1/rke2-dev | $(ENVSUBST) | $(KUBECTL) apply -f-
 
 one-delete: $(KUBECTL)
 	$(KUBECTL) delete cluster/$(CLUSTER_NAME)
