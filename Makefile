@@ -81,7 +81,7 @@ clean:
 
 # Development
 
-.PHONY: manifests generate fmt vet test-e2e lint lint-fix
+.PHONY: manifests generate fmt vet test-e2e test-e2e-no-cleanup test-e2e-rke2 test-e2e-rke2-no-cleanup lint lint-fix
 
 manifests: $(CONTROLLER_GEN) # Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
@@ -98,7 +98,22 @@ vet:
 test-e2e: docker-build docker-build-e2e $(KUSTOMIZE)
 	$(KUSTOMIZE) build kustomize/v1beta1/default-e2e \
 	| install -m u=rw,go=r -D /dev/fd/0 $(ARTIFACTS_DIR)/infrastructure/cluster-template.yaml
-	go test ./test/e2e/ -v -ginkgo.v
+	go test ./test/e2e/kubeadm -v -ginkgo.v
+
+test-e2e-no-cleanup: docker-build docker-build-e2e $(KUSTOMIZE)
+	$(KUSTOMIZE) build kustomize/v1beta1/default-e2e \
+	| install -m u=rw,go=r -D /dev/fd/0 $(ARTIFACTS_DIR)/infrastructure/cluster-template.yaml
+	go test ./test/e2e/kubeadm -v -ginkgo.v --args -e2e.skip-resource-cleanup=true
+
+test-e2e-rke2: docker-build docker-build-e2e $(KUSTOMIZE)
+	$(KUSTOMIZE) build kustomize/v1beta1/rke2-e2e \
+	| install -m u=rw,go=r -D /dev/fd/0 $(ARTIFACTS_DIR)/infrastructure/cluster-template.yaml
+	go test ./test/e2e/rke2 -v -ginkgo.v
+
+test-e2e-rke2-no-cleanup: docker-build docker-build-e2e $(KUSTOMIZE)
+	$(KUSTOMIZE) build kustomize/v1beta1/rke2-e2e \
+	| install -m u=rw,go=r -D /dev/fd/0 $(ARTIFACTS_DIR)/infrastructure/cluster-template.yaml
+	go test ./test/e2e/rke2 -v -ginkgo.v --args -e2e.skip-resource-cleanup=true
 
 lint: $(GOLANGCI_LINT)
 	$(GOLANGCI_LINT) run
@@ -135,8 +150,12 @@ release: $(KUSTOMIZE)
 	$(KUSTOMIZE) build config/default \
 	| install -m u=rw,go= -D /dev/fd/0 $(RELEASES_DIR)/$(CLOSEST_TAG)/infrastructure-components.yaml
 	# Templates
+	## default template (kubeadm)
 	$(KUSTOMIZE) build kustomize/v1beta1/default \
 	| install -m u=rw,go= -D /dev/fd/0 $(RELEASES_DIR)/$(CLOSEST_TAG)/cluster-template.yaml
+	## rke2 template
+	$(KUSTOMIZE) build kustomize/v1beta1/rke2 \
+	| install -m u=rw,go= -D /dev/fd/0 $(RELEASES_DIR)/$(CLOSEST_TAG)/cluster-template-rke2.yaml
 	# Metadata
 	install -m u=rw,go= -D metadata.yaml $(RELEASES_DIR)/$(CLOSEST_TAG)/metadata.yaml
 
@@ -179,8 +198,16 @@ clusterctl-init: $(CLUSTERCTL)
 clusterctl-init-full: $(CLUSTERCTL)
 	$(CLUSTERCTL) init --config=clusterctl-config.yaml --infrastructure=opennebula:$(CLOSEST_TAG)
 
+clusterctl-init-full-rke2: _CAPRKE2 := $(if $(CAPRKE2_VERSION),rke2:$(CAPRKE2_VERSION),rke2)
+clusterctl-init-full-rke2: $(CLUSTERCTL)
+	$(CLUSTERCTL) init --config=clusterctl-config.yaml \
+	--bootstrap=$(_CAPRKE2) --control-plane=$(_CAPRKE2) --infrastructure=opennebula:$(CLOSEST_TAG)
+
 one-apply: $(KUSTOMIZE) $(ENVSUBST) $(KUBECTL)
 	$(KUSTOMIZE) build kustomize/v1beta1/default-dev | $(ENVSUBST) | $(KUBECTL) apply -f-
+
+one-apply-rke2: $(KUSTOMIZE) $(ENVSUBST) $(KUBECTL)
+	$(KUSTOMIZE) build kustomize/v1beta1/rke2-dev | $(ENVSUBST) | $(KUBECTL) apply -f-
 
 one-delete: $(KUBECTL)
 	$(KUBECTL) delete cluster/$(CLUSTER_NAME)

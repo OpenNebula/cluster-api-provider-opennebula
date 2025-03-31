@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package e2e
+package helpers
 
 import (
 	"context"
@@ -55,4 +55,11 @@ func WaitForVRsToBeDeleted(ctx context.Context, nameRegex string, e2eConfig *clu
 		}
 	}
 	return false, nil
+}
+
+func ValueOrDefault(value, defaultValue string) string {
+	if value == "" {
+		return defaultValue
+	}
+	return value
 }

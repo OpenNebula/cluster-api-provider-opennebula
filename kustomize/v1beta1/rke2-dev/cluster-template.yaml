@@ -21,48 +21,34 @@ spec:
     spec:
       templateName: "${MASTER_TEMPLATE_NAME}"
 ---
+#https://github.com/rancher/cluster-api-provider-rke2/blob/main/controlplane/api/v1beta1/rke2controlplane_types.go#L46
 apiVersion: controlplane.cluster.x-k8s.io/v1beta1
-kind: KubeadmControlPlane
+kind: RKE2ControlPlane
 metadata:
   name: "${CLUSTER_NAME}"
   labels:
     cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
 spec:
+  preRKE2Commands:
+    - (RETRY=60; while ! nslookup get.rke2.io; do ((--RETRY)) || break; sleep 5; done)
   replicas: ${CONTROL_PLANE_MACHINE_COUNT:=1}
-  kubeadmConfigSpec:
-    clusterConfiguration:
-      apiServer:
-        extraArgs:
-          cloud-provider: external
-          # NOTE: OpenNebula does not support built-in DNS round-robin (yet).
-          kubelet-preferred-address-types: InternalIP,ExternalIP
-      controllerManager:
-        extraArgs:
-          cloud-provider: external
-      networking:
-        dnsDomain: cluster.local
-        serviceSubnet: 10.96.0.0/16
-        podSubnet: 10.244.0.0/16
-    initConfiguration:
-      nodeRegistration:
-        kubeletExtraArgs:
-          cloud-provider: external
-    joinConfiguration:
-      nodeRegistration:
-        kubeletExtraArgs:
-          cloud-provider: external
-    files: []
-    preKubeadmCommands:
-      - >-
-        if ! grep -m1 '^${REGISTRY_DEV_IPV4:=127.0.0.1} registry.dev' /etc/hosts; then
-           echo '${REGISTRY_DEV_IPV4:=127.0.0.1} registry.dev' >> /etc/hosts; fi;
-    postKubeadmCommands: []
+  version: "${KUBERNETES_VERSION:=v1.31.4}+rke2r1"
   machineTemplate:
     infrastructureRef:
       apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
       kind: ONEMachineTemplate
       name: "${CLUSTER_NAME}-cp"
-  version: "${KUBERNETES_VERSION:=v1.31.4}"
+  serverConfig:
+    cloudProviderName: external
+    cni: canal
+    disableComponents:
+      kubernetesComponents:
+        - cloudController
+  rolloutStrategy:
+    type: "RollingUpdate"
+    rollingUpdate:
+      maxSurge: 1
+  registrationMethod: "internal-first"
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
 kind: ONEMachineTemplate
@@ -75,8 +61,9 @@ spec:
     spec:
       templateName: "${WORKER_TEMPLATE_NAME}"
 ---
+#https://github.com/rancher/cluster-api-provider-rke2/blob/a2e35699da1cd6eb0e0cda66431933f3b602499e/bootstrap/api/v1beta1/rke2configtemplate_types.go#L35
 apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
-kind: KubeadmConfigTemplate
+kind: RKE2ConfigTemplate
 metadata:
   name: "${CLUSTER_NAME}-md-0"
   labels:
@@ -84,10 +71,13 @@ metadata:
 spec:
   template:
     spec:
-      joinConfiguration:
-        nodeRegistration:
-          kubeletExtraArgs:
-            cloud-provider: external
+      preRKE2Commands:
+        - (RETRY=60; while ! nslookup get.rke2.io; do ((--RETRY)) || break; sleep 5; done)
+      agentConfig:
+        kubelet:
+          #TODO: It would be nice to add cloudProviderName to the agentConfig spec (https://docs.rke2.io/reference/linux_agent_config#cloud-provider)
+          extraArgs:
+            - --cloud-provider=external
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: MachineDeployment
@@ -106,13 +96,13 @@ spec:
       bootstrap:
         configRef:
           apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
-          kind: KubeadmConfigTemplate
+          kind: RKE2ConfigTemplate
           name: "${CLUSTER_NAME}-md-0"
       infrastructureRef:
         apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
         kind: ONEMachineTemplate
         name: "${CLUSTER_NAME}-md-0"
-      version: "${KUBERNETES_VERSION:=v1.31.4}"
+      version: "${KUBERNETES_VERSION:=v1.31.4}+rke2r1"
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
 kind: ONECluster
@@ -137,11 +127,9 @@ spec:
         DEV_PREFIX="vd"
     - imageName: "${MASTER_TEMPLATE_NAME}"
       imageContent: |
-        PATH="https://community-marketplace.opennebula.io//appliance/d197d8d4-dab6-4f7e-a1fd-90e87e4365d5/download/0"
+        PATH="https://marketplace.opennebula.io/appliance/4562be1a-4c11-4e9e-b60a-85a045f1de05/download/0"
         DEV_PREFIX="vd"
   templates:
-    # NOTE: Please escape OpenNebula context variables with additional $ sign,
-    #       i.e. "$USER[SSH_PUBLIC_KEY]" becomes "$$USER[SSH_PUBLIC_KEY]".
     - templateName: "${ROUTER_TEMPLATE_NAME}"
       templateContent: |
         CONTEXT = [
@@ -174,11 +162,13 @@ spec:
           BACKEND="YES",
           NETWORK="YES",
           SET_HOSTNAME="$$NAME",
-          SSH_PUBLIC_KEY="$$USER[SSH_PUBLIC_KEY]",
+          SSH_PUBLIC_KEY = "$$USER[SSH_PUBLIC_KEY]",
           TOKEN="YES" ]
         CPU="1"
         DISK=[
-          IMAGE="${MASTER_TEMPLATE_NAME}" ]
+          IMAGE="${MASTER_TEMPLATE_NAME}",
+          SIZE = "10240"
+         ]
         GRAPHICS=[
           LISTEN="0.0.0.0",
           TYPE="vnc" ]
@@ -196,11 +186,13 @@ spec:
           BACKEND="YES",
           NETWORK="YES",
           SET_HOSTNAME="$$NAME",
-          SSH_PUBLIC_KEY="$$USER[SSH_PUBLIC_KEY]",
+          SSH_PUBLIC_KEY = "$$USER[SSH_PUBLIC_KEY]",
           TOKEN="YES" ]
         CPU="1"
         DISK=[
-          IMAGE="${MASTER_TEMPLATE_NAME}" ]
+          IMAGE="${MASTER_TEMPLATE_NAME}",
+          SIZE = "10240"
+        ]
         GRAPHICS=[
           LISTEN="0.0.0.0",
           TYPE="vnc" ]
@@ -226,7 +218,7 @@ spec:
     name: "${CLUSTER_NAME}"
   controlPlaneRef:
     apiVersion: controlplane.cluster.x-k8s.io/v1beta1
-    kind: KubeadmControlPlane
+    kind: RKE2ControlPlane
     name: "${CLUSTER_NAME}"
   controlPlaneEndpoint:
     host: "${CONTROL_PLANE_HOST}"
@@ -344,4 +336,4 @@ data:
               operator: Exists
               effect: NoSchedule
           nodeSelector:
-            node-role.kubernetes.io/control-plane: ""
+            node-role.kubernetes.io/control-plane: "true"

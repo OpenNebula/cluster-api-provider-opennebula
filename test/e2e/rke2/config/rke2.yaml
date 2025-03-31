@@ -1,0 +1,108 @@
+# Docs: https://pkg.go.dev/sigs.k8s.io/cluster-api/test/framework/clusterctl#E2EConfig
+# based on https://github.com/rancher/cluster-api-provider-rke2/blob/main/test/e2e/config/e2e_conf.yaml
+managementClusterName: capone-test-rke2-e2e
+
+images:
+  - name: "ghcr.io/opennebula/cluster-api-provider-opennebula:e2e"
+    loadBehavior: tryLoad
+
+providers:
+  - name: cluster-api
+    type: CoreProvider
+    versions:
+      - name: "{go://sigs.k8s.io/cluster-api@v1.9}"
+        value: "https://github.com/kubernetes-sigs/cluster-api/releases/download/{go://sigs.k8s.io/cluster-api@v1.9}/core-components.yaml"
+        type: url
+        contract: v1beta1
+        files:
+          - sourcePath: "../data/shared/metadata.yaml"
+        replacements:
+          - old: "imagePullPolicy: Always"
+            new: "imagePullPolicy: IfNotPresent"
+  - name: rke2-bootstrap
+    type: BootstrapProvider
+    versions:
+      - name: "{go://github.com/rancher/cluster-api-provider-rke2@v0.12}"
+        value: "https://github.com/rancher/cluster-api-provider-rke2/releases/download/{go://github.com/rancher/cluster-api-provider-rke2@v0.12}/bootstrap-components.yaml"
+        type: url
+        contract: v1beta1
+        files:
+          - sourcePath: "../data/rke2/metadata.yaml"
+        replacements:
+          - old: "imagePullPolicy: Always"
+            new: "imagePullPolicy: IfNotPresent"
+          - old: "--leader-elect"
+            new: "--leader-elect=false"
+      # IMPORTANT: Always include latest version defined in test/e2e/rke2/metadata.yaml
+      - name: "{go://github.com/rancher/cluster-api-provider-rke2@v0.13}"
+        value: "https://github.com/rancher/cluster-api-provider-rke2/releases/download/{go://github.com/rancher/cluster-api-provider-rke2@v0.13}/bootstrap-components.yaml"
+        type: url
+        contract: v1beta1
+        files:
+          - sourcePath: "../data/rke2/metadata.yaml"
+        replacements:
+          - old: "imagePullPolicy: Always"
+            new: "imagePullPolicy: IfNotPresent"
+          - old: "--leader-elect"
+            new: "--leader-elect=false"
+  - name: rke2-control-plane
+    type: ControlPlaneProvider
+    versions:
+      - name: "{go://github.com/rancher/cluster-api-provider-rke2@v0.12}"
+        value: "https://github.com/rancher/cluster-api-provider-rke2/releases/download/{go://github.com/rancher/cluster-api-provider-rke2@v0.12}/control-plane-components.yaml"
+        type: url
+        contract: v1beta1
+        files:
+          - sourcePath: "../data/rke2/metadata.yaml"
+        replacements:
+          - old: "imagePullPolicy: Always"
+            new: "imagePullPolicy: IfNotPresent"
+          - old: "--leader-elect"
+            new: "--leader-elect=false"
+      # IMPORTANT: Always include latest version defined in test/e2e/rke2/metadata.yaml
+      - name: "{go://github.com/rancher/cluster-api-provider-rke2@v0.13}"
+        value: "https://github.com/rancher/cluster-api-provider-rke2/releases/download/{go://github.com/rancher/cluster-api-provider-rke2@v0.13}/control-plane-components.yaml"
+        type: url
+        contract: v1beta1
+        files:
+          - sourcePath: "../data/rke2/metadata.yaml"
+        replacements:
+          - old: "imagePullPolicy: Always"
+            new: "imagePullPolicy: IfNotPresent"
+          - old: "--leader-elect"
+            new: "--leader-elect=false"
+  - name: opennebula
+    type: InfrastructureProvider
+    versions:
+      - name: v0.1.0
+        value: "../../../../config/default"
+        type: kustomize
+        contract: v1beta1
+        replacements:
+          - old: "ghcr.io/opennebula/cluster-api-provider-opennebula:.+"
+            new: "ghcr.io/opennebula/cluster-api-provider-opennebula:e2e"
+        files:
+          - sourcePath: "../../../../metadata.yaml"
+          - sourcePath: "../../../../_artifacts/infrastructure/cluster-template.yaml"
+
+variables:
+  KUBERNETES_VERSION: v1.31.4
+  #ONE_XMLRPC: "http://10.2.11.40:2633/RPC2"
+  #ONE_AUTH: "oneadmin:asd"
+  MASTER_TEMPLATE_NAME: ubuntu2204-master
+  WORKER_TEMPLATE_NAME: ubuntu2204-worker
+  ROUTER_TEMPLATE_NAME: capone131-router
+  #PUBLIC_NETWORK_NAME: service
+  #PRIVATE_NETWORK_NAME: private
+  #CONTROL_PLANE_HOST:
+  CONTROL_PLANE_MACHINE_COUNT: 1
+  WORKER_MACHINE_COUNT: 1
+
+intervals:
+  default/wait-controllers: ["3m", "10s"]
+  default/wait-cluster: ["5m", "10s"]
+  default/wait-control-plane: ["10m", "10s"]
+  default/wait-worker-nodes: ["5m", "10s"]
+  default/wait-machine-pool-nodes: ["5m", "10s"]
+  default/wait-delete-cluster: ["3m", "10s"]
+  default/wait-nodes-ready: ["10m", "10s"]

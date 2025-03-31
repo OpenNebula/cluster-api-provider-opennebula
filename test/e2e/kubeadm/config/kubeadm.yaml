@@ -43,15 +43,15 @@ providers:
     type: InfrastructureProvider
     versions:
       - name: v0.1.0
-        value: "../../../config/default"
+        value: "../../../../config/default"
         type: kustomize
         contract: v1beta1
         replacements:
           - old: "ghcr.io/opennebula/cluster-api-provider-opennebula:.+"
             new: "ghcr.io/opennebula/cluster-api-provider-opennebula:e2e"
         files:
-          - sourcePath: "../../../metadata.yaml"
-          - sourcePath: "../../../_artifacts/infrastructure/cluster-template.yaml"
+          - sourcePath: "../../../../metadata.yaml"
+          - sourcePath: "../../../../_artifacts/infrastructure/cluster-template.yaml"
 
 variables:
   KUBERNETES_VERSION: v1.31.4
