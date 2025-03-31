@@ -127,11 +127,11 @@ spec:
         DEV_PREFIX="vd"
     - imageName: "${MASTER_TEMPLATE_NAME}"
       imageContent: |
-        PATH="https://community-marketplace.opennebula.io//appliance/d197d8d4-dab6-4f7e-a1fd-90e87e4365d5/download/0"
+        PATH="https://marketplace.opennebula.io/appliance/4562be1a-4c11-4e9e-b60a-85a045f1de05/download/0"
         DEV_PREFIX="vd"
     - imageName: "${WORKER_TEMPLATE_NAME}"
       imageContent: |
-        PATH="https://community-marketplace.opennebula.io//appliance/d197d8d4-dab6-4f7e-a1fd-90e87e4365d5/download/0"
+        PATH="https://marketplace.opennebula.io/appliance/4562be1a-4c11-4e9e-b60a-85a045f1de05/download/0"
         DEV_PREFIX="vd"
   templates:
     - templateName: "${ROUTER_TEMPLATE_NAME}"
@@ -170,7 +170,9 @@ spec:
           TOKEN="YES" ]
         CPU="1"
         DISK=[
-          IMAGE="${MASTER_TEMPLATE_NAME}" ]
+          IMAGE="${MASTER_TEMPLATE_NAME}",
+          SIZE = "10240"
+         ]
         GRAPHICS=[
           LISTEN="0.0.0.0",
           TYPE="vnc" ]
@@ -192,7 +194,9 @@ spec:
           TOKEN="YES" ]
         CPU="1"
         DISK=[
-          IMAGE="${WORKER_TEMPLATE_NAME}" ]
+          IMAGE="${WORKER_TEMPLATE_NAME}",
+          SIZE = "10240"
+        ]
         GRAPHICS=[
           LISTEN="0.0.0.0",
           TYPE="vnc" ]
