@@ -42,6 +42,10 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+const (
+	caprke2VersionVarName = "CAPRKE2_VERSION"
+)
+
 var (
 	configPath     string
 	artifactFolder string
@@ -227,8 +231,8 @@ func initBootstrapCluster() {
 		InfrastructureProviders:   e2eConfig.InfrastructureProviders(),
 		IPAMProviders:             e2eConfig.IPAMProviders(),
 		RuntimeExtensionProviders: e2eConfig.RuntimeExtensionProviders(),
-		BootstrapProviders:        []string{"rke2-bootstrap:v0.12.0"},
-		ControlPlaneProviders:     []string{"rke2-control-plane:v0.12.0"},
+		BootstrapProviders:        getBootstrapProviders(),
+		ControlPlaneProviders:     getControlPlaneProviders(),
 		AddonProviders:            e2eConfig.AddonProviders(),
 		LogFolder:                 filepath.Join(artifactFolder, "clusters", bootstrapClusterProxy.GetName()),
 	}
@@ -238,6 +242,22 @@ func initBootstrapCluster() {
 		bootstrapClusterInitInput,
 		e2eConfig.GetIntervals(bootstrapClusterProxy.GetName(), "wait-controllers")...,
 	)
+}
+
+func getBootstrapProviders() []string {
+	bootstrapProvider := "rke2-bootstrap"
+	if version := e2eConfig.GetVariableBestEffort(caprke2VersionVarName); len(version) > 0 {
+		bootstrapProvider = fmt.Sprintf("rke2-bootstrap:%s", version)
+	}
+	return []string{bootstrapProvider}
+}
+
+func getControlPlaneProviders() []string {
+	controlPlaneProvider := "rke2-control-plane"
+	if version := e2eConfig.GetVariableBestEffort(caprke2VersionVarName); len(version) > 0 {
+		controlPlaneProvider = fmt.Sprintf("rke2-control-plane:%s", version)
+	}
+	return []string{controlPlaneProvider}
 }
 
 func TestE2E(t *testing.T) {

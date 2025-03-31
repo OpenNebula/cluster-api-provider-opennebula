@@ -70,6 +70,12 @@ endef
 -include .env
 export
 
+ifndef CAPRKE2_VERSION
+	_CAPRKE := rke2
+else
+	_CAPRKE := rke2:$(CAPRKE2_VERSION)
+endif
+
 .PHONY: all clean
 
 all: build
@@ -199,7 +205,8 @@ clusterctl-init-full: $(CLUSTERCTL)
 	$(CLUSTERCTL) init --config=clusterctl-config.yaml --infrastructure=opennebula:$(CLOSEST_TAG)
 
 clusterctl-init-full-rke2: $(CLUSTERCTL)
-	$(CLUSTERCTL) init --config=clusterctl-config.yaml --bootstrap=rke2:v0.12.0 --control-plane=rke2:v0.12.0 --infrastructure=opennebula:$(CLOSEST_TAG)
+	$(CLUSTERCTL) init --config=clusterctl-config.yaml \
+	--bootstrap=$(_CAPRKE) --control-plane=$(_CAPRKE)  --infrastructure=opennebula:$(CLOSEST_TAG)
 
 one-apply: $(KUSTOMIZE) $(ENVSUBST) $(KUBECTL)
 	$(KUSTOMIZE) build kustomize/v1beta1/default-dev | $(ENVSUBST) | $(KUBECTL) apply -f-

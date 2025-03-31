@@ -22,8 +22,20 @@ providers:
   - name: rke2-bootstrap
     type: BootstrapProvider
     versions:
-      - name: "v0.12.0"
-        value: "https://github.com/rancher/cluster-api-provider-rke2/releases/download/v0.12.0/bootstrap-components.yaml"
+      - name: "{go://github.com/rancher/cluster-api-provider-rke2@v0.12}"
+        value: "https://github.com/rancher/cluster-api-provider-rke2/releases/download/{go://github.com/rancher/cluster-api-provider-rke2@v0.12}/bootstrap-components.yaml"
+        type: url
+        contract: v1beta1
+        files:
+          - sourcePath: "../data/rke2/metadata.yaml"
+        replacements:
+          - old: "imagePullPolicy: Always"
+            new: "imagePullPolicy: IfNotPresent"
+          - old: "--leader-elect"
+            new: "--leader-elect=false"
+      # IMPORTANT: Always include latest version defined in test/e2e/rke2/metadata.yaml
+      - name: "{go://github.com/rancher/cluster-api-provider-rke2@v0.13}"
+        value: "https://github.com/rancher/cluster-api-provider-rke2/releases/download/{go://github.com/rancher/cluster-api-provider-rke2@v0.13}/bootstrap-components.yaml"
         type: url
         contract: v1beta1
         files:
@@ -36,8 +48,20 @@ providers:
   - name: rke2-control-plane
     type: ControlPlaneProvider
     versions:
-      - name: "v0.12.0"
-        value: "https://github.com/rancher/cluster-api-provider-rke2/releases/download/v0.12.0/control-plane-components.yaml"
+      - name: "{go://github.com/rancher/cluster-api-provider-rke2@v0.12}"
+        value: "https://github.com/rancher/cluster-api-provider-rke2/releases/download/{go://github.com/rancher/cluster-api-provider-rke2@v0.12}/control-plane-components.yaml"
+        type: url
+        contract: v1beta1
+        files:
+          - sourcePath: "../data/rke2/metadata.yaml"
+        replacements:
+          - old: "imagePullPolicy: Always"
+            new: "imagePullPolicy: IfNotPresent"
+          - old: "--leader-elect"
+            new: "--leader-elect=false"
+      # IMPORTANT: Always include latest version defined in test/e2e/rke2/metadata.yaml
+      - name: "{go://github.com/rancher/cluster-api-provider-rke2@v0.13}"
+        value: "https://github.com/rancher/cluster-api-provider-rke2/releases/download/{go://github.com/rancher/cluster-api-provider-rke2@v0.13}/control-plane-components.yaml"
         type: url
         contract: v1beta1
         files:
