@@ -42,7 +42,7 @@ providers:
   - name: opennebula
     type: InfrastructureProvider
     versions:
-      - name: v0.1.0
+      - name: v0.1.1
         value: "../../../../config/default"
         type: kustomize
         contract: v1beta1
