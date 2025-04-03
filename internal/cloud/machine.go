@@ -19,12 +19,15 @@ package cloud
 import (
 	"encoding/base64"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 
 	infrav1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/v1beta1"
 
 	goca "github.com/OpenNebula/one/src/oca/go/src/goca"
 	goca_vm "github.com/OpenNebula/one/src/oca/go/src/goca/schemas/vm"
+	goca_vm_keys "github.com/OpenNebula/one/src/oca/go/src/goca/schemas/vm/keys"
 )
 
 type Machine struct {
@@ -143,18 +146,35 @@ func (m *Machine) FromTemplate(templateName string, userData *string, network *i
 
 	if router != nil {
 		// Mark this machine as a Control-Plane backend in the VR (dynamic LB).
-		update := goca_vm.NewTemplate()
-		update.Add("ONEGATE_HAPROXY_LB0_IP", "<ETH0_EP0>")
-		update.Add("ONEGATE_HAPROXY_LB0_PORT", "6443")
-		update.Add("ONEGATE_HAPROXY_LB0_SERVER_HOST", m.Address4)
-		update.Add("ONEGATE_HAPROXY_LB0_SERVER_PORT", "6443")
-
+		update := generateVMTemplateVRouterLBParams(router, m.Address4)
 		if err := m.ctrl.VM(m.ID).Update(update.String(), 1); err != nil {
 			return fmt.Errorf("Failed to update VM: %w", err)
 		}
 	}
 
 	return nil
+}
+
+func generateVMTemplateVRouterLBParams(router *infrav1.ONEVirtualRouter, serverAddress string) *goca_vm.Template {
+	update := goca_vm.NewTemplate()
+	if len(router.ListenerPorts) == 0 {
+		//defaults to kubernetes api port load balancing
+		update.Add("ONEGATE_HAPROXY_LB0_IP", "<ETH0_EP0>")
+		update.Add("ONEGATE_HAPROXY_LB0_PORT", "6443")
+		update.Add("ONEGATE_HAPROXY_LB0_SERVER_HOST", serverAddress)
+		update.Add("ONEGATE_HAPROXY_LB0_SERVER_PORT", "6443")
+		return update
+	}
+
+	slices.Sort(router.ListenerPorts)
+	for idx, port := range router.ListenerPorts {
+		//NOTE: Pass ports as strings, as the template make pair method doesn't support int32 values
+		update.Add(goca_vm_keys.Template(fmt.Sprintf("ONEGATE_HAPROXY_LB%d_IP", idx)), "<ETH0_EP0>")
+		update.Add(goca_vm_keys.Template(fmt.Sprintf("ONEGATE_HAPROXY_LB%d_PORT", idx)), strconv.Itoa(int(port)))
+		update.Add(goca_vm_keys.Template(fmt.Sprintf("ONEGATE_HAPROXY_LB%d_SERVER_HOST", idx)), serverAddress)
+		update.Add(goca_vm_keys.Template(fmt.Sprintf("ONEGATE_HAPROXY_LB%d_SERVER_PORT", idx)), strconv.Itoa(int(port)))
+	}
+	return update
 }
 
 func (m *Machine) Delete() error {

@@ -19,6 +19,8 @@ package cloud
 import (
 	"fmt"
 	"net"
+	"slices"
+	"strconv"
 
 	infrav1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/v1beta1"
 
@@ -141,8 +143,16 @@ func (r *Router) FromTemplate(virtualRouter *infrav1.ONEVirtualRouter, publicNet
 	contextMap := map[string]string{}
 	contextMap["ONEAPP_VNF_HAPROXY_ENABLED"] = "YES"
 	contextMap["ONEAPP_VNF_HAPROXY_ONEGATE_ENABLED"] = "YES"
-	contextMap["ONEAPP_VNF_HAPROXY_LB0_IP"] = "<ETH0_EP0>"
-	contextMap["ONEAPP_VNF_HAPROXY_LB0_PORT"] = "6443"
+	if len(virtualRouter.ListenerPorts) == 0 {
+		//defaults to kubernets api port load balancing
+		contextMap["ONEAPP_VNF_HAPROXY_LB0_IP"] = "<ETH0_EP0>"
+		contextMap["ONEAPP_VNF_HAPROXY_LB0_PORT"] = "6443"
+	}
+	slices.Sort(virtualRouter.ListenerPorts)
+	for idx, port := range virtualRouter.ListenerPorts {
+		contextMap[fmt.Sprintf("ONEAPP_VNF_HAPROXY_LB%d_IP", idx)] = "<ETH0_EP0>"
+		contextMap[fmt.Sprintf("ONEAPP_VNF_HAPROXY_LB%d_PORT", idx)] = strconv.Itoa(int(port))
+	}
 	updateContext(contextVec, &contextMap)
 	if virtualRouter.ExtraContext != nil {
 		updateContext(contextVec, &virtualRouter.ExtraContext)

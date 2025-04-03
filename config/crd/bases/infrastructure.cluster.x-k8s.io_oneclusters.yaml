@@ -120,6 +120,11 @@ spec:
                     type: integer
                   templateName:
                     type: string
+                  listenerPorts:
+                    items:
+                      format: int32
+                      type: integer
+                    type: array
                 required:
                 - templateName
                 type: object
