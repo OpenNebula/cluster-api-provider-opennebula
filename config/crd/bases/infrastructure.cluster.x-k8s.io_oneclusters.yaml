@@ -115,16 +115,16 @@ spec:
                     additionalProperties:
                       type: string
                     type: object
-                  replicas:
-                    format: int32
-                    type: integer
-                  templateName:
-                    type: string
                   listenerPorts:
                     items:
                       format: int32
                       type: integer
                     type: array
+                  replicas:
+                    format: int32
+                    type: integer
+                  templateName:
+                    type: string
                 required:
                 - templateName
                 type: object

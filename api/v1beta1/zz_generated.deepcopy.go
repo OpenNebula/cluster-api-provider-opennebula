@@ -452,6 +452,11 @@ func (in *ONEVirtualRouter) DeepCopyInto(out *ONEVirtualRouter) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.ListenerPorts != nil {
+		in, out := &in.ListenerPorts, &out.ListenerPorts
+		*out = make([]int32, len(*in))
+		copy(*out, *in)
+	}
 	if in.ExtraContext != nil {
 		in, out := &in.ExtraContext, &out.ExtraContext
 		*out = make(map[string]string, len(*in))
