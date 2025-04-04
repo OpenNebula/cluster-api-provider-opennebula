@@ -119,6 +119,7 @@ spec:
     name: "${PRIVATE_NETWORK_NAME}"
   virtualRouter:
     templateName: "${ROUTER_TEMPLATE_NAME}"
+    listenerPorts: [6443, 9345]
     extraContext: {}
 ---
 apiVersion: cluster.x-k8s.io/v1beta1

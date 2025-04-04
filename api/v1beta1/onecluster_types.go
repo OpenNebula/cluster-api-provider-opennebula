@@ -59,6 +59,9 @@ type ONEVirtualRouter struct {
 	Replicas *int32 `json:"replicas,omitempty"`
 
 	// +optional
+	ListenerPorts []int32 `json:"listenerPorts,omitempty"`
+
+	// +optional
 	ExtraContext map[string]string `json:"extraContext,omitempty"`
 }
 
