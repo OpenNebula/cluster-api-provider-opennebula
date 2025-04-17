@@ -1,0 +1,19 @@
+namespace: capone-system
+
+namePrefix: capone-
+
+labels:
+- includeSelectors: true
+  pairs:
+    cluster.x-k8s.io/provider: infrastructure-opennebula
+
+resources:
+- ../crd-dev
+- ../rbac
+- ../manager
+- metrics_service.yaml
+
+patches:
+- path: manager_metrics_patch.yaml
+  target:
+    kind: Deployment

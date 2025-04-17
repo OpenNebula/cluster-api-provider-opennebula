@@ -155,13 +155,17 @@ func (r *ONEMachineReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	if !oneMachine.ObjectMeta.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, r.reconcileDelete(ctx, oneCluster, machine, oneMachine, externalMachine)
+		return r.reconcileDelete(ctx, oneCluster, machine, oneMachine, externalMachine)
 	}
 
 	return r.reconcileNormal(ctx, cluster, oneCluster, machine, oneMachine, externalMachine)
 }
 
-func (r *ONEMachineReconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Cluster, oneCluster *infrav1.ONECluster, machine *clusterv1.Machine, oneMachine *infrav1.ONEMachine, externalMachine *cloud.Machine) (res ctrl.Result, retErr error) {
+func (r *ONEMachineReconciler) reconcileNormal(
+	ctx context.Context,
+	cluster *clusterv1.Cluster, oneCluster *infrav1.ONECluster,
+	machine *clusterv1.Machine, oneMachine *infrav1.ONEMachine, externalMachine *cloud.Machine) (ctrl.Result, error) {
+
 	log := log.FromContext(ctx)
 
 	if !cluster.Status.InfrastructureReady {
@@ -259,14 +263,19 @@ func generateExternalMachineName(machine *clusterv1.Machine, oneMachine *infrav1
 	return machine.Name
 }
 
-func (r *ONEMachineReconciler) reconcileDelete(ctx context.Context, oneCluster *infrav1.ONECluster, machine *clusterv1.Machine, oneMachine *infrav1.ONEMachine, externalMachine *cloud.Machine) error {
+func (r *ONEMachineReconciler) reconcileDelete(
+	ctx context.Context,
+	oneCluster *infrav1.ONECluster,
+	machine *clusterv1.Machine, oneMachine *infrav1.ONEMachine, externalMachine *cloud.Machine) (ctrl.Result, error) {
+
 	externalMachine.ByName(externalMachine.Name)
+
 	if err := externalMachine.Delete(); err != nil {
-		return errors.Wrap(err, "failed to delete ONEMachine")
+		return ctrl.Result{}, errors.Wrap(err, "failed to delete ONEMachine")
 	}
 
 	controllerutil.RemoveFinalizer(oneMachine, infrav1.MachineFinalizer)
-	return nil
+	return ctrl.Result{}, nil
 }
 
 func (r *ONEMachineReconciler) SetupWithManager(mgr ctrl.Manager) error {
