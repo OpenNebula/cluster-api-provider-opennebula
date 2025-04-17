@@ -35,14 +35,16 @@ func NewTemplates(cc *Clients, clusterUID string) *Templates {
 }
 
 func (t *Templates) CreateTemplate(templateName, templateContent string) error {
+	templateClusterUID := fmt.Sprintf("%s-%s", templateName, t.clusterUID)
+
 	existingID, err := t.ctrl.Templates().ByName(templateName)
 	if err != nil && err.Error() != "resource not found" {
 		return err
 	}
 
 	createNew := existingID < 0
-	templateClusterUID := templateName + "-" + t.clusterUID
-	if existingID >= 0 {
+
+	if !createNew {
 		vmTemplate, err := t.ctrl.Template(existingID).Info(false, true)
 		if err != nil {
 			return fmt.Errorf("Failed to obtain existing VM template: %w", err)
@@ -56,6 +58,7 @@ func (t *Templates) CreateTemplate(templateName, templateContent string) error {
 			createNew = true
 		}
 	}
+
 	if createNew {
 		templateSpec := fmt.Sprintf(
 			"NAME = \"%s\"\nCLUSTER_UID = \"%s\"\n%s",
