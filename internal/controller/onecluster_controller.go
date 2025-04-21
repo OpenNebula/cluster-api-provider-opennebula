@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/pkg/errors"
 
@@ -32,6 +33,7 @@ import (
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	"sigs.k8s.io/cluster-api/util"
+	"sigs.k8s.io/cluster-api/util/annotations"
 	"sigs.k8s.io/cluster-api/util/patch"
 
 	infrav1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/v1beta1"
@@ -75,6 +77,11 @@ func (r *ONEClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 
+	if annotations.IsPaused(cluster, oneCluster) {
+		log.Info("Reconciliation is paused for this object")
+		return ctrl.Result{}, nil
+	}
+
 	patchHelper, err := patch.NewHelper(oneCluster, r.Client)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -96,26 +103,33 @@ func (r *ONEClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}()
 
 	var (
-		externalRouter    *cloud.Router
-		externalCleanup   *cloud.Cleanup
 		externalImages    *cloud.Images
 		externalTemplates *cloud.Templates
+		externalRouter    *cloud.Router
+		externalCleanup   *cloud.Cleanup
 	)
-	if oneCluster.Spec.VirtualRouter != nil {
+	if len(oneCluster.Spec.Images) > 0 || len(oneCluster.Spec.Templates) > 0 || oneCluster.Spec.VirtualRouter != nil {
 		cloudClients, err := cloud.NewClients(ctx, r.Client, oneCluster)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		vrName := fmt.Sprintf("%s-cp", oneCluster.Name)
-		replicas := oneCluster.Spec.VirtualRouter.Replicas
-		externalRouter = cloud.NewRouter(cloudClients, vrName, replicas)
-		externalCleanup = cloud.NewCleanup(cloudClients, oneCluster.Name)
-		externalImages = cloud.NewImages(cloudClients)
-		externalTemplates = cloud.NewTemplates(cloudClients, string(oneCluster.UID))
+
+		if len(oneCluster.Spec.Images) > 0 {
+			externalImages = cloud.NewImages(cloudClients)
+		}
+		if len(oneCluster.Spec.Templates) > 0 {
+			externalTemplates = cloud.NewTemplates(cloudClients, string(oneCluster.UID))
+		}
+		if oneCluster.Spec.VirtualRouter != nil {
+			vrName := fmt.Sprintf("%s-cp", oneCluster.Name)
+			replicas := oneCluster.Spec.VirtualRouter.Replicas
+			externalRouter = cloud.NewRouter(cloudClients, vrName, replicas)
+			externalCleanup = cloud.NewCleanup(cloudClients, oneCluster.Name)
+		}
 	}
 
 	if !oneCluster.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, r.reconcileDelete(ctx, oneCluster, externalRouter, externalCleanup)
+		return r.reconcileDelete(ctx, oneCluster, externalRouter, externalCleanup)
 	}
 
 	if !controllerutil.ContainsFinalizer(oneCluster, infrav1.ClusterFinalizer) {
@@ -123,24 +137,30 @@ func (r *ONEClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 
-	return ctrl.Result{}, r.reconcileNormal(ctx, oneCluster, externalRouter, externalImages, externalTemplates)
+	return r.reconcileNormal(ctx, oneCluster, externalImages, externalTemplates, externalRouter)
 }
 
-func (r *ONEClusterReconciler) reconcileNormal(ctx context.Context, oneCluster *infrav1.ONECluster, externalRouter *cloud.Router, externalImages *cloud.Images, externalTemplates *cloud.Templates) error {
-	var imagesReady bool
+func (r *ONEClusterReconciler) reconcileNormal(
+	ctx context.Context,
+	oneCluster *infrav1.ONECluster,
+	externalImages *cloud.Images, externalTemplates *cloud.Templates, externalRouter *cloud.Router) (ctrl.Result, error) {
+
 	if externalImages != nil {
-		imagesReady = true
+		imagesReady := true
 		for _, image := range oneCluster.Spec.Images {
 			if image.ImageName != "" && image.ImageContent != "" {
 				if err := externalImages.CreateImage(
 					image.ImageName,
 					image.ImageContent,
 				); err != nil {
-					return errors.Wrap(err, "failed to create images")
+					return ctrl.Result{}, errors.Wrap(err, "failed to create images")
 				}
 				imageReady, _ := externalImages.ImageReady(image.ImageName)
 				imagesReady = imagesReady && imageReady
 			}
+		}
+		if !imagesReady {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
 	}
 
@@ -151,12 +171,13 @@ func (r *ONEClusterReconciler) reconcileNormal(ctx context.Context, oneCluster *
 					template.TemplateName,
 					template.TemplateContent,
 				); err != nil {
-					return errors.Wrap(err, "failed to create templates")
+					return ctrl.Result{}, errors.Wrap(err, "failed to create templates")
 				}
 			}
 		}
 	}
-	if externalRouter != nil && imagesReady {
+
+	if externalRouter != nil {
 		externalRouter.ByName(externalRouter.Name)
 		if !externalRouter.Exists() {
 			if err := externalRouter.FromTemplate(
@@ -164,7 +185,7 @@ func (r *ONEClusterReconciler) reconcileNormal(ctx context.Context, oneCluster *
 				oneCluster.Spec.PublicNetwork,
 				oneCluster.Spec.PrivateNetwork,
 			); err != nil {
-				return errors.Wrap(err, "failed to create VR")
+				return ctrl.Result{}, errors.Wrap(err, "failed to create VR")
 			}
 
 			if oneCluster.Spec.ControlPlaneEndpoint.Host == "" {
@@ -192,32 +213,39 @@ func (r *ONEClusterReconciler) reconcileNormal(ctx context.Context, oneCluster *
 					oneCluster.Spec.PrivateNetwork.DNS = oneCluster.Spec.PrivateNetwork.FloatingIP
 				}
 			}
-			oneCluster.Status.Ready = true
 		}
 	}
-	return nil
+
+	oneCluster.Status.Ready = true
+	return ctrl.Result{}, nil
 }
 
-func (r *ONEClusterReconciler) reconcileDelete(ctx context.Context, oneCluster *infrav1.ONECluster, externalRouter *cloud.Router, externalCleanup *cloud.Cleanup) error {
+func (r *ONEClusterReconciler) reconcileDelete(
+	ctx context.Context,
+	oneCluster *infrav1.ONECluster,
+	externalRouter *cloud.Router, externalCleanup *cloud.Cleanup) (ctrl.Result, error) {
+
 	if externalRouter != nil {
 		externalRouter.ByName(externalRouter.Name)
 		if err := externalRouter.Delete(); err != nil {
-			return errors.Wrap(err, "failed to delete VR")
+			return ctrl.Result{}, errors.Wrap(err, "failed to delete VR")
 		}
 	}
+
 	if externalCleanup != nil {
 		if err := externalCleanup.DeleteLBVirtualRouter(); err != nil {
-			return errors.Wrap(err, "failed to cleanup LB virtual router")
+			return ctrl.Result{}, errors.Wrap(err, "failed to cleanup LB virtual router")
 		}
 		if err := externalCleanup.DeleteVRReservation(); err != nil {
-			return errors.Wrap(err, "failed to cleanup VR reservation")
+			return ctrl.Result{}, errors.Wrap(err, "failed to cleanup VR reservation")
 		}
 		if err := externalCleanup.DeleteLBReservation(); err != nil {
-			return errors.Wrap(err, "failed to cleanup LB reservation")
+			return ctrl.Result{}, errors.Wrap(err, "failed to cleanup LB reservation")
 		}
 	}
+
 	controllerutil.RemoveFinalizer(oneCluster, infrav1.ClusterFinalizer)
-	return nil
+	return ctrl.Result{}, nil
 }
 
 func (r *ONEClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {

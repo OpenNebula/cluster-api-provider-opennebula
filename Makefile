@@ -7,6 +7,7 @@ SHELL := /usr/bin/env bash -o pipefail
 .SHELLFLAGS := -ec
 
 ARTIFACTS_DIR := $(SELF)/_artifacts
+BACKUPS_DIR   := $(SELF)/_backups
 RELEASES_DIR  := $(SELF)/_releases
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -16,7 +17,7 @@ else
 GOBIN := $(shell go env GOBIN)
 endif
 
-CLUSTERCTL_VERSION       ?= 1.9.4
+CLUSTERCTL_VERSION       ?= 1.9.6
 CONTROLLER_TOOLS_VERSION ?= 0.17.1
 CTLPTL_VERSION           ?= 0.8.38
 ENVSUBST_VERSION         ?= 1.4.2
@@ -66,6 +67,9 @@ kindV1Alpha4Cluster:
     - hostPath: /var/run/docker.sock
       containerPath: /var/run/docker.sock
 endef
+
+# Failsafe in case user doesn't provide it.
+CLUSTER_NAME ?= one
 
 -include .env
 export
@@ -134,7 +138,7 @@ run: manifests generate fmt vet
 docker-build:
 	$(CONTAINER_TOOL) build -t $(IMG) .
 
-docker-push:
+docker-push: docker-build
 	$(CONTAINER_TOOL) push $(IMG)
 
 docker-build-e2e:
@@ -165,21 +169,20 @@ ifndef ignore-not-found
 ignore-not-found = false
 endif
 
-.PHONY: install uninstall deploy undeploy logs ctlptl-apply ctlptl-delete \
-        clusterctl-init clusterctl-init-full one-apply one-delete one-flannel
+.PHONY: install uninstall deploy undeploy logs ctlptl-apply ctlptl-delete
 
 install: manifests $(KUSTOMIZE) $(KUBECTL) # Install CRDs into the K8s cluster specified in ~/.kube/config.
-	$(KUSTOMIZE) build config/crd | $(KUBECTL) apply -f-
+	$(KUSTOMIZE) build config/crd-dev | $(KUBECTL) apply -f-
 
 uninstall: manifests $(KUSTOMIZE) $(KUBECTL) # Uninstall CRDs from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	$(KUSTOMIZE) build config/crd | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f-
+	$(KUSTOMIZE) build config/crd-dev | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f-
 
 deploy: manifests $(KUSTOMIZE) $(KUBECTL) # Deploy controller to the K8s cluster specified in ~/.kube/config.
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
-	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f-
+	$(KUSTOMIZE) build config/default-dev | $(KUBECTL) apply -f-
 
 undeploy: $(KUSTOMIZE) $(KUBECTL) # Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	$(KUSTOMIZE) build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f-
+	$(KUSTOMIZE) build config/default-dev | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f-
 
 logs: $(KUBECTL)
 	$(KUBECTL) -n capone-system logs -f pod/$$($(KUBECTL) -n capone-system get pods -o json \
@@ -192,28 +195,47 @@ ctlptl-apply: $(CTLPTL) $(KIND)
 ctlptl-delete: $(CTLPTL) $(KIND)
 	$(CTLPTL) delete -f- <<< "$$CTLPTL_CLUSTER_YAML"
 
+.PHONY: clusterctl-init clusterctl-init-full clusterctl-init-rke2 clusterctl-init-full-rke2
+
 clusterctl-init: $(CLUSTERCTL)
-	$(CLUSTERCTL) init
+	$(CLUSTERCTL) --config=clusterctl-config.yaml init
 
 clusterctl-init-full: $(CLUSTERCTL)
-	$(CLUSTERCTL) init --config=clusterctl-config.yaml --infrastructure=opennebula:$(CLOSEST_TAG)
+	$(CLUSTERCTL) --config=clusterctl-config.yaml init --infrastructure=opennebula:$(CLOSEST_TAG)
+
+clusterctl-init-rke2: _CAPRKE2 := $(if $(CAPRKE2_VERSION),rke2:$(CAPRKE2_VERSION),rke2)
+clusterctl-init-rke2: $(CLUSTERCTL)
+	$(CLUSTERCTL) --config=clusterctl-config.yaml init  \
+	--bootstrap=$(_CAPRKE2) --control-plane=$(_CAPRKE2)
 
 clusterctl-init-full-rke2: _CAPRKE2 := $(if $(CAPRKE2_VERSION),rke2:$(CAPRKE2_VERSION),rke2)
 clusterctl-init-full-rke2: $(CLUSTERCTL)
-	$(CLUSTERCTL) init --config=clusterctl-config.yaml \
+	$(CLUSTERCTL) --config=clusterctl-config.yaml init \
 	--bootstrap=$(_CAPRKE2) --control-plane=$(_CAPRKE2) --infrastructure=opennebula:$(CLOSEST_TAG)
 
-one-apply: $(KUSTOMIZE) $(ENVSUBST) $(KUBECTL)
+.PHONY: $(CLUSTER_NAME)-apply $(CLUSTER_NAME)-apply-rke2 $(CLUSTER_NAME)-delete $(CLUSTER_NAME)-flannel
+
+$(CLUSTER_NAME)-apply: $(KUSTOMIZE) $(ENVSUBST) $(KUBECTL)
 	$(KUSTOMIZE) build kustomize/v1beta1/default-dev | $(ENVSUBST) | $(KUBECTL) apply -f-
 
-one-apply-rke2: $(KUSTOMIZE) $(ENVSUBST) $(KUBECTL)
+$(CLUSTER_NAME)-apply-rke2: $(KUSTOMIZE) $(ENVSUBST) $(KUBECTL)
 	$(KUSTOMIZE) build kustomize/v1beta1/rke2-dev | $(ENVSUBST) | $(KUBECTL) apply -f-
 
-one-delete: $(KUBECTL)
+$(CLUSTER_NAME)-delete: $(KUBECTL)
 	$(KUBECTL) delete cluster/$(CLUSTER_NAME)
 
-one-flannel: $(KUBECTL) $(CLUSTERCTL)
-	$(KUBECTL) --kubeconfig <($(CLUSTERCTL) get kubeconfig $(CLUSTER_NAME)) apply -f test/e2e/data/cni/kube-flannel.yml
+$(CLUSTER_NAME)-flannel: $(KUBECTL) $(CLUSTERCTL)
+	$(KUBECTL) --kubeconfig <($(CLUSTERCTL) get kubeconfig $(CLUSTER_NAME)) apply -f test/e2e/kubeadm/data/cni/kube-flannel.yml
+
+.PHONY: $(CLUSTER_NAME)-backup $(CLUSTER_NAME)-restore
+
+$(CLUSTER_NAME)-backup: $(CLUSTERCTL)
+	rm --preserve-root -rf '$(BACKUPS_DIR)/$(CLUSTER_NAME)'
+	install -d $(BACKUPS_DIR)/$(CLUSTER_NAME)
+	$(CLUSTERCTL) -v=4 --config=clusterctl-config.yaml move --to-directory=$(BACKUPS_DIR)/$(CLUSTER_NAME)
+
+$(CLUSTER_NAME)-restore: $(BACKUPS_DIR)/$(CLUSTER_NAME)
+	$(CLUSTERCTL) -v=4 --config=clusterctl-config.yaml move --from-directory=$(BACKUPS_DIR)/$(CLUSTER_NAME)
 
 # Dependencies
 
