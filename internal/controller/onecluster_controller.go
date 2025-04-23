@@ -113,18 +113,35 @@ func (r *ONEClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-
 		if len(oneCluster.Spec.Images) > 0 {
-			externalImages = cloud.NewImages(cloudClients)
+			externalImages, err = cloud.NewImages(cloudClients)
+			if err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to initialize cloud images: %w", err)
+			}
 		}
 		if len(oneCluster.Spec.Templates) > 0 {
-			externalTemplates = cloud.NewTemplates(cloudClients, string(oneCluster.UID))
+			externalTemplates, err = cloud.NewTemplates(cloudClients, string(oneCluster.UID))
+			if err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to initialize cloud templates: %w", err)
+			}
 		}
 		if oneCluster.Spec.VirtualRouter != nil {
-			vrName := fmt.Sprintf("%s-cp", oneCluster.Name)
-			replicas := oneCluster.Spec.VirtualRouter.Replicas
-			externalRouter = cloud.NewRouter(cloudClients, vrName, replicas)
-			externalCleanup = cloud.NewCleanup(cloudClients, oneCluster.Name)
+			routerOpts := []cloud.RouterOption{
+				cloud.WithRouterName(fmt.Sprintf("%s-cp", oneCluster.Name)),
+			}
+			if oneCluster.Spec.VirtualRouter.Replicas != nil {
+				routerOpts = append(routerOpts,
+					cloud.WithRouterReplicas(int(*oneCluster.Spec.VirtualRouter.Replicas)),
+				)
+			}
+			externalRouter, err = cloud.NewRouter(cloudClients, routerOpts...)
+			if err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to initialize cloud router: %w", err)
+			}
+			externalCleanup, err = cloud.NewCleanup(cloudClients, oneCluster.Name)
+			if err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to initialize cloud cleanup: %w", err)
+			}
 		}
 	}
 

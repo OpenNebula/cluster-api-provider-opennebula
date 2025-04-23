@@ -27,11 +27,12 @@ type Templates struct {
 	clusterUID string
 }
 
-func NewTemplates(cc *Clients, clusterUID string) *Templates {
-	return &Templates{
-		ctrl:       goca.NewController(cc.RPC2),
-		clusterUID: clusterUID,
+func NewTemplates(clients *Clients, clusterUID string) (*Templates, error) {
+	if clients == nil {
+		return nil, fmt.Errorf("clients reference is nil")
 	}
+
+	return &Templates{ctrl: goca.NewController(clients.RPC2), clusterUID: clusterUID}, nil
 }
 
 func (t *Templates) CreateTemplate(templateName, templateContent string) error {

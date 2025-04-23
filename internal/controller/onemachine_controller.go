@@ -148,8 +148,20 @@ func (r *ONEMachineReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	name := generateExternalMachineName(machine, oneMachine)
-	externalMachine, err := cloud.NewMachine(cloudClients, cloud.WithMachineName(name))
+	machineOpts := []cloud.MachineOption{
+		cloud.WithMachineName(generateExternalMachineName(machine, oneMachine)),
+	}
+	if oneCluster.Spec.VirtualRouter != nil {
+		externalRouter, err := cloud.NewRouter(cloudClients)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to initialize cloud router: %w", err)
+		}
+		externalRouter.ByName(fmt.Sprintf("%s-cp", oneCluster.Name))
+		if externalRouter.Exists() {
+			machineOpts = append(machineOpts, cloud.WithMachineRouterID(externalRouter.ID))
+		}
+	}
+	externalMachine, err := cloud.NewMachine(cloudClients, machineOpts...)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to initialize cloud machine: %w", err)
 	}
