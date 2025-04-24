@@ -27,8 +27,12 @@ type Images struct {
 	ctrl *goca.Controller
 }
 
-func NewImages(cc *Clients) *Images {
-	return &Images{ctrl: goca.NewController(cc.RPC2)}
+func NewImages(clients *Clients) (*Images, error) {
+	if clients == nil {
+		return nil, fmt.Errorf("clients reference is nil")
+	}
+
+	return &Images{ctrl: goca.NewController(clients.RPC2)}, nil
 }
 
 func (i *Images) CreateImage(imageName, imageContent string) error {

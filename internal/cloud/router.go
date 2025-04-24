@@ -36,17 +36,29 @@ type Router struct {
 	FloatingIPs []string
 }
 
-func NewRouter(cc *Clients, name string, maybeReplicas *int32) *Router {
-	replicas := 1
-	if maybeReplicas != nil {
-		replicas = int(*maybeReplicas)
+type RouterOption func(*Router)
+
+func WithRouterName(name string) RouterOption {
+	return func(r *Router) {
+		r.Name = name
 	}
-	return &Router{
-		ctrl:     goca.NewController(cc.RPC2),
-		ID:       -1,
-		Name:     name,
-		Replicas: replicas,
+}
+func WithRouterReplicas(replicas int) RouterOption {
+	return func(r *Router) {
+		r.Replicas = replicas
 	}
+}
+
+func NewRouter(clients *Clients, options ...RouterOption) (*Router, error) {
+	if clients == nil {
+		return nil, fmt.Errorf("clients reference is nil")
+	}
+
+	r := &Router{ctrl: goca.NewController(clients.RPC2), ID: -1, Replicas: 1}
+	for _, option := range options {
+		option(r)
+	}
+	return r, nil
 }
 
 func (r *Router) Exists() bool {
@@ -79,7 +91,10 @@ func (r *Router) ByName(vrName string) error {
 	return r.ByID(vrID)
 }
 
-func (r *Router) FromTemplate(virtualRouter *infrav1.ONEVirtualRouter, publicNetwork, privateNetwork *infrav1.ONEVirtualNetwork) error {
+func (r *Router) FromTemplate(
+	virtualRouter *infrav1.ONEVirtualRouter,
+	publicNetwork, privateNetwork *infrav1.ONEVirtualNetwork) error {
+
 	if r.Exists() {
 		return nil
 	}

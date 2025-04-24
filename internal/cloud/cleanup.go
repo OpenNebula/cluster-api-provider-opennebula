@@ -29,11 +29,12 @@ type Cleanup struct {
 	clusterName string
 }
 
-func NewCleanup(cc *Clients, clusterName string) *Cleanup {
-	return &Cleanup{
-		ctrl:        goca.NewController(cc.RPC2),
-		clusterName: clusterName,
+func NewCleanup(clients *Clients, clusterName string) (*Cleanup, error) {
+	if clients == nil {
+		return nil, fmt.Errorf("clients reference is nil")
 	}
+
+	return &Cleanup{ctrl: goca.NewController(clients.RPC2), clusterName: clusterName}, nil
 }
 
 func (c *Cleanup) getVirtualRouterName() string {
