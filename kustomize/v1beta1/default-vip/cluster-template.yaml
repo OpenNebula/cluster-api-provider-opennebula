@@ -76,7 +76,7 @@ spec:
                     fieldPath: spec.nodeName
               - name: vip_interface
                 value: "${VIP_NETWORK_INTERFACE:=eth0}"
-              - name: vip_cidr
+              - name: vip_subnet
                 value: "32"
               - name: dns_mode
                 value: first
@@ -102,7 +102,7 @@ spec:
                 value: "${CONTROL_PLANE_HOST}"
               - name: prometheus_server
                 value: :2112
-              image: "ghcr.io/kube-vip/kube-vip:${KUBE_VIP_VERSION:=v0.8.3}"
+              image: "ghcr.io/kube-vip/kube-vip:${KUBE_VIP_VERSION:=v0.9.0}"
               imagePullPolicy: IfNotPresent
               name: kube-vip
               resources: {}
@@ -111,6 +111,8 @@ spec:
                   add:
                   - NET_ADMIN
                   - NET_RAW
+                  drop:
+                  - ALL
               volumeMounts:
               - mountPath: /etc/kubernetes/admin.conf
                 name: kubeconfig
@@ -203,6 +205,68 @@ metadata:
     cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
 spec:
   secretName: "${CLUSTER_NAME}"
+  controlPlaneEndpoint:
+    host: "${CONTROL_PLANE_HOST}"
+    port: 6443
+  publicNetwork:
+    name: "${PUBLIC_NETWORK_NAME}"
+  images:
+    - imageName: "${MASTER_TEMPLATE_NAME}"
+      imageContent: |
+        #PATH = "https://community-marketplace.opennebula.io//appliance/d197d8d4-dab6-4f7e-a1fd-90e87e4365d5/download/0"
+        PATH = "http://10.2.11.1/community-images/capone131.qcow2"
+        DEV_PREFIX = "vd"
+  templates:
+    # NOTE: Please escape OpenNebula context variables with additional $ sign,
+    #       i.e. "$USER[SSH_PUBLIC_KEY]" becomes "$$USER[SSH_PUBLIC_KEY]".
+    - templateName: "${MASTER_TEMPLATE_NAME}"
+      templateContent: |
+        CONTEXT = [
+          BACKEND = "YES",
+          NETWORK = "YES",
+          GROW_FS = "/",
+          SET_HOSTNAME = "$$NAME",
+          SSH_PUBLIC_KEY = "$$USER[SSH_PUBLIC_KEY]",
+          TOKEN = "YES" ]
+        CPU = "1"
+        DISK = [
+          IMAGE = "${MASTER_TEMPLATE_NAME}",
+          SIZE = "${MASTER_DISK_SIZE:-16384}" ]
+        GRAPHICS = [
+          LISTEN = "0.0.0.0",
+          TYPE = "vnc" ]
+        HYPERVISOR = "kvm"
+        LXD_SECURITY_PRIVILEGED = "true"
+        MEMORY = "3072"
+        OS = [
+          ARCH = "x86_64",
+          FIRMWARE_SECURE = "YES" ]
+        SCHED_REQUIREMENTS = "HYPERVISOR=kvm"
+        VCPU = "2"
+    - templateName: "${WORKER_TEMPLATE_NAME}"
+      templateContent: |
+        CONTEXT = [
+          BACKEND = "YES",
+          NETWORK = "YES",
+          GROW_FS = "/",
+          SET_HOSTNAME = "$$NAME",
+          SSH_PUBLIC_KEY = "$$USER[SSH_PUBLIC_KEY]",
+          TOKEN = "YES" ]
+        CPU = "1"
+        DISK = [
+          IMAGE = "${MASTER_TEMPLATE_NAME}",
+          SIZE = "${WORKER_DISK_SIZE:-16384}" ]
+        GRAPHICS = [
+          LISTEN = "0.0.0.0",
+          TYPE = "vnc" ]
+        HYPERVISOR = "kvm"
+        LXD_SECURITY_PRIVILEGED = "true"
+        MEMORY = "3072"
+        OS = [
+          ARCH = "x86_64",
+          FIRMWARE_SECURE = "YES" ]
+        SCHED_REQUIREMENTS = "HYPERVISOR=kvm"
+        VCPU = "2"
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: Cluster
@@ -253,8 +317,11 @@ data:
     stringData:
       config.yaml: |
         opennebula:
-          ONE_XMLRPC: "${ONE_XMLRPC}"
-          ONE_AUTH: "${ONE_AUTH}"
+          endpoint:
+            ONE_XMLRPC: "${ONE_XMLRPC}"
+            ONE_AUTH: "${ONE_AUTH}"
+          publicNetwork:
+            name: "${PUBLIC_NETWORK_NAME}"
     ---
     apiVersion: v1
     kind: ServiceAccount
@@ -299,6 +366,7 @@ data:
               command:
                 - /opennebula-cloud-controller-manager
                 - --cloud-provider=opennebula
+                - --cluster-name='${CLUSTER_NAME}'
                 - --cloud-config=/etc/one/config.yaml
                 - --leader-elect=true
                 - --use-service-account-credentials
@@ -320,6 +388,10 @@ data:
               operator: Exists
               effect: NoSchedule
             - key: node-role.kubernetes.io/master
+              operator: Exists
+              effect: NoSchedule
+            # TODO: remove this one later!
+            - key: node.kubernetes.io/not-ready
               operator: Exists
               effect: NoSchedule
           nodeSelector:

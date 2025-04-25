@@ -213,13 +213,21 @@ clusterctl-init-full-rke2: $(CLUSTERCTL)
 	$(CLUSTERCTL) --config=clusterctl-config.yaml init \
 	--bootstrap=$(_CAPRKE2) --control-plane=$(_CAPRKE2) --infrastructure=opennebula:$(CLOSEST_TAG)
 
-.PHONY: $(CLUSTER_NAME)-apply $(CLUSTER_NAME)-apply-rke2 $(CLUSTER_NAME)-delete $(CLUSTER_NAME)-flannel
+.PHONY: $(CLUSTER_NAME)-apply $(CLUSTER_NAME)-apply-vip $(CLUSTER_NAME)-apply-rke2 $(CLUSTER_NAME)-apply-rke2-vip
 
 $(CLUSTER_NAME)-apply: $(KUSTOMIZE) $(ENVSUBST) $(KUBECTL)
 	$(KUSTOMIZE) build kustomize/v1beta1/default-dev | $(ENVSUBST) | $(KUBECTL) apply -f-
 
+$(CLUSTER_NAME)-apply-vip: $(KUSTOMIZE) $(ENVSUBST) $(KUBECTL)
+	$(KUSTOMIZE) build kustomize/v1beta1/default-vip | $(ENVSUBST) | $(KUBECTL) apply -f-
+
 $(CLUSTER_NAME)-apply-rke2: $(KUSTOMIZE) $(ENVSUBST) $(KUBECTL)
 	$(KUSTOMIZE) build kustomize/v1beta1/rke2-dev | $(ENVSUBST) | $(KUBECTL) apply -f-
+
+$(CLUSTER_NAME)-apply-rke2-vip: $(KUSTOMIZE) $(ENVSUBST) $(KUBECTL)
+	$(KUSTOMIZE) build kustomize/v1beta1/rke2-vip | $(ENVSUBST) | $(KUBECTL) apply -f-
+
+.PHONY: $(CLUSTER_NAME)-delete $(CLUSTER_NAME)-flannel
 
 $(CLUSTER_NAME)-delete: $(KUBECTL)
 	$(KUBECTL) delete cluster/$(CLUSTER_NAME)

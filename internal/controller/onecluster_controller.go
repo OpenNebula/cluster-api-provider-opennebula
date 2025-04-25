@@ -116,13 +116,13 @@ func (r *ONEClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if len(oneCluster.Spec.Images) > 0 {
 			externalImages, err = cloud.NewImages(cloudClients)
 			if err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to initialize cloud images: %w", err)
+				return ctrl.Result{}, errors.Wrap(err, "failed to initialize cloud images")
 			}
 		}
 		if len(oneCluster.Spec.Templates) > 0 {
 			externalTemplates, err = cloud.NewTemplates(cloudClients, string(oneCluster.UID))
 			if err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to initialize cloud templates: %w", err)
+				return ctrl.Result{}, errors.Wrap(err, "failed to initialize cloud templates")
 			}
 		}
 		if oneCluster.Spec.VirtualRouter != nil {
@@ -136,11 +136,11 @@ func (r *ONEClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			}
 			externalRouter, err = cloud.NewRouter(cloudClients, routerOpts...)
 			if err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to initialize cloud router: %w", err)
+				return ctrl.Result{}, errors.Wrap(err, "failed to initialize cloud router")
 			}
 			externalCleanup, err = cloud.NewCleanup(cloudClients, oneCluster.Name)
 			if err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to initialize cloud cleanup: %w", err)
+				return ctrl.Result{}, errors.Wrap(err, "failed to initialize cloud cleanup")
 			}
 		}
 	}
@@ -210,10 +210,6 @@ func (r *ONEClusterReconciler) reconcileNormal(
 					oneCluster.Spec.ControlPlaneEndpoint.Host = externalRouter.FloatingIPs[0]
 				}
 			}
-			// TODO: use webhook?
-			if oneCluster.Spec.ControlPlaneEndpoint.Port == 0 {
-				oneCluster.Spec.ControlPlaneEndpoint.Port = 6443
-			}
 
 			if oneCluster.Spec.PrivateNetwork != nil {
 				if oneCluster.Spec.PrivateNetwork.FloatingIP == nil {
@@ -231,6 +227,15 @@ func (r *ONEClusterReconciler) reconcileNormal(
 				}
 			}
 		}
+	}
+
+	if oneCluster.Spec.ControlPlaneEndpoint.Host == "" {
+		return ctrl.Result{}, fmt.Errorf("Spec.ControlPlaneEndpoint.Host must not be empty")
+	}
+
+	// TODO: use webhook?
+	if oneCluster.Spec.ControlPlaneEndpoint.Port == 0 {
+		oneCluster.Spec.ControlPlaneEndpoint.Port = 6443
 	}
 
 	oneCluster.Status.Ready = true
