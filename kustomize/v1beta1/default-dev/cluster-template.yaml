@@ -133,12 +133,12 @@ spec:
   images:
     - imageName: "${ROUTER_TEMPLATE_NAME}"
       imageContent: |
-        PATH="https://community-marketplace.opennebula.io//appliance/2def0784-3310-479b-9533-5dd6cc0fe2b7/download/0"
-        DEV_PREFIX="vd"
+        PATH = "https://community-marketplace.opennebula.io//appliance/2def0784-3310-479b-9533-5dd6cc0fe2b7/download/0"
+        DEV_PREFIX = "vd"
     - imageName: "${MASTER_TEMPLATE_NAME}"
       imageContent: |
-        PATH="https://community-marketplace.opennebula.io//appliance/d197d8d4-dab6-4f7e-a1fd-90e87e4365d5/download/0"
-        DEV_PREFIX="vd"
+        PATH = "https://community-marketplace.opennebula.io//appliance/d197d8d4-dab6-4f7e-a1fd-90e87e4365d5/download/0"
+        DEV_PREFIX = "vd"
   templates:
     # NOTE: Please escape OpenNebula context variables with additional $ sign,
     #       i.e. "$USER[SSH_PUBLIC_KEY]" becomes "$$USER[SSH_PUBLIC_KEY]".
@@ -156,7 +156,7 @@ spec:
           TOKEN = "YES" ]
         CPU = "1"
         DISK = [
-          IMAGE="${ROUTER_TEMPLATE_NAME}" ]
+          IMAGE = "${ROUTER_TEMPLATE_NAME}" ]
         GRAPHICS = [
           LISTEN = "0.0.0.0",
           TYPE = "vnc" ]
@@ -170,52 +170,52 @@ spec:
         VROUTER = "YES"
     - templateName: "${MASTER_TEMPLATE_NAME}"
       templateContent: |
-        CONTEXT=[
-          BACKEND="YES",
-          NETWORK="YES",
-          GROW_FS="/",
-          SET_HOSTNAME="$$NAME",
-          SSH_PUBLIC_KEY="$$USER[SSH_PUBLIC_KEY]",
-          TOKEN="YES" ]
-        CPU="1"
-        DISK=[
-          IMAGE="${MASTER_TEMPLATE_NAME}",
+        CONTEXT = [
+          BACKEND = "YES",
+          NETWORK = "YES",
+          GROW_FS = "/",
+          SET_HOSTNAME = "$$NAME",
+          SSH_PUBLIC_KEY = "$$USER[SSH_PUBLIC_KEY]",
+          TOKEN = "YES" ]
+        CPU = "1"
+        DISK = [
+          IMAGE = "${MASTER_TEMPLATE_NAME}",
           SIZE = "${MASTER_DISK_SIZE:-16384}"]
-        GRAPHICS=[
-          LISTEN="0.0.0.0",
-          TYPE="vnc" ]
-        HYPERVISOR="kvm"
-        LXD_SECURITY_PRIVILEGED="true"
-        MEMORY="3072"
-        OS=[
-          ARCH="x86_64",
-          FIRMWARE_SECURE="YES" ]
-        SCHED_REQUIREMENTS="HYPERVISOR=kvm"
-        VCPU="2"
+        GRAPHICS = [
+          LISTEN = "0.0.0.0",
+          TYPE = "vnc" ]
+        HYPERVISOR = "kvm"
+        LXD_SECURITY_PRIVILEGED = "true"
+        MEMORY = "3072"
+        OS = [
+          ARCH = "x86_64",
+          FIRMWARE_SECURE = "YES" ]
+        SCHED_REQUIREMENTS = "HYPERVISOR=kvm"
+        VCPU = "2"
     - templateName: "${WORKER_TEMPLATE_NAME}"
       templateContent: |
-        CONTEXT=[
-          BACKEND="YES",
-          NETWORK="YES",
-          GROW_FS="/",
-          SET_HOSTNAME="$$NAME",
-          SSH_PUBLIC_KEY="$$USER[SSH_PUBLIC_KEY]",
-          TOKEN="YES" ]
-        CPU="1"
-        DISK=[
-          IMAGE="${MASTER_TEMPLATE_NAME}",
+        CONTEXT = [
+          BACKEND = "YES",
+          NETWORK = "YES",
+          GROW_FS = "/",
+          SET_HOSTNAME = "$$NAME",
+          SSH_PUBLIC_KEY = "$$USER[SSH_PUBLIC_KEY]",
+          TOKEN = "YES" ]
+        CPU = "1"
+        DISK = [
+          IMAGE = "${MASTER_TEMPLATE_NAME}",
           SIZE = "${WORKER_DISK_SIZE:-16384}" ]
-        GRAPHICS=[
-          LISTEN="0.0.0.0",
-          TYPE="vnc" ]
-        HYPERVISOR="kvm"
-        LXD_SECURITY_PRIVILEGED="true"
-        MEMORY="3072"
-        OS=[
-          ARCH="x86_64",
-          FIRMWARE_SECURE="YES" ]
-        SCHED_REQUIREMENTS="HYPERVISOR=kvm"
-        VCPU="2"
+        GRAPHICS = [
+          LISTEN = "0.0.0.0",
+          TYPE = "vnc" ]
+        HYPERVISOR = "kvm"
+        LXD_SECURITY_PRIVILEGED = "true"
+        MEMORY = "3072"
+        OS = [
+          ARCH = "x86_64",
+          FIRMWARE_SECURE = "YES" ]
+        SCHED_REQUIREMENTS = "HYPERVISOR=kvm"
+        VCPU = "2"
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: Cluster
