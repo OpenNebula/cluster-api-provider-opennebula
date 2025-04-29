@@ -33,6 +33,98 @@ spec:
   registrationMethod: "address"
   registrationAddress: "${CONTROL_PLANE_HOST}"
   files:
+    - path: /var/lib/rancher/rke2/server/manifests/cloud-controller-manager.yaml
+      owner: "root:root"
+      permissions: "0644"
+      content: |
+        ---
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: cloud-config
+          namespace: kube-system
+        stringData:
+          config.yaml: |
+            opennebula:
+              endpoint:
+                ONE_XMLRPC: "${ONE_XMLRPC}"
+                ONE_AUTH: "${ONE_AUTH}"
+              publicNetwork:
+                name: "${PUBLIC_NETWORK_NAME}"
+        ---
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: opennebula-cloud-controller-manager
+          namespace: kube-system
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: system:opennebula-cloud-controller-manager
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: cluster-admin
+        subjects:
+          - kind: ServiceAccount
+            name: opennebula-cloud-controller-manager
+            namespace: kube-system
+        ---
+        apiVersion: apps/v1
+        kind: DaemonSet
+        metadata:
+          labels:
+            k8s-app: cloud-controller-manager
+          name: cloud-controller-manager
+          namespace: kube-system
+        spec:
+          selector:
+            matchLabels:
+              k8s-app: cloud-controller-manager
+          template:
+            metadata:
+              labels:
+                k8s-app: cloud-controller-manager
+            spec:
+              serviceAccountName: opennebula-cloud-controller-manager
+              containers:
+                - name: cloud-controller-manager
+                  image: "${CCM_IMG}"
+                  imagePullPolicy: IfNotPresent
+                  command:
+                    - /opennebula-cloud-controller-manager
+                    - --cloud-provider=opennebula
+                    - --cluster-name=${CLUSTER_NAME}
+                    - --cloud-config=/etc/one/config.yaml
+                    - --leader-elect=true
+                    - --use-service-account-credentials
+                    - --controllers=cloud-node,cloud-node-lifecycle
+                  volumeMounts:
+                    - name: cloud-config
+                      mountPath: /etc/one/
+                      readOnly: true
+              volumes:
+                - name: cloud-config
+                  secret:
+                    secretName: cloud-config
+              hostNetwork: true
+              tolerations:
+                - key: node.cloudprovider.kubernetes.io/uninitialized
+                  value: "true"
+                  effect: NoSchedule
+                - key: node-role.kubernetes.io/control-plane
+                  operator: Exists
+                  effect: NoSchedule
+                - key: node-role.kubernetes.io/master
+                  operator: Exists
+                  effect: NoSchedule
+                # TODO: remove this one later!
+                - key: node.kubernetes.io/not-ready
+                  operator: Exists
+                  effect: NoSchedule
+              nodeSelector:
+                node-role.kubernetes.io/control-plane: "true"
     - path: /var/lib/rancher/rke2/server/manifests/metallb.yaml
       owner: "root:root"
       permissions: "0644"
@@ -308,113 +400,3 @@ spec:
   controlPlaneEndpoint:
     host: "${CONTROL_PLANE_HOST}"
     port: 6443
----
-apiVersion: addons.cluster.x-k8s.io/v1beta1
-kind: ClusterResourceSet
-metadata:
-  name: "${CLUSTER_NAME}-crs-0"
-  labels:
-    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
-spec:
-  clusterSelector:
-    matchLabels:
-      cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
-  resources:
-    - kind: ConfigMap
-      name: cloud-controller-manager
-  strategy: Reconcile
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: cloud-controller-manager
-data:
-  cloud-controller-manager.yaml: |
-    ---
-    apiVersion: v1
-    kind: Secret
-    metadata:
-      name: cloud-config
-      namespace: kube-system
-    stringData:
-      config.yaml: |
-        opennebula:
-          endpoint:
-            ONE_XMLRPC: "${ONE_XMLRPC}"
-            ONE_AUTH: "${ONE_AUTH}"
-          publicNetwork:
-            name: "${PUBLIC_NETWORK_NAME}"
-    ---
-    apiVersion: v1
-    kind: ServiceAccount
-    metadata:
-      name: opennebula-cloud-controller-manager
-      namespace: kube-system
-    ---
-    apiVersion: rbac.authorization.k8s.io/v1
-    kind: ClusterRoleBinding
-    metadata:
-      name: system:opennebula-cloud-controller-manager
-    roleRef:
-      apiGroup: rbac.authorization.k8s.io
-      kind: ClusterRole
-      name: cluster-admin
-    subjects:
-      - kind: ServiceAccount
-        name: opennebula-cloud-controller-manager
-        namespace: kube-system
-    ---
-    apiVersion: apps/v1
-    kind: DaemonSet
-    metadata:
-      labels:
-        k8s-app: cloud-controller-manager
-      name: cloud-controller-manager
-      namespace: kube-system
-    spec:
-      selector:
-        matchLabels:
-          k8s-app: cloud-controller-manager
-      template:
-        metadata:
-          labels:
-            k8s-app: cloud-controller-manager
-        spec:
-          serviceAccountName: opennebula-cloud-controller-manager
-          containers:
-            - name: cloud-controller-manager
-              image: "${CCM_IMG}"
-              imagePullPolicy: IfNotPresent
-              command:
-                - /opennebula-cloud-controller-manager
-                - --cloud-provider=opennebula
-                - --cluster-name=${CLUSTER_NAME}
-                - --cloud-config=/etc/one/config.yaml
-                - --leader-elect=true
-                - --use-service-account-credentials
-                - --controllers=cloud-node,cloud-node-lifecycle
-              volumeMounts:
-                - name: cloud-config
-                  mountPath: /etc/one/
-                  readOnly: true
-          volumes:
-            - name: cloud-config
-              secret:
-                secretName: cloud-config
-          hostNetwork: true
-          tolerations:
-            - key: node.cloudprovider.kubernetes.io/uninitialized
-              value: "true"
-              effect: NoSchedule
-            - key: node-role.kubernetes.io/control-plane
-              operator: Exists
-              effect: NoSchedule
-            - key: node-role.kubernetes.io/master
-              operator: Exists
-              effect: NoSchedule
-            # TODO: remove this one later!
-            - key: node.kubernetes.io/not-ready
-              operator: Exists
-              effect: NoSchedule
-          nodeSelector:
-            node-role.kubernetes.io/control-plane: "true"
