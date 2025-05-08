@@ -3,6 +3,7 @@
 
 _artifacts/
 _backups/
+_charts/
 _releases/
 bin/
 .env

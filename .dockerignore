@@ -2,6 +2,7 @@
 # Ignore build and test binaries.
 _artifacts/
 _backups/
+_charts/
 _releases/
 bin/
 .env

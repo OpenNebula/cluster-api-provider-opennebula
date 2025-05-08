@@ -1,0 +1,7 @@
+---
+apiVersion: v2
+name: capone-kadm
+description: OpenNebula/Kubeadm CAPI Templates
+type: application
+version: 0.1.5
+appVersion: "v0.1.5"
