@@ -4,4 +4,4 @@ name: capone-rke2
 description: OpenNebula/RKE2 CAPI Templates
 type: application
 version: 0.1.5
-appVersion: "0.1.5"
+appVersion: "v0.1.5"
