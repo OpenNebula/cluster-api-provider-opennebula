@@ -9,6 +9,7 @@ SHELL := /usr/bin/env bash -o pipefail
 ARTIFACTS_DIR := $(SELF)/_artifacts
 BACKUPS_DIR   := $(SELF)/_backups
 RELEASES_DIR  := $(SELF)/_releases
+CHARTS_DIR    := $(SELF)/_charts
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -162,6 +163,37 @@ release: $(KUSTOMIZE)
 	| install -m u=rw,go= -D /dev/fd/0 $(RELEASES_DIR)/$(CLOSEST_TAG)/cluster-template-rke2.yaml
 	# Metadata
 	install -m u=rw,go= -D metadata.yaml $(RELEASES_DIR)/$(CLOSEST_TAG)/metadata.yaml
+
+# Helm
+
+.PHONY: charts
+
+define chart-generator-tool
+charts: $(CHARTS_DIR)/$(CLOSEST_TAG)/$(1)
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):                     CCM_IMG := {{ .Values.CCM_IMG }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):              CLUSTER_IMAGES := {{ tpl (toYaml .Values.CLUSTER_IMAGES) . | nindent 4 }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):           CLUSTER_TEMPLATES := {{ tpl (toYaml .Values.CLUSTER_TEMPLATES) . | nindent 4 }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):                CLUSTER_NAME := {{ tpl .Values.CLUSTER_NAME . }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):          CONTROL_PLANE_HOST := {{ .Values.CONTROL_PLANE_HOST }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1): CONTROL_PLANE_MACHINE_COUNT := {{ .Values.CONTROL_PLANE_MACHINE_COUNT }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):          KUBERNETES_VERSION := {{ .Values.KUBERNETES_VERSION }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):        MASTER_TEMPLATE_NAME := {{ tpl .Values.MASTER_TEMPLATE_NAME . }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):                    ONE_AUTH := {{ .Values.ONE_AUTH }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):                  ONE_XMLRPC := {{ .Values.ONE_XMLRPC }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):        PRIVATE_NETWORK_NAME := {{ .Values.PRIVATE_NETWORK_NAME }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):         PUBLIC_NETWORK_NAME := {{ .Values.PUBLIC_NETWORK_NAME }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):        ROUTER_TEMPLATE_NAME := {{ tpl .Values.ROUTER_TEMPLATE_NAME . }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):        WORKER_MACHINE_COUNT := {{ .Values.WORKER_MACHINE_COUNT }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):        WORKER_TEMPLATE_NAME := {{ tpl .Values.WORKER_TEMPLATE_NAME . }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1): $(KUSTOMIZE) $(ENVSUBST)
+	install -m u=rwx,go=rx -d $(CHARTS_DIR)/$(CLOSEST_TAG)/$(1)
+	cp -rf helm/v1beta1/$(1) $(CHARTS_DIR)/$(CLOSEST_TAG)/.
+	$(KUSTOMIZE) build kustomize/v1beta1/$(2) | $(ENVSUBST) \
+	| install -m u=rw,go=r -D /dev/fd/0 $(CHARTS_DIR)/$(CLOSEST_TAG)/$(1)/templates/cluster-template.yaml
+endef
+
+$(eval $(call chart-generator-tool,capone-kadm,default))
+$(eval $(call chart-generator-tool,capone-rke2,rke2))
 
 # Deployment
 
