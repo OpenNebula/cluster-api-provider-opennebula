@@ -177,6 +177,7 @@ metadata:
   name: "${CLUSTER_NAME}-ccm"
   labels:
     cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+type: addons.cluster.x-k8s.io/resource-set
 stringData:
   cloud-controller-manager.yaml: |
     ---
