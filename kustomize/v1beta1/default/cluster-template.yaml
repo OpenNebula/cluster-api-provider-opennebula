@@ -5,6 +5,8 @@ metadata:
   name: "${CLUSTER_NAME}"
   labels:
     cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+  annotations:
+    helm.sh/resource-policy: keep
 stringData:
   ONE_XMLRPC: "${ONE_XMLRPC}"
   ONE_AUTH: "${ONE_AUTH}"
@@ -16,6 +18,8 @@ metadata:
   name: "${CLUSTER_NAME}-cp"
   labels:
     cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+  annotations:
+    helm.sh/resource-policy: keep
 spec:
   template:
     spec:
@@ -27,6 +31,8 @@ metadata:
   name: "${CLUSTER_NAME}"
   labels:
     cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+  annotations:
+    helm.sh/resource-policy: keep
 spec:
   replicas: ${CONTROL_PLANE_MACHINE_COUNT:=1}
   kubeadmConfigSpec:
@@ -67,6 +73,8 @@ metadata:
   name: "${CLUSTER_NAME}-md-0"
   labels:
     cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+  annotations:
+    helm.sh/resource-policy: keep
 spec:
   template:
     spec:
@@ -78,6 +86,8 @@ metadata:
   name: "${CLUSTER_NAME}-md-0"
   labels:
     cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+  annotations:
+    helm.sh/resource-policy: keep
 spec:
   template:
     spec:
@@ -92,6 +102,8 @@ metadata:
   name: "${CLUSTER_NAME}-md-0"
   labels:
     cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+  annotations:
+    helm.sh/resource-policy: keep
 spec:
   replicas: ${WORKER_MACHINE_COUNT:=1}
   clusterName: "${CLUSTER_NAME}"
@@ -117,6 +129,8 @@ metadata:
   name: "${CLUSTER_NAME}"
   labels:
     cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+  annotations:
+    helm.sh/resource-policy: keep
 spec:
   secretName: "${CLUSTER_NAME}"
   publicNetwork:
@@ -126,7 +140,8 @@ spec:
     name: "${PRIVATE_NETWORK_NAME}"
   virtualRouter:
     templateName: "${ROUTER_TEMPLATE_NAME}"
-    extraContext: {}
+  images: ${CLUSTER_IMAGES:=[]}
+  templates: ${CLUSTER_TEMPLATES:=[]}
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: Cluster
@@ -158,15 +173,18 @@ spec:
     matchLabels:
       cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
   resources:
-    - kind: ConfigMap
-      name: cloud-controller-manager
+    - kind: Secret
+      name: "${CLUSTER_NAME}-ccm"
   strategy: Reconcile
 ---
 apiVersion: v1
-kind: ConfigMap
+kind: Secret
 metadata:
-  name: cloud-controller-manager
-data:
+  name: "${CLUSTER_NAME}-ccm"
+  labels:
+    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+type: addons.cluster.x-k8s.io/resource-set
+stringData:
   cloud-controller-manager.yaml: |
     ---
     apiVersion: v1

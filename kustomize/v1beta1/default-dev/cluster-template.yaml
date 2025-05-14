@@ -247,15 +247,16 @@ spec:
     matchLabels:
       cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
   resources:
-    - kind: ConfigMap
-      name: cloud-controller-manager
+    - kind: Secret
+      name: "${CLUSTER_NAME}-ccm"
   strategy: Reconcile
 ---
 apiVersion: v1
-kind: ConfigMap
+kind: Secret
 metadata:
-  name: cloud-controller-manager
-data:
+  name: "${CLUSTER_NAME}-ccm"
+type: addons.cluster.x-k8s.io/resource-set
+stringData:
   cloud-controller-manager.yaml: |
     ---
     apiVersion: v1

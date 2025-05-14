@@ -9,6 +9,7 @@ SHELL := /usr/bin/env bash -o pipefail
 ARTIFACTS_DIR := $(SELF)/_artifacts
 BACKUPS_DIR   := $(SELF)/_backups
 RELEASES_DIR  := $(SELF)/_releases
+CHARTS_DIR    := $(SELF)/_charts
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -22,6 +23,7 @@ CONTROLLER_TOOLS_VERSION ?= 0.17.1
 CTLPTL_VERSION           ?= 0.8.38
 ENVSUBST_VERSION         ?= 1.4.2
 GOLANGCI_LINT_VERSION    ?= 1.63.4
+HELM_VERSION             ?= 3.17.3
 KIND_VERSION             ?= 0.25.0
 KUBECTL_VERSION          ?= 1.31.4
 KUSTOMIZE_VERSION        ?= 5.6.0
@@ -31,6 +33,7 @@ CONTROLLER_GEN := $(SELF)/bin/controller-gen
 CTLPTL         := $(SELF)/bin/ctlptl
 ENVSUBST       := $(SELF)/bin/envsubst
 GOLANGCI_LINT  := $(SELF)/bin/golangci-lint
+HELM           := $(SELF)/bin/helm
 KIND           := $(SELF)/bin/kind
 KUBECTL        := $(SELF)/bin/kubectl
 KUSTOMIZE      := $(SELF)/bin/kustomize
@@ -148,7 +151,7 @@ docker-build-e2e:
 
 .PHONY: release
 
-release: $(KUSTOMIZE)
+release: charts $(KUSTOMIZE)
 	# Manifests
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG_URL):$(CLOSEST_TAG)
 	$(KUSTOMIZE) build config/default \
@@ -162,6 +165,42 @@ release: $(KUSTOMIZE)
 	| install -m u=rw,go= -D /dev/fd/0 $(RELEASES_DIR)/$(CLOSEST_TAG)/cluster-template-rke2.yaml
 	# Metadata
 	install -m u=rw,go= -D metadata.yaml $(RELEASES_DIR)/$(CLOSEST_TAG)/metadata.yaml
+
+# Helm
+
+.PHONY: charts
+
+define chart-generator-tool
+charts: $(CHARTS_DIR)/$(CLOSEST_TAG)/$(1)-$(subst v,,$(CLOSEST_TAG)).tgz
+
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1)-$(subst v,,$(CLOSEST_TAG)).tgz: $(CHARTS_DIR)/$(CLOSEST_TAG)/$(1) $(HELM)
+	$(HELM) package -d $(CHARTS_DIR)/$(CLOSEST_TAG) $(CHARTS_DIR)/$(CLOSEST_TAG)/$(1)
+
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):                     CCM_IMG := {{ .Values.CCM_IMG }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):              CLUSTER_IMAGES := {{ tpl (toYaml .Values.CLUSTER_IMAGES) . | nindent 4 }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):           CLUSTER_TEMPLATES := {{ tpl (toYaml .Values.CLUSTER_TEMPLATES) . | nindent 4 }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):                CLUSTER_NAME := {{ tpl .Values.CLUSTER_NAME . }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):          CONTROL_PLANE_HOST := {{ .Values.CONTROL_PLANE_HOST }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1): CONTROL_PLANE_MACHINE_COUNT := {{ .Values.CONTROL_PLANE_MACHINE_COUNT }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):          KUBERNETES_VERSION := {{ .Values.KUBERNETES_VERSION }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):        MASTER_TEMPLATE_NAME := {{ tpl .Values.MASTER_TEMPLATE_NAME . }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):                    ONE_AUTH := {{ .Values.ONE_AUTH }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):                  ONE_XMLRPC := {{ .Values.ONE_XMLRPC }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):        PRIVATE_NETWORK_NAME := {{ .Values.PRIVATE_NETWORK_NAME }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):         PUBLIC_NETWORK_NAME := {{ .Values.PUBLIC_NETWORK_NAME }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):        ROUTER_TEMPLATE_NAME := {{ tpl .Values.ROUTER_TEMPLATE_NAME . }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):        WORKER_MACHINE_COUNT := {{ .Values.WORKER_MACHINE_COUNT }}
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1):        WORKER_TEMPLATE_NAME := {{ tpl .Values.WORKER_TEMPLATE_NAME . }}
+
+$(CHARTS_DIR)/$(CLOSEST_TAG)/$(1): $(KUSTOMIZE) $(ENVSUBST)
+	install -m u=rwx,go=rx -d $(CHARTS_DIR)/$(CLOSEST_TAG)/$(1)
+	cp -rf helm/v1beta1/$(1) $(CHARTS_DIR)/$(CLOSEST_TAG)/.
+	$(KUSTOMIZE) build kustomize/v1beta1/$(2) | $(ENVSUBST) \
+	| install -m u=rw,go=r -D /dev/fd/0 $(CHARTS_DIR)/$(CLOSEST_TAG)/$(1)/templates/cluster-template.yaml
+endef
+
+$(eval $(call chart-generator-tool,capone-kadm,default))
+$(eval $(call chart-generator-tool,capone-rke2,rke2))
 
 # Deployment
 
@@ -275,6 +314,14 @@ $(ENVSUBST):
 golangci-lint: $(GOLANGCI_LINT)
 $(GOLANGCI_LINT):
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/cmd/golangci-lint,v$(GOLANGCI_LINT_VERSION))
+
+helm: $(HELM)
+$(HELM):
+	@[ -f $@-v$(HELM_VERSION) ] || \
+	{ curl -fsSL https://get.helm.sh/helm-v$(HELM_VERSION)-linux-amd64.tar.gz \
+	| tar -xzO -f- linux-amd64/helm \
+	| install -m u=rwx,go= -o $(USER) -D /dev/fd/0 $@-v$(HELM_VERSION); }
+	@ln -sf $@-v$(HELM_VERSION) $@
 
 kind: $(KIND)
 $(KIND):
