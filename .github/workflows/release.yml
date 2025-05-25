@@ -23,17 +23,8 @@ jobs:
           username: "${{ github.actor }}"
           password: "${{ secrets.GITHUB_TOKEN }}"
 
-      - name: Build image
-        run: docker build . --tag "ghcr.io/${GITHUB_REPOSITORY,,}:$GITHUB_REF_NAME"
-
-      - name: Push image
-        run: docker push "ghcr.io/${GITHUB_REPOSITORY,,}:$GITHUB_REF_NAME"
-
-      - name: Tag image (latest)
-        run: docker tag "ghcr.io/${GITHUB_REPOSITORY,,}:$GITHUB_REF_NAME" "ghcr.io/${GITHUB_REPOSITORY,,}:latest"
-
-      - name: Push image (latest)
-        run: docker push "ghcr.io/${GITHUB_REPOSITORY,,}:latest"
+      - name: Build and push images
+        run: make docker-release "CLOSEST_TAG:=$GITHUB_REF_NAME" BUILDX_NO_DEFAULT_ATTESTATIONS=1
 
       - name: Generate manifests and charts
         run: make release "CLOSEST_TAG:=$GITHUB_REF_NAME"
