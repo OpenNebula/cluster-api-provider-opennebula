@@ -40,7 +40,7 @@ KUSTOMIZE      := $(SELF)/bin/kustomize
 
 CLOSEST_TAG ?= $(shell git -C $(SELF) describe --tags --abbrev=0)
 
-# Image URL to use all building/pushing image targets
+# Image URL to use for building/pushing image targets
 IMG_URL ?= ghcr.io/opennebula/cluster-api-provider-opennebula
 IMG     ?= $(IMG_URL):latest
 E2E_IMG ?= $(IMG_URL):e2e
@@ -130,7 +130,7 @@ lint-fix: $(GOLANGCI_LINT)
 
 # Build
 
-.PHONY: build run docker-build docker-push docker-build-e2e
+.PHONY: build run docker-build docker-push docker-build-e2e docker-release
 
 build: manifests generate fmt vet
 	go build -o bin/manager cmd/main.go
@@ -147,25 +147,18 @@ docker-push: docker-build
 docker-build-e2e:
 	$(CONTAINER_TOOL) build -t $(E2E_IMG) .
 
-# _PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
-# architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
-# - be able to use docker buildx. More info: https://docs.docker.com/reference/cli/docker/buildx/
-# - have enabled BuildKit. More info:h ttps://docs.docker.com/build/buildkit/
-# - be able to push the image to your registry (i.e. if you do not set a valid value via IMG=<myregistry/image:<tag>> then the export will fail)
-# To adequately provide solutions that are compatible with multiple platforms, you should consider using this option.
-# NOTE: BUILDPLATFORM is a Docker BuildKit build-time variable that represents the platform (architecture/OS) on which the build is running (for example, linux/amd64).
-# More info: https://docs.docker.com/build/building/multi-platform/#automatic-platform-args-in-the-global-scope
-_PLATFORMS ?= linux/arm64,linux/amd64
-.PHONY: docker-multiarch-build-and-push
-docker-multiarch-build-and-push: ## Build and push docker image for the manager for cross-platform support)
-	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile (https://docs.docker.com/build/building/multi-platform/#cross-compilation)
-	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
-	- $(CONTAINER_TOOL) buildx create --name cluster-api-provider-opennebula-builder
-	$(CONTAINER_TOOL) buildx use cluster-api-provider-opennebula-builder
-	- $(CONTAINER_TOOL) buildx build --push --platform=$(_PLATFORMS) --tag ${IMG} -f Dockerfile.cross .
-	- $(CONTAINER_TOOL) buildx rm cluster-api-provider-opennebula-builder
-	rm Dockerfile.cross
+# _PLATFORMS defines the target platforms for the manager image be built to provide support to multiple architectures.
+# To use this option you need to:
+# - be able to use docker buildx (https://docs.docker.com/reference/cli/docker/buildx/)
+# - have enabled BuildKit (https://docs.docker.com/build/buildkit/)
+# - be able to push the image to your registry
+_PLATFORMS ?= linux/amd64,linux/arm64
 
+docker-release:
+	-$(CONTAINER_TOOL) buildx create --name cluster-api-provider-opennebula-builder
+	$(CONTAINER_TOOL) buildx use cluster-api-provider-opennebula-builder
+	$(CONTAINER_TOOL) buildx build --push --platform=$(_PLATFORMS) -t $(IMG_URL):$(CLOSEST_TAG) -t $(IMG_URL):latest -f Dockerfile .
+	-$(CONTAINER_TOOL) buildx rm cluster-api-provider-opennebula-builder
 
 # Release
 
