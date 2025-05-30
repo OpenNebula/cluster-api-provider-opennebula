@@ -2,8 +2,18 @@ apiVersion: v1
 entries:
   capone-kadm:
   - apiVersion: v2
+    appVersion: v0.1.6
+    created: "2025-05-30T08:34:14.381079494Z"
+    description: OpenNebula/Kubeadm CAPI Templates
+    digest: 8619bd4efd2fa3823b80afeeafcff91eebd54660147d5df8f1b684c383c185ef
+    name: capone-kadm
+    type: application
+    urls:
+    - https://opennebula.github.io/cluster-api-provider-opennebula/charts/capone-kadm-0.1.6.tgz
+    version: 0.1.6
+  - apiVersion: v2
     appVersion: v0.1.5
-    created: "2025-05-13T18:39:34.359697109+02:00"
+    created: "2025-05-30T08:34:14.380727418Z"
     description: OpenNebula/Kubeadm CAPI Templates
     digest: 057ce42c6f72c4e26c0fdd7fe3cb018b5b5760bf09342155a61ada8e74cb080f
     name: capone-kadm
@@ -13,8 +23,18 @@ entries:
     version: 0.1.5
   capone-rke2:
   - apiVersion: v2
+    appVersion: v0.1.6
+    created: "2025-05-30T08:34:14.381719235Z"
+    description: OpenNebula/RKE2 CAPI Templates
+    digest: 3a7cb19e2f93ac9f0bddf0891e037b7fe8ac3371ecfc22c7c96b83183fc1f5d3
+    name: capone-rke2
+    type: application
+    urls:
+    - https://opennebula.github.io/cluster-api-provider-opennebula/charts/capone-rke2-0.1.6.tgz
+    version: 0.1.6
+  - apiVersion: v2
     appVersion: v0.1.5
-    created: "2025-05-13T18:39:34.360187472+02:00"
+    created: "2025-05-30T08:34:14.381392196Z"
     description: OpenNebula/RKE2 CAPI Templates
     digest: 3eabf22c338db2be7f65137048c44630340041ca41e5ac28996e0a754f2b385c
     name: capone-rke2
@@ -22,4 +42,4 @@ entries:
     urls:
     - https://opennebula.github.io/cluster-api-provider-opennebula/charts/capone-rke2-0.1.5.tgz
     version: 0.1.5
-generated: "2025-05-13T18:39:34.358938574+02:00"
+generated: "2025-05-30T08:34:14.379780113Z"
