@@ -133,11 +133,11 @@ spec:
   images:
     - imageName: "${ROUTER_TEMPLATE_NAME}"
       imageContent: |
-        PATH = "https://community-marketplace.opennebula.io//appliance/2def0784-3310-479b-9533-5dd6cc0fe2b7/download/0"
+        PATH = "https://d24fmfybwxpuhu.cloudfront.net/service_VRouter-6.10.0-3-20250424.qcow2"
         DEV_PREFIX = "vd"
     - imageName: "${MASTER_TEMPLATE_NAME}"
       imageContent: |
-        PATH = "https://community-marketplace.opennebula.io//appliance/d197d8d4-dab6-4f7e-a1fd-90e87e4365d5/download/0"
+        PATH = "https://d24fmfybwxpuhu.cloudfront.net/capone-6.10.0-3-20250205.qcow2"
         DEV_PREFIX = "vd"
   templates:
     # NOTE: Please escape OpenNebula context variables with additional $ sign,
