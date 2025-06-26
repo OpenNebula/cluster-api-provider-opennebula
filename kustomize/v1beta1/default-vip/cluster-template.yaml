@@ -213,7 +213,6 @@ spec:
   images:
     - imageName: "${MASTER_TEMPLATE_NAME}"
       imageContent: |
-        #PATH = "https://d24fmfybwxpuhu.cloudfront.net/capone-6.10.0-3-20250205.qcow2"
         PATH = "http://10.2.11.1/community-images/capone131.qcow2"
         DEV_PREFIX = "vd"
   templates:
