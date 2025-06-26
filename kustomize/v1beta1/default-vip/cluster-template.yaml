@@ -213,8 +213,7 @@ spec:
   images:
     - imageName: "${MASTER_TEMPLATE_NAME}"
       imageContent: |
-        #PATH = "https://community-marketplace.opennebula.io//appliance/d197d8d4-dab6-4f7e-a1fd-90e87e4365d5/download/0"
-        PATH = "http://10.2.11.1/community-images/capone131.qcow2"
+        PATH = "https://d24fmfybwxpuhu.cloudfront.net/capone-6.10.0-3-20250205.qcow2"
         DEV_PREFIX = "vd"
   templates:
     # NOTE: Please escape OpenNebula context variables with additional $ sign,

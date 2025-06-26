@@ -124,11 +124,11 @@ spec:
   images:
     - imageName: "${ROUTER_TEMPLATE_NAME}"
       imageContent: |
-        PATH = "https://community-marketplace.opennebula.io//appliance/2def0784-3310-479b-9533-5dd6cc0fe2b7/download/0"
+        PATH = "https://d24fmfybwxpuhu.cloudfront.net/service_VRouter-6.10.0-3-20250424.qcow2"
         DEV_PREFIX = "vd"
     - imageName: "${MASTER_TEMPLATE_NAME}"
       imageContent: |
-        PATH = "https://marketplace.opennebula.io/appliance/4562be1a-4c11-4e9e-b60a-85a045f1de05/download/0"
+        PATH = "https://d24fmfybwxpuhu.cloudfront.net/ubuntu2204-7.0.0-0-20250528.qcow2"
         DEV_PREFIX = "vd"
   templates:
     - templateName: "${ROUTER_TEMPLATE_NAME}"
