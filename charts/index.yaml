@@ -2,8 +2,18 @@ apiVersion: v1
 entries:
   capone-kadm:
   - apiVersion: v2
+    appVersion: v0.1.7
+    created: "2025-06-26T11:48:27.11071443Z"
+    description: OpenNebula/Kubeadm CAPI Templates
+    digest: b10e26a2ddbe9ed1b2345d6db08bbaad27e625ebb60fb98da17e937d071c1af0
+    name: capone-kadm
+    type: application
+    urls:
+    - https://opennebula.github.io/cluster-api-provider-opennebula/charts/capone-kadm-0.1.7.tgz
+    version: 0.1.7
+  - apiVersion: v2
     appVersion: v0.1.6
-    created: "2025-05-30T08:34:14.381079494Z"
+    created: "2025-06-26T11:48:27.110231708Z"
     description: OpenNebula/Kubeadm CAPI Templates
     digest: 8619bd4efd2fa3823b80afeeafcff91eebd54660147d5df8f1b684c383c185ef
     name: capone-kadm
@@ -13,7 +23,7 @@ entries:
     version: 0.1.6
   - apiVersion: v2
     appVersion: v0.1.5
-    created: "2025-05-30T08:34:14.380727418Z"
+    created: "2025-06-26T11:48:27.109915436Z"
     description: OpenNebula/Kubeadm CAPI Templates
     digest: 057ce42c6f72c4e26c0fdd7fe3cb018b5b5760bf09342155a61ada8e74cb080f
     name: capone-kadm
@@ -23,8 +33,18 @@ entries:
     version: 0.1.5
   capone-rke2:
   - apiVersion: v2
+    appVersion: v0.1.7
+    created: "2025-06-26T11:48:27.112560941Z"
+    description: OpenNebula/RKE2 CAPI Templates
+    digest: b1a1f93c0844d09b5ba08118b0137760eac68c107d96e0b9a89067e41772c7f0
+    name: capone-rke2
+    type: application
+    urls:
+    - https://opennebula.github.io/cluster-api-provider-opennebula/charts/capone-rke2-0.1.7.tgz
+    version: 0.1.7
+  - apiVersion: v2
     appVersion: v0.1.6
-    created: "2025-05-30T08:34:14.381719235Z"
+    created: "2025-06-26T11:48:27.111781766Z"
     description: OpenNebula/RKE2 CAPI Templates
     digest: 3a7cb19e2f93ac9f0bddf0891e037b7fe8ac3371ecfc22c7c96b83183fc1f5d3
     name: capone-rke2
@@ -34,7 +54,7 @@ entries:
     version: 0.1.6
   - apiVersion: v2
     appVersion: v0.1.5
-    created: "2025-05-30T08:34:14.381392196Z"
+    created: "2025-06-26T11:48:27.111012999Z"
     description: OpenNebula/RKE2 CAPI Templates
     digest: 3eabf22c338db2be7f65137048c44630340041ca41e5ac28996e0a754f2b385c
     name: capone-rke2
@@ -42,4 +62,4 @@ entries:
     urls:
     - https://opennebula.github.io/cluster-api-provider-opennebula/charts/capone-rke2-0.1.5.tgz
     version: 0.1.5
-generated: "2025-05-30T08:34:14.379780113Z"
+generated: "2025-06-26T11:48:27.109474372Z"
