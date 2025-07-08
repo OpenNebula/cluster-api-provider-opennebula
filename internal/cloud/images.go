@@ -35,7 +35,7 @@ func NewImages(clients *Clients) (*Images, error) {
 	return &Images{ctrl: goca.NewController(clients.RPC2)}, nil
 }
 
-func (i *Images) CreateImage(imageName, imageContent string) error {
+func (i *Images) CreateImage(imageName, imageContent string, datastoreId uint) error {
 	existingImageID, err := i.ctrl.Images().ByName(imageName)
 	if err != nil && err.Error() != "resource not found" {
 		return err
@@ -43,7 +43,7 @@ func (i *Images) CreateImage(imageName, imageContent string) error {
 
 	if existingImageID < 0 {
 		imageSpec := fmt.Sprintf("NAME = \"%s\"\n%s", imageName, imageContent)
-		if _, err = i.ctrl.Images().Create(imageSpec, 1); err != nil {
+		if _, err = i.ctrl.Images().Create(imageSpec, datastoreId); err != nil {
 			return fmt.Errorf("Failed to create image: %w", err)
 		}
 	}
