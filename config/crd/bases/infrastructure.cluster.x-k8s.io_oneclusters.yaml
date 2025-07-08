@@ -60,6 +60,10 @@ spec:
                       type: string
                     imageName:
                       type: string
+                    imageDatastoreId:
+                      format: int32
+                      type: integer
+                      default: 1
                   required:
                   - imageContent
                   - imageName

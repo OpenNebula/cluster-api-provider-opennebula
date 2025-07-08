@@ -166,9 +166,14 @@ func (r *ONEClusterReconciler) reconcileNormal(
 		imagesReady := true
 		for _, image := range oneCluster.Spec.Images {
 			if image.ImageName != "" && image.ImageContent != "" {
+				if image.ImageDatastoreId == nil {
+					//default value is set in the CRD openapi spec
+					return ctrl.Result{}, fmt.Errorf("image %s has no datastore ID set", image.ImageName)
+				}
 				if err := externalImages.CreateImage(
 					image.ImageName,
 					image.ImageContent,
+					*image.ImageDatastoreId,
 				); err != nil {
 					return ctrl.Result{}, errors.Wrap(err, "failed to create images")
 				}
