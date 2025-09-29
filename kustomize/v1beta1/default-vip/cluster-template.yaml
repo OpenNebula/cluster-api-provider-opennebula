@@ -366,7 +366,7 @@ stringData:
               command:
                 - /opennebula-cloud-controller-manager
                 - --cloud-provider=opennebula
-                - --cluster-name='${CLUSTER_NAME}'
+                - --cluster-name=${CLUSTER_NAME}
                 - --cloud-config=/etc/one/config.yaml
                 - --leader-elect=true
                 - --use-service-account-credentials
