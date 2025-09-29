@@ -96,6 +96,9 @@ type ONEImage struct {
 
 	// +required
 	ImageContent string `json:"imageContent,omitempty"`
+
+	// +optional
+	ImageDatastoreId *uint `json:"imageDatastoreId,omitempty"`
 }
 
 // ONEClusterStatus defines the observed state of ONECluster

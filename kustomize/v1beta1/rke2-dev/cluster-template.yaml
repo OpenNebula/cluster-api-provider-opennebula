@@ -124,7 +124,7 @@ spec:
   images:
     - imageName: "${ROUTER_TEMPLATE_NAME}"
       imageContent: |
-        PATH = "https://d24fmfybwxpuhu.cloudfront.net/service_VRouter-6.10.0-3-20250424.qcow2"
+        PATH = "https://d24fmfybwxpuhu.cloudfront.net/service_VRouter-7.0.0-0-20250528.qcow2"
         DEV_PREFIX = "vd"
     - imageName: "${MASTER_TEMPLATE_NAME}"
       imageContent: |
