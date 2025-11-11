@@ -400,3 +400,42 @@ spec:
   controlPlaneEndpoint:
     host: "${CONTROL_PLANE_HOST}"
     port: 6443
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineHealthCheck
+metadata:
+  name: "${CLUSTER_NAME}-cp-mhc"
+spec:
+  clusterName: ${CLUSTER_NAME}
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/control-plane: ""
+  nodeStartupTimeout: 15m
+  maxUnhealthy: 1
+  unhealthyConditions:
+  - type: Ready
+    status: "False"
+    timeout: 5m
+  - type: Ready
+    status: "Unknown"
+    timeout: 5m
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineHealthCheck
+metadata:
+  name: "${CLUSTER_NAME}-md-0-mhc"
+spec:
+  clusterName: ${CLUSTER_NAME}
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/deployment-name: "${CLUSTER_NAME}-md-0"
+  nodeStartupTimeout: 15m
+  # Prevent mass replacements: absolute number or percentage
+  maxUnhealthy: 100%
+  unhealthyConditions:
+  - type: Ready
+    status: "False"
+    timeout: 5m
+  - type: Ready
+    status: "Unknown"
+    timeout: 5m
