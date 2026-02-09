@@ -55,9 +55,6 @@ spec:
     rollingUpdate:
       maxSurge: 1
   registrationMethod: "internal-first"
-  remediationStrategy:
-    maxRetry: 3
-    retryPeriod: 5m
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
 kind: ONEMachineTemplate
