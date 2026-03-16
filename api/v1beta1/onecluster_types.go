@@ -98,6 +98,7 @@ type ONEImage struct {
 	ImageContent string `json:"imageContent,omitempty"`
 
 	// +optional
+	// +kubebuilder:default=1
 	ImageDatastoreId *uint `json:"imageDatastoreId,omitempty"`
 }
 

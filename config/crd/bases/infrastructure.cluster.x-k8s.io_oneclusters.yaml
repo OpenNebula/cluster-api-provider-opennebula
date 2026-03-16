@@ -59,6 +59,7 @@ spec:
                     imageContent:
                       type: string
                     imageDatastoreId:
+                      default: 1
                       type: integer
                     imageName:
                       type: string
