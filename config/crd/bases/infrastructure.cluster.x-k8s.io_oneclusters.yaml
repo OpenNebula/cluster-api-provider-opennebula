@@ -58,12 +58,11 @@ spec:
                   properties:
                     imageContent:
                       type: string
+                    imageDatastoreId:
+                      default: 1
+                      type: integer
                     imageName:
                       type: string
-                    imageDatastoreId:
-                      format: int32
-                      type: integer
-                      default: 1
                   required:
                   - imageContent
                   - imageName
