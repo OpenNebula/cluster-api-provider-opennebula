@@ -4,4 +4,4 @@ name: capone-kadm
 description: OpenNebula/Kubeadm CAPI Templates
 type: application
 version: 0.1.7
-appVersion: "v0.1.7"
+appVersion: "v0.1.8"
