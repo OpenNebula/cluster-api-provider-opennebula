@@ -1,0 +1,358 @@
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: "${CLUSTER_NAME}"
+  labels:
+    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+stringData:
+  ONE_XMLRPC: "${ONE_XMLRPC}"
+  ONE_AUTH: "${ONE_AUTH}"
+type: Opaque
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: ONEMachineTemplate
+metadata:
+  name: "${CLUSTER_NAME}-cp"
+  labels:
+    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+spec:
+  template:
+    spec:
+      templateName: "${MASTER_TEMPLATE_NAME}"
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+kind: CK8sControlPlane
+metadata:
+  name: ${CLUSTER_NAME}
+  labels:
+    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+spec:
+  spec:
+    controlPlane:
+      cloudProvider: external
+      microclusterAddress: '192.168.150.12'
+  machineTemplate:
+    infrastructureTemplate:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+      kind: ONEMachineTemplate
+      name: "${CLUSTER_NAME}-cp"
+  replicas: ${CONTROL_PLANE_MACHINE_COUNT}
+  version: ${KUBERNETES_VERSION}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: ONEMachineTemplate
+metadata:
+  name: "${CLUSTER_NAME}-md-0"
+  labels:
+    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+spec:
+  template:
+    spec:
+      templateName: "${WORKER_TEMPLATE_NAME}"
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+kind: CK8sConfigTemplate
+metadata:
+  name: ${CLUSTER_NAME}-md-0
+spec:
+  template:
+    spec:
+      controlPlane:
+        cloudProvider: external
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  name: "${CLUSTER_NAME}-md-0"
+  labels:
+    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+spec:
+  replicas: ${WORKER_MACHINE_COUNT:=1}
+  clusterName: "${CLUSTER_NAME}"
+  selector:
+    matchLabels: {}
+  template:
+    spec:
+      clusterName: "${CLUSTER_NAME}"
+      bootstrap:
+        configRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+          kind: CK8sConfigTemplate
+          name: "${CLUSTER_NAME}-md-0"
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: ONEMachineTemplate
+        name: "${CLUSTER_NAME}-md-0"
+      version: "${KUBERNETES_VERSION:=v1.31.4}"
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: ONECluster
+metadata:
+  name: "${CLUSTER_NAME}"
+  labels:
+    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+spec:
+  secretName: "${CLUSTER_NAME}"
+  publicNetwork:
+    name: "${PUBLIC_NETWORK_NAME}"
+    floatingIP: "${CONTROL_PLANE_HOST}"
+  privateNetwork:
+    name: "${PRIVATE_NETWORK_NAME}"
+  virtualRouter:
+    templateName: "${ROUTER_TEMPLATE_NAME}"
+    listenerPorts: [6443, 9345]
+    extraContext: {}
+  images:
+    - imageName: "${ROUTER_TEMPLATE_NAME}"
+      imageContent: |
+        PATH = "https://d24fmfybwxpuhu.cloudfront.net/service_VRouter-7.0.0-0-20250528.qcow2"
+        DEV_PREFIX = "vd"
+  templates:
+    - templateName: "${ROUTER_TEMPLATE_NAME}"
+      templateContent: |
+        CONTEXT = [
+          NETWORK = "YES",
+          ONEAPP_VNF_DNS_ENABLED = "YES",
+          ONEAPP_VNF_DNS_NAMESERVERS = "1.1.1.1,8.8.8.8",
+          ONEAPP_VNF_DNS_USE_ROOTSERVERS = "NO",
+          ONEAPP_VNF_NAT4_ENABLED = "YES",
+          ONEAPP_VNF_NAT4_INTERFACES_OUT = "eth0",
+          ONEAPP_VNF_ROUTER4_ENABLED = "YES",
+          SSH_PUBLIC_KEY = "$$USER[SSH_PUBLIC_KEY]",
+          TOKEN = "YES" ]
+        CPU = "1"
+        DISK = [
+          IMAGE="${ROUTER_TEMPLATE_NAME}" ]
+        GRAPHICS = [
+          LISTEN = "0.0.0.0",
+          TYPE = "vnc" ]
+        LXD_SECURITY_PRIVILEGED = "true"
+        MEMORY = "512"
+        NIC_DEFAULT = [
+          MODEL = "virtio" ]
+        OS = [
+          ARCH = "x86_64",
+          FIRMWARE_SECURE = "YES" ]
+        VROUTER = "YES"
+    - templateName: "${MASTER_TEMPLATE_NAME}"
+      templateContent: |
+        CONTEXT = [
+          BACKEND = "YES",
+          NETWORK = "YES",
+          GROW_FS = "/",
+          SET_HOSTNAME = "$$NAME",
+          SSH_PUBLIC_KEY = "$$USER[SSH_PUBLIC_KEY]",
+          TOKEN = "YES" ]
+        CPU = "1"
+        DISK = [
+          IMAGE = "${MASTER_TEMPLATE_NAME}",
+          SIZE = "${MASTER_DISK_SIZE:-16384}" ]
+        GRAPHICS = [
+          LISTEN = "0.0.0.0",
+          TYPE = "vnc" ]
+        HYPERVISOR = "kvm"
+        LXD_SECURITY_PRIVILEGED = "true"
+        MEMORY = "3072"
+        OS = [
+          ARCH = "x86_64",
+          FIRMWARE_SECURE = "YES" ]
+        SCHED_REQUIREMENTS = "HYPERVISOR=kvm"
+        VCPU = "2"
+    - templateName: "${WORKER_TEMPLATE_NAME}"
+      templateContent: |
+        CONTEXT = [
+          BACKEND = "YES",
+          NETWORK = "YES",
+          GROW_FS = "/",
+          SET_HOSTNAME = "$$NAME",
+          SSH_PUBLIC_KEY = "$$USER[SSH_PUBLIC_KEY]",
+          TOKEN = "YES" ]
+        CPU = "1"
+        DISK = [
+          IMAGE = "${MASTER_TEMPLATE_NAME}",
+          SIZE = "${WORKER_DISK_SIZE:-16384}" ]
+        GRAPHICS = [
+          LISTEN = "0.0.0.0",
+          TYPE = "vnc" ]
+        HYPERVISOR = "kvm"
+        LXD_SECURITY_PRIVILEGED = "true"
+        MEMORY = "3072"
+        OS = [
+          ARCH = "x86_64",
+          FIRMWARE_SECURE = "YES" ]
+        SCHED_REQUIREMENTS = "HYPERVISOR=kvm"
+        VCPU = "2"
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: "${CLUSTER_NAME}"
+  labels:
+    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+spec:
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: ONECluster
+    name: "${CLUSTER_NAME}"
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+    kind: CK8sControlPlane
+    name: "${CLUSTER_NAME}"
+  controlPlaneEndpoint:
+    host: "${CONTROL_PLANE_HOST}"
+    port: 6443
+---
+apiVersion: addons.cluster.x-k8s.io/v1beta1
+kind: ClusterResourceSet
+metadata:
+  name: "${CLUSTER_NAME}-crs-0"
+  labels:
+    cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+spec:
+  clusterSelector:
+    matchLabels:
+      cluster.x-k8s.io/cluster-name: "${CLUSTER_NAME}"
+  resources:
+    - kind: Secret
+      name: "${CLUSTER_NAME}-ccm"
+  strategy: Reconcile
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: "${CLUSTER_NAME}-ccm"
+type: addons.cluster.x-k8s.io/resource-set
+stringData:
+  cloud-controller-manager.yaml: |
+    ---
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: cloud-config
+      namespace: kube-system
+    stringData:
+      config.yaml: |
+        opennebula:
+          endpoint:
+            ONE_XMLRPC: "${ONE_XMLRPC}"
+            ONE_AUTH: "${ONE_AUTH}"
+          publicNetwork:
+            name: "${PUBLIC_NETWORK_NAME}"
+          privateNetwork:
+            name: "${PRIVATE_NETWORK_NAME}"
+          virtualRouter:
+            templateName: "${ROUTER_TEMPLATE_NAME}"
+    ---
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: opennebula-cloud-controller-manager
+      namespace: kube-system
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: system:opennebula-cloud-controller-manager
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: cluster-admin
+    subjects:
+      - kind: ServiceAccount
+        name: opennebula-cloud-controller-manager
+        namespace: kube-system
+    ---
+    apiVersion: apps/v1
+    kind: DaemonSet
+    metadata:
+      labels:
+        k8s-app: cloud-controller-manager
+      name: cloud-controller-manager
+      namespace: kube-system
+    spec:
+      selector:
+        matchLabels:
+          k8s-app: cloud-controller-manager
+      template:
+        metadata:
+          labels:
+            k8s-app: cloud-controller-manager
+        spec:
+          serviceAccountName: opennebula-cloud-controller-manager
+          containers:
+            - name: cloud-controller-manager
+              image: "${CCM_IMG}"
+              imagePullPolicy: IfNotPresent
+              command:
+                - /opennebula-cloud-controller-manager
+                - --cloud-provider=opennebula
+                - --cluster-name=${CLUSTER_NAME}
+                - --cloud-config=/etc/one/config.yaml
+                - --leader-elect=true
+                - --use-service-account-credentials
+                - --controllers=cloud-node,cloud-node-lifecycle,service-lb-controller
+              volumeMounts:
+                - name: cloud-config
+                  mountPath: /etc/one/
+                  readOnly: true
+          volumes:
+            - name: cloud-config
+              secret:
+                secretName: cloud-config
+          hostNetwork: true
+          tolerations:
+            - key: node.cloudprovider.kubernetes.io/uninitialized
+              value: "true"
+              effect: NoSchedule
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+              effect: NoSchedule
+            - key: node-role.kubernetes.io/master
+              operator: Exists
+              effect: NoSchedule
+            # TODO: remove this one later!
+            - key: node.kubernetes.io/not-ready
+              operator: Exists
+              effect: NoSchedule
+          nodeSelector:
+            node-role.kubernetes.io/control-plane: "true"
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineHealthCheck
+metadata:
+  name: "${CLUSTER_NAME}-cp-mhc"
+spec:
+  clusterName: ${CLUSTER_NAME}
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/control-plane: ""
+  nodeStartupTimeout: 15m
+  maxUnhealthy: 1
+  unhealthyConditions:
+  - type: Ready
+    status: "False"
+    timeout: 5m
+  - type: Ready
+    status: "Unknown"
+    timeout: 5m
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineHealthCheck
+metadata:
+  name: "${CLUSTER_NAME}-md-0-mhc"
+spec:
+  clusterName: ${CLUSTER_NAME}
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/deployment-name: "${CLUSTER_NAME}-md-0"
+  nodeStartupTimeout: 15m
+  # Prevent mass replacements: absolute number or percentage
+  maxUnhealthy: 100%
+  unhealthyConditions:
+  - type: Ready
+    status: "False"
+    timeout: 5m
+  - type: Ready
+    status: "Unknown"
+    timeout: 5m

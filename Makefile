@@ -276,6 +276,9 @@ $(CLUSTER_NAME)-apply-vip: $(KUSTOMIZE) $(ENVSUBST) $(KUBECTL)
 $(CLUSTER_NAME)-apply-rke2: $(KUSTOMIZE) $(ENVSUBST) $(KUBECTL)
 	$(KUSTOMIZE) build kustomize/v1beta1/rke2-dev | $(ENVSUBST) | $(KUBECTL) apply -f-
 
+$(CLUSTER_NAME)-apply-canonical: $(KUSTOMIZE) $(ENVSUBST) $(KUBECTL)
+	$(KUSTOMIZE) build kustomize/v1beta1/canonical-dev | $(ENVSUBST) | $(KUBECTL) apply -f-
+
 $(CLUSTER_NAME)-apply-rke2-vip: $(KUSTOMIZE) $(ENVSUBST) $(KUBECTL)
 	$(KUSTOMIZE) build kustomize/v1beta1/rke2-vip | $(ENVSUBST) | $(KUBECTL) apply -f-
 
