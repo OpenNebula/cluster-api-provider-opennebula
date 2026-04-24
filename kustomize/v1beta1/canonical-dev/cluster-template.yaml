@@ -316,7 +316,7 @@ stringData:
               operator: Exists
               effect: NoSchedule
           nodeSelector:
-            node-role.kubernetes.io/control-plane: "true"
+            node-role.kubernetes.io/control-plane: ""
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: MachineHealthCheck
