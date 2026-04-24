@@ -2,15 +2,20 @@ providers:
   - name: opennebula
     type: InfrastructureProvider
     url: "https://github.com/OpenNebula/cluster-api-provider-opennebula/releases/download/latest/infrastructure-components.yaml"
+    #For next iterations, it is better to set a stable version https://github.com/OpenNebula/cluster-api-provider-opennebula/releases/download/v0.1.7/infrastructure-components.yaml
+
   - name: canonical
     type: BootstrapProvider
     url: "https://github.com/canonical/cluster-api-k8s/releases/v0.6.1/bootstrap-components.yaml"
+  
   - name: canonical
     type: ControlPlaneProvider
     url: "https://github.com/canonical/cluster-api-k8s/releases/v0.6.1/control-plane-components.yaml"
+  
   - name: okd
     type: BootstrapProvider
     url: "https://github.com/openshift-assisted/cluster-api-provider-openshift-assisted/releases/download/v0.4.0/bootstrap-components.yaml"
+  
   - name: okd
     type: ControlPlaneProvider
     url: "https://github.com/openshift-assisted/cluster-api-provider-openshift-assisted/releases/download/v0.4.0/controlplane-components.yaml"

@@ -31,14 +31,14 @@ spec:
   spec:
     controlPlane:
       cloudProvider: external
-      microclusterAddress: '192.168.150.12'
+      microclusterAddress: "${CK8S_MICROCLUSTER_ADDRESS}"
   machineTemplate:
     infrastructureTemplate:
       apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
       kind: ONEMachineTemplate
       name: "${CLUSTER_NAME}-cp"
-  replicas: ${CONTROL_PLANE_MACHINE_COUNT}
-  version: ${KUBERNETES_VERSION}
+  replicas: ${CONTROL_PLANE_MACHINE_COUNT:=1}
+  version: ${KUBERNETES_VERSION:=v1.32.11}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
 kind: ONEMachineTemplate
