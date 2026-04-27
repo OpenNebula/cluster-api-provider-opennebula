@@ -31,7 +31,7 @@ spec:
   spec:
     controlPlane:
       cloudProvider: external
-      microclusterAddress: "${CK8S_MICROCLUSTER_ADDRESS_CP}"
+      microclusterAddress: "${CK8S_MICROCLUSTER_CIDR}"
   machineTemplate:
     infrastructureTemplate:
       apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
@@ -60,7 +60,7 @@ spec:
     spec:
       controlPlane:
         cloudProvider: external
-        microclusterAddress: "${CK8S_MICROCLUSTER_ADDRESS_WK}"
+        microclusterAddress: "${CK8S_MICROCLUSTER_CIDR}"
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: MachineDeployment
