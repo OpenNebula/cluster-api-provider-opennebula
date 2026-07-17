@@ -2,6 +2,10 @@
 
 CAPONE is a cluster API implementation for OpenNebula. CAPI is an API and toolset to easily provision and operate kubernetes clusters. CAPONE interfaces with an existing OpenNebula installation (infrastructure provider) to provision dedicated VMs to build a k8s workload cluster, including the nodes and control plane. 
 
+The repository also contains an optional, separately built
+[in-cluster status monitor](docs/cluster-monitor.md) for reporting Node and
+RKE2 HelmChart health to an external endpoint.
+
 ## Documentation
 [Documentation for capone is in the project Wiki](https://github.com/OpenNebula/cluster-api-provider-opennebula/wiki)
 

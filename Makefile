@@ -44,6 +44,8 @@ CLOSEST_TAG ?= $(shell git -C $(SELF) describe --tags --abbrev=0)
 IMG_URL ?= ghcr.io/opennebula/cluster-api-provider-opennebula
 IMG     ?= $(IMG_URL):latest
 E2E_IMG ?= $(IMG_URL):e2e
+MONITOR_IMG_URL ?= ghcr.io/opennebula/cluster-api-provider-opennebula-monitor
+MONITOR_IMG     ?= $(MONITOR_IMG_URL):latest
 
 # CONTAINER_TOOL defines the container tool to be used for building images.
 # Be aware that the target commands are only tested with Docker which is
@@ -130,19 +132,31 @@ lint-fix: $(GOLANGCI_LINT)
 
 # Build
 
-.PHONY: build run docker-build docker-push docker-build-e2e docker-release
+.PHONY: build build-monitor run run-monitor docker-build docker-build-monitor docker-push docker-push-monitor docker-build-e2e docker-release docker-release-monitor
 
 build: manifests generate fmt vet
 	go build -o bin/manager cmd/main.go
 
+build-monitor: fmt vet
+	go build -o bin/monitor ./cmd/monitor
+
 run: manifests generate fmt vet
 	go run cmd/main.go
+
+run-monitor: fmt vet
+	go run ./cmd/monitor
 
 docker-build:
 	$(CONTAINER_TOOL) build -t $(IMG) .
 
+docker-build-monitor:
+	$(CONTAINER_TOOL) build -t $(MONITOR_IMG) -f Dockerfile.monitor .
+
 docker-push: docker-build
 	$(CONTAINER_TOOL) push $(IMG)
+
+docker-push-monitor: docker-build-monitor
+	$(CONTAINER_TOOL) push $(MONITOR_IMG)
 
 docker-build-e2e:
 	$(CONTAINER_TOOL) build -t $(E2E_IMG) .
@@ -160,9 +174,19 @@ docker-release:
 	$(CONTAINER_TOOL) buildx build --push --platform=$(_PLATFORMS) -t $(IMG_URL):$(CLOSEST_TAG) -t $(IMG_URL):latest -f Dockerfile .
 	-$(CONTAINER_TOOL) buildx rm cluster-api-provider-opennebula-builder
 
+MONITOR_VERSION ?= $(subst v,,$(patsubst monitor-%,%,$(CLOSEST_TAG)))
+
+docker-release-monitor:
+	-$(CONTAINER_TOOL) buildx create --name cluster-api-provider-opennebula-monitor-builder
+	$(CONTAINER_TOOL) buildx use cluster-api-provider-opennebula-monitor-builder
+	$(CONTAINER_TOOL) buildx build --push --platform=$(_PLATFORMS) \
+		-t $(MONITOR_IMG_URL):v$(MONITOR_VERSION) -t $(MONITOR_IMG_URL):latest \
+		-f Dockerfile.monitor .
+	-$(CONTAINER_TOOL) buildx rm cluster-api-provider-opennebula-monitor-builder
+
 # Release
 
-.PHONY: release
+.PHONY: release monitor-release
 
 release: charts $(KUSTOMIZE)
 	# Manifests
@@ -181,7 +205,7 @@ release: charts $(KUSTOMIZE)
 
 # Helm
 
-.PHONY: charts
+.PHONY: charts monitor-chart
 
 define chart-generator-tool
 charts: $(CHARTS_DIR)/$(CLOSEST_TAG)/$(1)-$(subst v,,$(CLOSEST_TAG)).tgz
@@ -214,6 +238,26 @@ endef
 
 $(eval $(call chart-generator-tool,capone-kadm,default))
 $(eval $(call chart-generator-tool,capone-rke2,rke2))
+
+MONITOR_RELEASE_TAG   ?= monitor-v$(MONITOR_VERSION)
+MONITOR_CHART_PACKAGE := $(CHARTS_DIR)/$(MONITOR_RELEASE_TAG)/capone-monitor-$(MONITOR_VERSION).tgz
+MONITOR_CHART_DIR     := $(CHARTS_DIR)/$(MONITOR_RELEASE_TAG)/capone-monitor
+MONITOR_CHART_SOURCES := $(shell find helm/v1beta1/capone-monitor kustomize/v1beta1/monitor kustomize/v1beta1/monitor-helm -type f)
+
+monitor-chart: $(MONITOR_CHART_PACKAGE)
+
+monitor-release: monitor-chart
+
+$(MONITOR_CHART_DIR): $(KUSTOMIZE) $(MONITOR_CHART_SOURCES)
+	install -m u=rwx,go=rx -d $(MONITOR_CHART_DIR)/templates
+	cp -rf helm/v1beta1/capone-monitor/. $(MONITOR_CHART_DIR)/.
+	$(KUSTOMIZE) build kustomize/v1beta1/monitor-helm \
+	| install -m u=rw,go=r -D /dev/fd/0 $(MONITOR_CHART_DIR)/templates/monitor.yaml
+
+$(MONITOR_CHART_PACKAGE): $(MONITOR_CHART_DIR) $(MONITOR_CHART_SOURCES) $(HELM)
+	$(HELM) package -d $(CHARTS_DIR)/$(MONITOR_RELEASE_TAG) \
+		--version $(MONITOR_VERSION) --app-version v$(MONITOR_VERSION) \
+		$(MONITOR_CHART_DIR)
 
 # Deployment
 

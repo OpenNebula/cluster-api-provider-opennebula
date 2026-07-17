@@ -1,0 +1,19 @@
+# Build the in-cluster monitor binary.
+FROM --platform=$BUILDPLATFORM golang:1.22 AS builder
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /workspace
+COPY go.mod go.mod
+COPY go.sum go.sum
+RUN go mod download
+
+COPY cmd/monitor/ cmd/monitor/
+COPY internal/monitor/ internal/monitor/
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o monitor ./cmd/monitor
+
+FROM gcr.io/distroless/static:nonroot
+WORKDIR /
+COPY --from=builder /workspace/monitor .
+USER 65532:65532
+ENTRYPOINT ["/monitor"]

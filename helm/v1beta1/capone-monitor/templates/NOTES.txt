@@ -1,0 +1,7 @@
+The CAPONE monitor is running in namespace {{ .Release.Namespace }}.
+
+Endpoint: {{ .Values.monitor.endpoint }}
+Cluster ID: {{ .Values.monitor.clusterID }}
+
+Check its status with:
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/name=capone-cluster-monitor

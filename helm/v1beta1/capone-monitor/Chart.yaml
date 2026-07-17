@@ -1,0 +1,6 @@
+apiVersion: v2
+name: capone-monitor
+description: In-cluster OpenNebula Node and HelmChart status monitor
+type: application
+version: 0.1.0
+appVersion: "v0.1.0"

@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: capone-cluster-monitor
+data:
+  # Replace these values before deploying.
+  MONITOR_ENDPOINT: "https://monitoring.example.invalid/v1/cluster-status"
+  MONITOR_CLUSTER_ID: "replace-me"
+  MONITOR_CHART_ANNOTATION: "oneks.opennebula.io/chart-id"
+  MONITOR_RESYNC_PERIOD: "10m"
+  MONITOR_HTTP_TIMEOUT: "10s"

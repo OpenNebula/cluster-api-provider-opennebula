@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: capone-cluster-monitor
+  labels:
+    app.kubernetes.io/name: capone-cluster-monitor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: capone-cluster-monitor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: capone-cluster-monitor
+    spec:
+      serviceAccountName: capone-cluster-monitor
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: monitor
+        image: monitor:latest
+        envFrom:
+        - configMapRef:
+            name: capone-cluster-monitor
+        ports:
+        - name: health
+          containerPort: 8081
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          periodSeconds: 20
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 200m
+            memory: 96Mi
+      terminationGracePeriodSeconds: 30

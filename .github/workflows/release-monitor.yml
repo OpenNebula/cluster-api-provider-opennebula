@@ -1,0 +1,91 @@
+---
+name: Release monitor
+
+on:
+  push:
+    tags: ["monitor-v*.*.*"]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract monitor version
+        run: echo "MONITOR_VERSION=${GITHUB_REF_NAME#monitor-v}" >> "$GITHUB_ENV"
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: "${{ github.actor }}"
+          password: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Build and push monitor image
+        run: make docker-release-monitor "MONITOR_VERSION:=$MONITOR_VERSION" BUILDX_NO_DEFAULT_ATTESTATIONS=1
+
+      - name: Generate monitor chart
+        run: make monitor-release "MONITOR_VERSION:=$MONITOR_VERSION"
+
+      - name: Upload monitor chart
+        uses: actions/upload-artifact@v4
+        with:
+          name: "monitor-chart-${{ github.ref_name }}"
+          path: "_charts/${{ github.ref_name }}/capone-monitor-*.tgz"
+          if-no-files-found: error
+
+      - name: Create monitor release
+        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: |
+          gh release create "$GITHUB_REF_NAME" --generate-notes \
+            "./_charts/$GITHUB_REF_NAME/capone-monitor-$MONITOR_VERSION.tgz"
+
+  publish-chart:
+    needs: release
+    runs-on: ubuntu-latest
+    concurrency:
+      group: helm-gh-pages
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Checkout repository (gh-pages)
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: ./gh-pages/
+
+      - name: Download monitor chart
+        uses: actions/download-artifact@v4
+        with:
+          name: "monitor-chart-${{ github.ref_name }}"
+          path: ./published-charts/
+
+      - name: Install Helm
+        run: make "$PWD/bin/helm"
+
+      - name: Deploy monitor chart
+        run: |
+          shopt -s failglob
+          cp -f ./published-charts/capone-monitor-*.tgz ./gh-pages/charts/
+
+      - name: Re-index charts
+        working-directory: ./gh-pages/charts/
+        run: |
+          ../../bin/helm repo index ./ --url https://opennebula.github.io/cluster-api-provider-opennebula/charts/
+
+      - name: Push gh-pages
+        working-directory: ./gh-pages/charts/
+        run: |
+          shopt -s failglob
+          git add ./index.yaml ./capone-monitor-${GITHUB_REF_NAME#monitor-v}.tgz
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+          git commit -m "$GITHUB_REF_NAME"
+          git push

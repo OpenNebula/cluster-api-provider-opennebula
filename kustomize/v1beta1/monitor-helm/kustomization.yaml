@@ -1,0 +1,74 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- ../monitor
+patches:
+- target:
+    kind: ServiceAccount
+    name: capone-cluster-monitor
+  patch: |-
+    - op: replace
+      path: /metadata/namespace
+      value: '{{ .Release.Namespace }}'
+- target:
+    kind: ConfigMap
+    name: capone-cluster-monitor
+  patch: |-
+    - op: replace
+      path: /metadata/namespace
+      value: '{{ .Release.Namespace }}'
+    - op: replace
+      path: /data/MONITOR_ENDPOINT
+      value: '{{ required "monitor.endpoint is required" .Values.monitor.endpoint }}'
+    - op: replace
+      path: /data/MONITOR_CLUSTER_ID
+      value: '{{ required "monitor.clusterID is required" .Values.monitor.clusterID }}'
+    - op: replace
+      path: /data/MONITOR_CHART_NAMESPACE
+      value: '{{ .Values.monitor.chartNamespace }}'
+    - op: replace
+      path: /data/MONITOR_CHART_ANNOTATION
+      value: '{{ .Values.monitor.chartAnnotation }}'
+    - op: replace
+      path: /data/MONITOR_RESYNC_PERIOD
+      value: '{{ .Values.monitor.resyncPeriod }}'
+    - op: replace
+      path: /data/MONITOR_HTTP_TIMEOUT
+      value: '{{ .Values.monitor.httpTimeout }}'
+- target:
+    kind: Deployment
+    name: capone-cluster-monitor
+  patch: |-
+    - op: replace
+      path: /metadata/namespace
+      value: '{{ .Release.Namespace }}'
+    - op: replace
+      path: /spec/template/spec/containers/0/image
+      value: '{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}'
+    - op: add
+      path: /spec/template/spec/containers/0/imagePullPolicy
+      value: '{{ .Values.image.pullPolicy }}'
+- target:
+    kind: Role
+    name: capone-cluster-monitor
+  patch: |-
+    - op: replace
+      path: /metadata/namespace
+      value: '{{ .Values.monitor.chartNamespace }}'
+- target:
+    kind: RoleBinding
+    name: capone-cluster-monitor
+  patch: |-
+    - op: replace
+      path: /metadata/namespace
+      value: '{{ .Values.monitor.chartNamespace }}'
+    - op: replace
+      path: /subjects/0/namespace
+      value: '{{ .Release.Namespace }}'
+- target:
+    kind: ClusterRoleBinding
+    name: capone-cluster-monitor
+  patch: |-
+    - op: replace
+      path: /subjects/0/namespace
+      value: '{{ .Release.Namespace }}'
