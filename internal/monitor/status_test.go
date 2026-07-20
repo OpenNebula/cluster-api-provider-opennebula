@@ -21,13 +21,17 @@ import (
 func TestNodeReportReady(t *testing.T) {
 	node := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: "worker-1", ResourceVersion: "12"},
+		Spec:       corev1.NodeSpec{ProviderID: "one://317"},
 		Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{
 			Type: corev1.NodeReady, Status: corev1.ConditionTrue, Reason: "KubeletReady",
 		}}},
 	}
-	report := nodeReport(Config{ClusterID: "cluster-1"}, node, "Updated")
+	report := nodeReport(Config{}, node, "Updated")
 	if report.Status["state"] != "ready" {
 		t.Fatalf("expected ready node, got %#v", report.Status)
+	}
+	if report.Status["providerID"] != "one://317" {
+		t.Fatalf("expected providerID, got %#v", report.Status)
 	}
 }
 
@@ -38,7 +42,7 @@ func TestNodeReportWarning(t *testing.T) {
 			Type: corev1.NodeReady, Status: corev1.ConditionFalse,
 		}}},
 	}
-	report := nodeReport(Config{ClusterID: "cluster-1"}, node, "Updated")
+	report := nodeReport(Config{}, node, "Updated")
 	if report.Status["state"] != "warning" {
 		t.Fatalf("expected warning node, got %#v", report.Status)
 	}
@@ -83,5 +87,5 @@ func chartObject() *unstructured.Unstructured {
 }
 
 func testConfig() Config {
-	return Config{ClusterID: "cluster-1", ChartAnnotation: defaultChartAnnotation}
+	return Config{ChartAnnotation: defaultChartAnnotation}
 }

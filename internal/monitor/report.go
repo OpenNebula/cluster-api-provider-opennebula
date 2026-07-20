@@ -17,11 +17,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
+	"net/url"
+	"strings"
 )
 
 type Report struct {
-	ClusterID              string         `json:"clusterId"`
 	Kind                   string         `json:"kind"`
 	Namespace              string         `json:"namespace,omitempty"`
 	Name                   string         `json:"name"`
@@ -29,7 +29,6 @@ type Report struct {
 	ResourceVersion        string         `json:"resourceVersion,omitempty"`
 	RelatedResourceVersion string         `json:"relatedResourceVersion,omitempty"`
 	Event                  string         `json:"event"`
-	ObservedAt             time.Time      `json:"observedAt"`
 	Status                 map[string]any `json:"status,omitempty"`
 }
 
@@ -39,13 +38,18 @@ type Sender interface {
 
 type HTTPSender struct {
 	endpoint string
+	token    string
+	auth     string
 	client   *http.Client
 }
 
 func NewHTTPSender(config Config) *HTTPSender {
 	return &HTTPSender{
-		endpoint: config.Endpoint,
-		client:   &http.Client{Timeout: config.HTTPTimeout},
+		endpoint: strings.TrimRight(config.Endpoint, "/") + "/clusters/" +
+			url.PathEscape(config.ClusterID) + "/status",
+		token:  config.Token,
+		auth:   config.Auth,
+		client: &http.Client{Timeout: config.HTTPTimeout},
 	}
 }
 
@@ -60,7 +64,12 @@ func (s *HTTPSender) Send(ctx context.Context, report Report) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "capone-cluster-monitor")
-	req.Header.Set("Idempotency-Key", report.ClusterID+"/"+report.Kind+"/"+report.UID+"/"+report.ResourceVersion+"/"+report.RelatedResourceVersion+"/"+report.Event)
+	req.Header.Set("X-OneKS-Monitor-Token", s.token)
+	user, password, ok := strings.Cut(s.auth, ":")
+	if !ok || user == "" || password == "" {
+		return fmt.Errorf("MONITOR_AUTH must have the form user:password")
+	}
+	req.SetBasicAuth(user, password)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("send report: %w", err)

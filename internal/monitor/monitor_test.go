@@ -106,6 +106,25 @@ func TestChartStatusBeforeJobCreation(t *testing.T) {
 	}
 }
 
+func TestReadyProviderIDs(t *testing.T) {
+	nodes := cache.NewSharedIndexInformer(&cache.ListWatch{}, &corev1.Node{}, 0, cache.Indexers{})
+	m := &Monitor{nodes: nodes}
+	for _, node := range []*corev1.Node{
+		{ObjectMeta: metav1.ObjectMeta{Name: "node-2"}, Spec: corev1.NodeSpec{ProviderID: "one://2"}, Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}, Spec: corev1.NodeSpec{ProviderID: "one://1"}, Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "node-3"}, Spec: corev1.NodeSpec{ProviderID: "one://3"}, Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionFalse}}}},
+	} {
+		if err := nodes.GetStore().Add(node); err != nil {
+			t.Fatalf("add node: %v", err)
+		}
+	}
+
+	got := m.readyProviderIDs("one://2")
+	if len(got) != 1 || got[0] != "one://1" {
+		t.Fatalf("unexpected ready provider IDs: %#v", got)
+	}
+}
+
 func jobInformer() cache.SharedIndexInformer {
 	return cache.NewSharedIndexInformer(&cache.ListWatch{}, &batchv1.Job{}, 0, cache.Indexers{})
 }

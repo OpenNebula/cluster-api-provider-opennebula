@@ -25,6 +25,8 @@ spec:
         envFrom:
         - configMapRef:
             name: capone-cluster-monitor
+        - secretRef:
+            name: capone-cluster-monitor
         ports:
         - name: health
           containerPort: 8081

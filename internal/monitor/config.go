@@ -22,6 +22,8 @@ const defaultChartAnnotation = "oneks.opennebula.io/chart-id"
 type Config struct {
 	Endpoint        string
 	ClusterID       string
+	Token           string
+	Auth            string
 	ChartAnnotation string
 	HTTPTimeout     time.Duration
 	ResyncPeriod    time.Duration
@@ -33,6 +35,8 @@ func ConfigFromEnv() (Config, error) {
 	c := Config{
 		Endpoint:        strings.TrimSpace(os.Getenv("MONITOR_ENDPOINT")),
 		ClusterID:       strings.TrimSpace(os.Getenv("MONITOR_CLUSTER_ID")),
+		Token:           strings.TrimSpace(os.Getenv("MONITOR_TOKEN")),
+		Auth:            strings.TrimSpace(os.Getenv("MONITOR_AUTH")),
 		ChartAnnotation: envOrDefault("MONITOR_CHART_ANNOTATION", defaultChartAnnotation),
 		HealthAddress:   envOrDefault("MONITOR_HEALTH_ADDRESS", ":8081"),
 		KubeSystemNS:    envOrDefault("MONITOR_CHART_NAMESPACE", "kube-system"),
@@ -42,6 +46,12 @@ func ConfigFromEnv() (Config, error) {
 	}
 	if c.ClusterID == "" {
 		return Config{}, fmt.Errorf("MONITOR_CLUSTER_ID is required")
+	}
+	if c.Token == "" {
+		return Config{}, fmt.Errorf("MONITOR_TOKEN is required")
+	}
+	if c.Auth == "" {
+		return Config{}, fmt.Errorf("MONITOR_AUTH is required")
 	}
 	var err error
 	if c.HTTPTimeout, err = durationEnv("MONITOR_HTTP_TIMEOUT", 10*time.Second); err != nil {

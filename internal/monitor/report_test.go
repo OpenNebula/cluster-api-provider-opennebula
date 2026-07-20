@@ -3,9 +3,6 @@ Copyright 2026, OpenNebula Project, OpenNebula Systems.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
 */
 
 package monitor
@@ -20,30 +17,28 @@ import (
 )
 
 func TestHTTPSender(t *testing.T) {
-	var idempotencyKey string
+	var authorization, monitorToken, endpoint string
 	transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
-		idempotencyKey = request.Header.Get("Idempotency-Key")
-		return &http.Response{
-			StatusCode: http.StatusNoContent, Status: "204 No Content",
-			Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header),
-		}, nil
+		authorization = request.Header.Get("Authorization")
+		monitorToken = request.Header.Get("X-OneKS-Monitor-Token")
+		endpoint = request.URL.String()
+		return &http.Response{StatusCode: http.StatusNoContent, Status: "204 No Content",
+			Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
 	})
 
-	sender := NewHTTPSender(Config{Endpoint: "https://monitor.example/v1/status", HTTPTimeout: time.Second})
+	sender := NewHTTPSender(Config{Endpoint: "https://monitor.example/api/v1", ClusterID: "42", Token: "cluster-token", Auth: "oneadmin:secret", HTTPTimeout: time.Second})
 	sender.client.Transport = transport
-	err := sender.Send(context.Background(), Report{
-		ClusterID: "cluster-1", Kind: "Node", Name: "worker-1", UID: "uid-1", ResourceVersion: "42", Event: "Updated",
-	})
-	if err != nil {
+	if err := sender.Send(context.Background(), Report{Kind: "Node", Name: "worker-1", ResourceVersion: "42", Event: "Updated"}); err != nil {
 		t.Fatalf("Send returned an error: %v", err)
 	}
-	if idempotencyKey != "cluster-1/Node/uid-1/42//Updated" {
-		t.Fatalf("unexpected Idempotency-Key: %q", idempotencyKey)
+	if monitorToken != "cluster-token" || authorization == "Bearer cluster-token" {
+		t.Fatalf("unexpected authentication headers: token=%q authorization=%q", monitorToken, authorization)
+	}
+	if endpoint != "https://monitor.example/api/v1/clusters/42/status" {
+		t.Fatalf("unexpected endpoint: %q", endpoint)
 	}
 }
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
-func (f roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return f(request)
-}
+func (f roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }

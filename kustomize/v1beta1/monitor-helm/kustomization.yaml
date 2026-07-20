@@ -36,6 +36,16 @@ patches:
       path: /data/MONITOR_HTTP_TIMEOUT
       value: '{{ .Values.monitor.httpTimeout }}'
 - target:
+    kind: Secret
+    name: capone-cluster-monitor
+  patch: |-
+    - op: replace
+      path: /metadata/namespace
+      value: '{{ .Release.Namespace }}'
+    - op: replace
+      path: /stringData/MONITOR_TOKEN
+      value: '{{ required "monitor.token is required" .Values.monitor.token }}'
+- target:
     kind: Deployment
     name: capone-cluster-monitor
   patch: |-
@@ -48,6 +58,14 @@ patches:
     - op: add
       path: /spec/template/spec/containers/0/imagePullPolicy
       value: '{{ .Values.image.pullPolicy }}'
+    - op: add
+      path: /spec/template/spec/containers/0/env
+      value:
+      - name: MONITOR_AUTH
+        valueFrom:
+          secretKeyRef:
+            name: '{{ required "monitor.authSecretName is required" .Values.monitor.authSecretName }}'
+            key: ONE_AUTH
 - target:
     kind: Role
     name: capone-cluster-monitor

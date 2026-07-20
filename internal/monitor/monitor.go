@@ -13,6 +13,7 @@ package monitor
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -105,6 +106,7 @@ func (m *Monitor) Run(ctx context.Context) error {
 	if !cache.WaitForCacheSync(ctx.Done(), m.nodes.HasSynced, m.charts.HasSynced, m.jobs.HasSynced) {
 		return fmt.Errorf("initial informer cache sync failed")
 	}
+	m.enqueueNodeSnapshot()
 	m.ready.Store(true)
 	klog.InfoS("monitor caches synchronized")
 
@@ -162,7 +164,9 @@ func (m *Monitor) onNode(obj any, event string) {
 	if !ok {
 		return
 	}
-	m.enqueue("Node/"+node.Name, nodeReport(m.config, node, event))
+	report := nodeReport(m.config, node, event)
+	report.Status["readyProviderIDs"] = m.readyProviderIDs("")
+	m.enqueue("Node/"+node.Name, report)
 }
 
 func (m *Monitor) onNodeDeleted(obj any) {
@@ -171,8 +175,35 @@ func (m *Monitor) onNodeDeleted(obj any) {
 		return
 	}
 	report := nodeReport(m.config, node, "Deleted")
-	report.Status = map[string]any{"deleted": true}
+	report.Status["deleted"] = true
+	report.Status["readyProviderIDs"] = m.readyProviderIDs(node.Spec.ProviderID)
 	m.enqueue("Node/"+node.Name, report)
+}
+
+func (m *Monitor) readyProviderIDs(exclude string) []string {
+	providerIDs := make([]string, 0)
+	for _, item := range m.nodes.GetStore().List() {
+		node, ok := item.(*corev1.Node)
+		if !ok || node.Spec.ProviderID == "" || node.Spec.ProviderID == exclude || !nodeReady(node) {
+			continue
+		}
+		providerIDs = append(providerIDs, node.Spec.ProviderID)
+	}
+	sort.Strings(providerIDs)
+	return providerIDs
+}
+
+func (m *Monitor) enqueueNodeSnapshot() {
+	readyProviderIDs := m.readyProviderIDs("")
+	for _, item := range m.nodes.GetStore().List() {
+		node, ok := item.(*corev1.Node)
+		if !ok {
+			continue
+		}
+		report := nodeReport(m.config, node, "Updated")
+		report.Status["readyProviderIDs"] = readyProviderIDs
+		m.enqueue("Node/"+node.Name, report)
+	}
 }
 
 func (m *Monitor) onChart(obj any, event string) {

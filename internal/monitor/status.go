@@ -11,25 +11,29 @@ You may obtain a copy of the License at
 package monitor
 
 import (
-	"time"
-
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 func nodeReport(config Config, node *corev1.Node, event string) Report {
 	state := "warning"
-	for _, condition := range node.Status.Conditions {
-		if condition.Type == corev1.NodeReady && condition.Status == corev1.ConditionTrue {
-			state = "ready"
-			break
-		}
+	if nodeReady(node) {
+		state = "ready"
 	}
 	return Report{
-		ClusterID: config.ClusterID, Kind: "Node", Name: node.Name,
-		UID: string(node.UID), ResourceVersion: node.ResourceVersion, Event: event, ObservedAt: time.Now().UTC(),
-		Status: map[string]any{"state": state},
+		Kind: "Node", Name: node.Name,
+		UID: string(node.UID), ResourceVersion: node.ResourceVersion, Event: event,
+		Status: map[string]any{"state": state, "providerID": node.Spec.ProviderID},
 	}
+}
+
+func nodeReady(node *corev1.Node) bool {
+	for _, condition := range node.Status.Conditions {
+		if condition.Type == corev1.NodeReady && condition.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
 }
 
 func chartReport(config Config, chart *unstructured.Unstructured, status, event string) (Report, bool) {
@@ -38,8 +42,8 @@ func chartReport(config Config, chart *unstructured.Unstructured, status, event 
 		return Report{}, false
 	}
 	return Report{
-		ClusterID: config.ClusterID, Kind: "HelmChart", Namespace: chart.GetNamespace(), Name: chart.GetName(),
-		UID: string(chart.GetUID()), ResourceVersion: chart.GetResourceVersion(), Event: event, ObservedAt: time.Now().UTC(),
+		Kind: "HelmChart", Namespace: chart.GetNamespace(), Name: chart.GetName(),
+		UID: string(chart.GetUID()), ResourceVersion: chart.GetResourceVersion(), Event: event,
 		Status: map[string]any{"chartId": chartID, "status": normalizedChartStatus(status)},
 	}, true
 }
