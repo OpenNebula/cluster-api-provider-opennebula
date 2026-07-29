@@ -75,6 +75,19 @@ func TestSupportedChartStatuses(t *testing.T) {
 	}
 }
 
+func TestReconcileReport(t *testing.T) {
+	report := reconcileReport(true)
+	if report.Kind != "Reconcile" || report.Name != "chart-reconciler" {
+		t.Fatalf("unexpected reconcile report: %#v", report)
+	}
+	if report.Event != "Updated" {
+		t.Fatalf("unexpected reconcile event: %q", report.Event)
+	}
+	if report.Status["activeOperation"] != true {
+		t.Fatalf("expected active chart operation: %#v", report.Status)
+	}
+}
+
 func chartObject() *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "helm.cattle.io/v1", "kind": "HelmChart",

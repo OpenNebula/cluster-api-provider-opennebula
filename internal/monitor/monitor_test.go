@@ -125,6 +125,25 @@ func TestReadyProviderIDs(t *testing.T) {
 	}
 }
 
+func TestHasActiveChartOperation(t *testing.T) {
+	operations := cache.NewSharedIndexInformer(
+		&cache.ListWatch{}, &corev1.ConfigMap{}, 0, cache.Indexers{
+			cache.NamespaceIndex: cache.MetaNamespaceIndexFunc,
+		},
+	)
+	m := &Monitor{config: Config{KubeSystemNS: "kube-system"}, operations: operations}
+	if m.hasActiveChartOperation() {
+		t.Fatal("empty marker cache must not request periodic reconciliation")
+	}
+	marker := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: chartOperationMarker, Namespace: "kube-system"}}
+	if err := operations.GetStore().Add(marker); err != nil {
+		t.Fatalf("add marker: %v", err)
+	}
+	if !m.hasActiveChartOperation() {
+		t.Fatal("chart operation marker must request periodic reconciliation")
+	}
+}
+
 func jobInformer() cache.SharedIndexInformer {
 	return cache.NewSharedIndexInformer(&cache.ListWatch{}, &batchv1.Job{}, 0, cache.Indexers{})
 }

@@ -1,5 +1,5 @@
 image:
-  repository: ghcr.io/opennebula/cluster-api-provider-opennebula-monitor
+  repository: ghcr.io/jaimecb/cluster-api-provider-opennebula-monitor
   # Defaults to the chart appVersion (for example v0.2.0).
   tag: ""
   pullPolicy: IfNotPresent
@@ -12,4 +12,5 @@ monitor:
   chartNamespace: kube-system
   chartAnnotation: oneks.opennebula.io/chart-id
   resyncPeriod: 10m
+  reconcilePeriod: 30s
   httpTimeout: 10s

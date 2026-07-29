@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -31,6 +32,8 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 )
+
+const chartOperationMarker = "oneks-chart-reconcile"
 
 var (
 	helmChartGVR = schema.GroupVersionResource{Group: "helm.cattle.io", Version: "v1", Resource: "helmcharts"}
@@ -51,6 +54,7 @@ type Monitor struct {
 	nodes        cache.SharedIndexInformer
 	charts       cache.SharedIndexInformer
 	jobs         cache.SharedIndexInformer
+	operations   cache.SharedIndexInformer
 	queue        workqueue.TypedRateLimitingInterface[string]
 
 	mu       sync.Mutex
@@ -71,6 +75,7 @@ func New(config Config, client kubernetes.Interface, dynamicClient dynamic.Inter
 	m.nodes = m.nodeFactory.Core().V1().Nodes().Informer()
 	m.charts = m.chartFactory.ForResource(helmChartGVR).Informer()
 	m.jobs = m.jobFactory.Batch().V1().Jobs().Informer()
+	m.operations = m.jobFactory.Core().V1().ConfigMaps().Informer()
 
 	if _, err := m.nodes.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj any) { m.onNode(obj, "Added") },
@@ -94,6 +99,14 @@ func New(config Config, client kubernetes.Interface, dynamicClient dynamic.Inter
 	if _, err := m.jobs.AddEventHandler(jobHandler); err != nil {
 		return nil, fmt.Errorf("register Helm job handler: %w", err)
 	}
+	operationHandler := cache.ResourceEventHandlerFuncs{
+		AddFunc:    m.onChartOperation,
+		UpdateFunc: func(_, obj any) { m.onChartOperation(obj) },
+		DeleteFunc: m.onChartOperation,
+	}
+	if _, err := m.operations.AddEventHandler(operationHandler); err != nil {
+		return nil, fmt.Errorf("register chart operation handler: %w", err)
+	}
 	return m, nil
 }
 
@@ -103,10 +116,15 @@ func (m *Monitor) Run(ctx context.Context) error {
 	m.nodeFactory.Start(ctx.Done())
 	m.chartFactory.Start(ctx.Done())
 	m.jobFactory.Start(ctx.Done())
-	if !cache.WaitForCacheSync(ctx.Done(), m.nodes.HasSynced, m.charts.HasSynced, m.jobs.HasSynced) {
+	if !cache.WaitForCacheSync(
+		ctx.Done(), m.nodes.HasSynced, m.charts.HasSynced,
+		m.jobs.HasSynced, m.operations.HasSynced,
+	) {
 		return fmt.Errorf("initial informer cache sync failed")
 	}
 	m.enqueueNodeSnapshot()
+	m.enqueueReconcile(m.hasActiveChartOperation())
+	go m.runReconcile(ctx)
 	m.ready.Store(true)
 	klog.InfoS("monitor caches synchronized")
 
@@ -204,6 +222,45 @@ func (m *Monitor) enqueueNodeSnapshot() {
 		report.Status["readyProviderIDs"] = readyProviderIDs
 		m.enqueue("Node/"+node.Name, report)
 	}
+}
+
+func (m *Monitor) enqueueReconcile(active bool) {
+	m.enqueue("Reconcile/charts", reconcileReport(active))
+}
+
+// runReconcile asks OneKS to progress durable chart operations. The workload
+// cluster owns the cadence: oneks-server does not poll every registered
+// cluster, and a restarted monitor immediately requests reconciliation after
+// its informer caches synchronize.
+func (m *Monitor) runReconcile(ctx context.Context) {
+	ticker := time.NewTicker(m.config.ReconcilePeriod)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if m.hasActiveChartOperation() {
+				m.enqueueReconcile(true)
+			}
+		}
+	}
+}
+
+func (m *Monitor) hasActiveChartOperation() bool {
+	_, exists, err := m.operations.GetStore().GetByKey(
+		m.config.KubeSystemNS + "/" + chartOperationMarker,
+	)
+	return err == nil && exists
+}
+
+func (m *Monitor) onChartOperation(obj any) {
+	configMap, ok := deletedObject[*corev1.ConfigMap](obj)
+	if !ok || configMap.Name != chartOperationMarker {
+		return
+	}
+
+	m.enqueueReconcile(m.hasActiveChartOperation())
 }
 
 func (m *Monitor) onChart(obj any, event string) {

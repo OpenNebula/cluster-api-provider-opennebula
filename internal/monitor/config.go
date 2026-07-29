@@ -27,6 +27,7 @@ type Config struct {
 	ChartAnnotation string
 	HTTPTimeout     time.Duration
 	ResyncPeriod    time.Duration
+	ReconcilePeriod time.Duration
 	HealthAddress   string
 	KubeSystemNS    string
 }
@@ -58,6 +59,9 @@ func ConfigFromEnv() (Config, error) {
 		return Config{}, err
 	}
 	if c.ResyncPeriod, err = durationEnv("MONITOR_RESYNC_PERIOD", 10*time.Minute); err != nil {
+		return Config{}, err
+	}
+	if c.ReconcilePeriod, err = durationEnv("MONITOR_RECONCILE_PERIOD", 30*time.Second); err != nil {
 		return Config{}, err
 	}
 	return c, nil

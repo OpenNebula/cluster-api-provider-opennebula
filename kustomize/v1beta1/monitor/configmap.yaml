@@ -8,4 +8,5 @@ data:
   MONITOR_CLUSTER_ID: "replace-me"
   MONITOR_CHART_ANNOTATION: "oneks.opennebula.io/chart-id"
   MONITOR_RESYNC_PERIOD: "10m"
+  MONITOR_RECONCILE_PERIOD: "30s"
   MONITOR_HTTP_TIMEOUT: "10s"

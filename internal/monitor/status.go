@@ -56,3 +56,14 @@ func normalizedChartStatus(status string) string {
 		return "unknown"
 	}
 }
+
+func reconcileReport(active bool) Report {
+	return Report{
+		Kind:  "Reconcile",
+		Name:  "chart-reconciler",
+		Event: "Updated",
+		Status: map[string]any{
+			"activeOperation": active,
+		},
+	}
+}

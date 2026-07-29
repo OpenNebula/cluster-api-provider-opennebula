@@ -20,6 +20,7 @@ All settings can be supplied directly as environment variables or through an
 | `MONITOR_CHART_ANNOTATION` | no | `oneks.opennebula.io/chart-id` | Annotation selecting HelmCharts |
 | `MONITOR_CHART_NAMESPACE` | no | `kube-system` | Namespace containing the HelmChart resources |
 | `MONITOR_RESYNC_PERIOD` | no | `10m` | Safety reconciliation interval; changes are still event-driven |
+| `MONITOR_RECONCILE_PERIOD` | no | `30s` | Interval at which the workload cluster asks OneKS to progress durable chart operations |
 | `MONITOR_HTTP_TIMEOUT` | no | `10s` | Timeout for one report attempt |
 
 Edit the ConfigMap and apply the manifests:
@@ -89,6 +90,17 @@ when the URL and token identify different clusters.
 Failed requests remain in a rate-limited work queue, and
 a later event for the same object replaces the queued report with the newest
 state. A single worker processes all reports serially.
+
+After its informer caches synchronize, the monitor sends a `Reconcile` report
+immediately. OneKS creates the durable `oneks-chart-reconcile` ConfigMap while
+a chart operation is active; the monitor watches that marker and repeats the
+report at `MONITOR_RECONCILE_PERIOD` only while it exists. This lets the
+workload cluster drive persisted chart operations without either a server-side
+thread polling every OneKS cluster or an idle heartbeat from every monitor.
+The queue coalesces pending reconciliation requests. If the pod restarts during
+an operation, its informer cache sees the marker and requests a new
+reconciliation. OneKS then resumes from the chart state stored in the cluster
+document and the resources already present in Kubernetes.
 
 ## Delivery semantics
 
