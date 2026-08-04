@@ -17,7 +17,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -33,7 +32,11 @@ import (
 	"k8s.io/klog/v2"
 )
 
-const chartOperationMarker = "oneks-chart-reconcile"
+const (
+	chartOperationMarker       = "oneks-chart-reconcile"
+	readinessJobLabel          = "oneks.opennebula.io/readiness-job"
+	readinessReleaseAnnotation = "oneks.opennebula.io/release-name"
+)
 
 var (
 	helmChartGVR = schema.GroupVersionResource{Group: "helm.cattle.io", Version: "v1", Resource: "helmcharts"}
@@ -69,9 +72,11 @@ func New(config Config, client kubernetes.Interface, dynamicClient dynamic.Inter
 		queue:   workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		pending: map[string]pendingReport{},
 	}
-	m.nodeFactory = informers.NewSharedInformerFactory(client, config.ResyncPeriod)
-	m.chartFactory = dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynamicClient, config.ResyncPeriod, config.KubeSystemNS, nil)
-	m.jobFactory = informers.NewSharedInformerFactoryWithOptions(client, config.ResyncPeriod, informers.WithNamespace(config.KubeSystemNS))
+	// A zero resync period keeps reconciliation strictly event-driven. Watch
+	// reconnects still relist objects, and initial cache sync emits snapshots.
+	m.nodeFactory = informers.NewSharedInformerFactory(client, 0)
+	m.chartFactory = dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynamicClient, 0, config.KubeSystemNS, nil)
+	m.jobFactory = informers.NewSharedInformerFactoryWithOptions(client, 0, informers.WithNamespace(config.KubeSystemNS))
 	m.nodes = m.nodeFactory.Core().V1().Nodes().Informer()
 	m.charts = m.chartFactory.ForResource(helmChartGVR).Informer()
 	m.jobs = m.jobFactory.Batch().V1().Jobs().Informer()
@@ -92,9 +97,9 @@ func New(config Config, client kubernetes.Interface, dynamicClient dynamic.Inter
 		return nil, fmt.Errorf("register HelmChart handler: %w", err)
 	}
 	jobHandler := cache.ResourceEventHandlerFuncs{
-		AddFunc:    m.onJob,
-		UpdateFunc: func(_, obj any) { m.onJob(obj) },
-		DeleteFunc: m.onJob,
+		AddFunc:    func(obj any) { m.onJob(obj, "Added") },
+		UpdateFunc: func(_, obj any) { m.onJob(obj, "Updated") },
+		DeleteFunc: func(obj any) { m.onJob(obj, "Deleted") },
 	}
 	if _, err := m.jobs.AddEventHandler(jobHandler); err != nil {
 		return nil, fmt.Errorf("register Helm job handler: %w", err)
@@ -124,7 +129,6 @@ func (m *Monitor) Run(ctx context.Context) error {
 	}
 	m.enqueueNodeSnapshot()
 	m.enqueueReconcile(m.hasActiveChartOperation())
-	go m.runReconcile(ctx)
 	m.ready.Store(true)
 	klog.InfoS("monitor caches synchronized")
 
@@ -228,25 +232,6 @@ func (m *Monitor) enqueueReconcile(active bool) {
 	m.enqueue("Reconcile/charts", reconcileReport(active))
 }
 
-// runReconcile asks OneKS to progress durable chart operations. The workload
-// cluster owns the cadence: oneks-server does not poll every registered
-// cluster, and a restarted monitor immediately requests reconciliation after
-// its informer caches synchronize.
-func (m *Monitor) runReconcile(ctx context.Context) {
-	ticker := time.NewTicker(m.config.ReconcilePeriod)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if m.hasActiveChartOperation() {
-				m.enqueueReconcile(true)
-			}
-		}
-	}
-}
-
 func (m *Monitor) hasActiveChartOperation() bool {
 	_, exists, err := m.operations.GetStore().GetByKey(
 		m.config.KubeSystemNS + "/" + chartOperationMarker,
@@ -290,10 +275,13 @@ func (m *Monitor) onChartDeleted(obj any) {
 	m.enqueue("HelmChart/"+chart.GetNamespace()+"/"+chart.GetName(), report)
 }
 
-func (m *Monitor) onJob(obj any) {
+func (m *Monitor) onJob(obj any, event string) {
 	job, ok := deletedObject[*batchv1.Job](obj)
 	if !ok {
 		return
+	}
+	if report, watched := readinessJobReport(m.config, job, event); watched {
+		m.enqueue("ReadinessJob/"+job.Namespace+"/"+job.Name, report)
 	}
 	for _, item := range m.charts.GetStore().List() {
 		chart, ok := item.(*unstructured.Unstructured)

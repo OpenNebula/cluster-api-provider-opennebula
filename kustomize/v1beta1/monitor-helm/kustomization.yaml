@@ -30,12 +30,6 @@ patches:
       path: /data/MONITOR_CHART_ANNOTATION
       value: '{{ .Values.monitor.chartAnnotation }}'
     - op: replace
-      path: /data/MONITOR_RESYNC_PERIOD
-      value: '{{ .Values.monitor.resyncPeriod }}'
-    - op: replace
-      path: /data/MONITOR_RECONCILE_PERIOD
-      value: '{{ .Values.monitor.reconcilePeriod }}'
-    - op: replace
       path: /data/MONITOR_HTTP_TIMEOUT
       value: '{{ .Values.monitor.httpTimeout }}'
 - target:

@@ -11,6 +11,4 @@ monitor:
   authSecretName: ""
   chartNamespace: kube-system
   chartAnnotation: oneks.opennebula.io/chart-id
-  resyncPeriod: 10m
-  reconcilePeriod: 30s
   httpTimeout: 10s

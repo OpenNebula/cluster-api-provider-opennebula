@@ -16,18 +16,27 @@ import (
 	"net/http"
 	"os"
 
+	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/restmapper"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/OpenNebula/cluster-api-provider-opennebula/internal/monitor"
+	"github.com/OpenNebula/cluster-api-provider-opennebula/internal/readiness"
 )
 
 func main() {
 	klog.InitFlags(nil)
+	readinessFile := flag.String("readiness-checks-file", "", "run a finite readiness check from this JSON file")
 	flag.Parse()
+	if *readinessFile != "" {
+		runReadiness(*readinessFile)
+		return
+	}
 
 	config, err := monitor.ConfigFromEnv()
 	if err != nil {
@@ -72,6 +81,35 @@ func main() {
 		klog.ErrorS(err, "monitor stopped with an error")
 		os.Exit(1)
 	}
+}
+
+func runReadiness(path string) {
+	config, err := readiness.Load(path)
+	if err != nil {
+		klog.ErrorS(err, "invalid readiness configuration")
+		os.Exit(1)
+	}
+	restConfig, err := rest.InClusterConfig()
+	if err != nil {
+		klog.ErrorS(err, "unable to load in-cluster Kubernetes configuration")
+		os.Exit(1)
+	}
+	client, err := dynamic.NewForConfig(restConfig)
+	if err != nil {
+		klog.ErrorS(err, "unable to create dynamic Kubernetes client")
+		os.Exit(1)
+	}
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(restConfig)
+	if err != nil {
+		klog.ErrorS(err, "unable to create Kubernetes discovery client")
+		os.Exit(1)
+	}
+	mapper := restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(discoveryClient))
+	if err := readiness.Run(ctrl.SetupSignalHandler(), client, mapper, config); err != nil {
+		klog.ErrorS(err, "readiness checks failed")
+		os.Exit(1)
+	}
+	klog.InfoS("all readiness checks completed")
 }
 
 func healthHandler(watcher *monitor.Monitor) http.Handler {

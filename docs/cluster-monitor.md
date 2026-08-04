@@ -19,8 +19,6 @@ All settings can be supplied directly as environment variables or through an
 | `MONITOR_AUTH` | yes | | `user:password` used as HTTP Basic Auth against OneKS |
 | `MONITOR_CHART_ANNOTATION` | no | `oneks.opennebula.io/chart-id` | Annotation selecting HelmCharts |
 | `MONITOR_CHART_NAMESPACE` | no | `kube-system` | Namespace containing the HelmChart resources |
-| `MONITOR_RESYNC_PERIOD` | no | `10m` | Safety reconciliation interval; changes are still event-driven |
-| `MONITOR_RECONCILE_PERIOD` | no | `30s` | Interval at which the workload cluster asks OneKS to progress durable chart operations |
 | `MONITOR_HTTP_TIMEOUT` | no | `10s` | Timeout for one report attempt |
 
 Edit the ConfigMap and apply the manifests:
@@ -91,24 +89,61 @@ Failed requests remain in a rate-limited work queue, and
 a later event for the same object replaces the queued report with the newest
 state. A single worker processes all reports serially.
 
+## Managed-resource readiness Jobs
+
+OneKS can use the monitor image as a short-lived, read-only readiness checker
+while installing a catalogue application. The Job mounts a JSON check plan and
+runs the same binary with:
+
+```sh
+/monitor --readiness-checks-file /etc/oneks-readiness/checks.json
+```
+
+The check plan contains Kubernetes object identities, required conditions, and
+typed functional checks. `DNSMatchesService` resolves a hostname and compares
+the result with the referenced Service `clusterIP`; it replaces application
+Jobs containing `nslookup` shell scripts. The plan cannot execute commands.
+Each Job uses a dedicated Service Account whose generated Roles grant `get`
+for the exact resource names in the plan. Secret checks are deliberately
+excluded.
+
+The long-running monitor recognizes Jobs labelled
+`oneks.opennebula.io/readiness-job=true`. Their annotations identify the chart
+and release:
+
+```yaml
+metadata:
+  labels:
+    oneks.opennebula.io/readiness-job: "true"
+  annotations:
+    oneks.opennebula.io/chart-id: <catalogue-chart-id>
+    oneks.opennebula.io/release-name: <release-name>
+```
+
+It reports `kind: ReadinessJob` with status `pending`, `complete`, or `failed`.
+This requires no additional monitor RBAC because Jobs in `kube-system` are
+already watched. On restart, the informer initial list reports the persisted
+Job result again.
+
 After its informer caches synchronize, the monitor sends a `Reconcile` report
 immediately. OneKS creates the durable `oneks-chart-reconcile` ConfigMap while
-a chart operation is active; the monitor watches that marker and repeats the
-report at `MONITOR_RECONCILE_PERIOD` only while it exists. This lets the
-workload cluster drive persisted chart operations without either a server-side
-thread polling every OneKS cluster or an idle heartbeat from every monitor.
-The queue coalesces pending reconciliation requests. If the pod restarts during
-an operation, its informer cache sees the marker and requests a new
-reconciliation. OneKS then resumes from the chart state stored in the cluster
-document and the resources already present in Kubernetes.
+a chart operation is active. Creating the marker, or changing its
+`oneks.opennebula.io/operation-revision` annotation, produces the reconciliation
+event. HelmChart and Job changes produce the subsequent workflow events. There
+is no ticker or informer resync interval.
+
+If the monitor restarts during an operation, its initial informer list sees the
+marker and requests reconciliation. If only oneks-server restarts, its LCM
+startup recovery scans durable active chart records once and resumes them. This
+provides recovery without a thread or polling loop per cluster.
 
 ## Delivery semantics
 
 Kubernetes watches are not durable message queues. Informers recover watch
 disconnects with `resourceVersion`, handle expired history by listing again,
-and the periodic resync repairs the externally stored *current state*. A pod
-restart also performs a full initial list, so the current state is eventually
-reported again.
+and perform a new list when required. A pod restart also performs a full
+initial list, so the current state is reported again. Failed HTTP requests stay
+in the monitor's rate-limited queue until delivery succeeds.
 
 This guarantees convergence of current state, not delivery of every transient
 intermediate transition. If every transition must be retained while both the

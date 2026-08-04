@@ -11,6 +11,7 @@ You may obtain a copy of the License at
 package monitor
 
 import (
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -25,6 +26,48 @@ func nodeReport(config Config, node *corev1.Node, event string) Report {
 		UID: string(node.UID), ResourceVersion: node.ResourceVersion, Event: event,
 		Status: map[string]any{"state": state, "providerID": node.Spec.ProviderID},
 	}
+}
+
+func readinessJobReport(config Config, job *batchv1.Job, event string) (Report, bool) {
+	if job.GetLabels()[readinessJobLabel] != "true" {
+		return Report{}, false
+	}
+	chartID := job.GetAnnotations()[config.ChartAnnotation]
+	releaseName := job.GetAnnotations()[readinessReleaseAnnotation]
+	if chartID == "" || releaseName == "" {
+		return Report{}, false
+	}
+	status, message := readinessJobStatus(job)
+	if event == "Deleted" && status == "pending" {
+		status = "failed"
+		message = "readiness Job was deleted before completion"
+	}
+	result := Report{
+		Kind: "ReadinessJob", Namespace: job.Namespace, Name: job.Name,
+		UID: string(job.UID), ResourceVersion: job.ResourceVersion, Event: event,
+		Status: map[string]any{
+			"chartId": chartID, "releaseName": releaseName, "status": status,
+		},
+	}
+	if message != "" {
+		result.Status["message"] = message
+	}
+	return result, true
+}
+
+func readinessJobStatus(job *batchv1.Job) (string, string) {
+	for _, condition := range job.Status.Conditions {
+		if condition.Status != corev1.ConditionTrue {
+			continue
+		}
+		switch condition.Type {
+		case batchv1.JobFailed:
+			return "failed", condition.Message
+		case batchv1.JobComplete:
+			return "complete", condition.Message
+		}
+	}
+	return "pending", ""
 }
 
 func nodeReady(node *corev1.Node) bool {

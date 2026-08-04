@@ -133,14 +133,53 @@ func TestHasActiveChartOperation(t *testing.T) {
 	)
 	m := &Monitor{config: Config{KubeSystemNS: "kube-system"}, operations: operations}
 	if m.hasActiveChartOperation() {
-		t.Fatal("empty marker cache must not request periodic reconciliation")
+		t.Fatal("empty marker cache must not request startup reconciliation")
 	}
 	marker := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: chartOperationMarker, Namespace: "kube-system"}}
 	if err := operations.GetStore().Add(marker); err != nil {
 		t.Fatalf("add marker: %v", err)
 	}
 	if !m.hasActiveChartOperation() {
-		t.Fatal("chart operation marker must request periodic reconciliation")
+		t.Fatal("chart operation marker must request startup reconciliation")
+	}
+}
+
+func TestReadinessJobReport(t *testing.T) {
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "oneks-readiness-runai", Namespace: "kube-system",
+			ResourceVersion: "31",
+			Labels:          map[string]string{readinessJobLabel: "true"},
+			Annotations: map[string]string{
+				defaultChartAnnotation:     "runai-chart",
+				readinessReleaseAnnotation: "runai-backend",
+			},
+		},
+		Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{
+			Type: batchv1.JobComplete, Status: corev1.ConditionTrue,
+		}}},
+	}
+	report, watched := readinessJobReport(
+		Config{ChartAnnotation: defaultChartAnnotation}, job, "Updated",
+	)
+	if !watched {
+		t.Fatal("labelled readiness Job was not watched")
+	}
+	if report.Kind != "ReadinessJob" || report.Status["status"] != "complete" {
+		t.Fatalf("unexpected readiness report: %#v", report)
+	}
+	if report.Status["chartId"] != "runai-chart" || report.Status["releaseName"] != "runai-backend" {
+		t.Fatalf("missing installation identity: %#v", report.Status)
+	}
+}
+
+func TestUnlabelledJobIsNotAReadinessJob(t *testing.T) {
+	_, watched := readinessJobReport(
+		Config{ChartAnnotation: defaultChartAnnotation},
+		&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "ordinary"}}, "Added",
+	)
+	if watched {
+		t.Fatal("ordinary Job must not emit a readiness report")
 	}
 }
 
