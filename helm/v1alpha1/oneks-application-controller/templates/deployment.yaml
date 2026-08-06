@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "oneks-application-controller.name" . }}
+  namespace: oneks-system
+  labels:
+    {{- include "oneks-application-controller.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "oneks-application-controller.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "oneks-application-controller.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "oneks-application-controller.name" . }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: controller
+        image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        args:
+        - --cluster-id=$(CLUSTER_ID)
+        - --controller-version={{ .Chart.AppVersion }}
+        - --leader-elect=true
+        - --metrics-bind-address=0
+        - --health-probe-bind-address=:8081
+        - --reconciliation-poll={{ .Values.reconciliationPoll }}
+        env:
+        - name: CLUSTER_ID
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "oneks-application-controller.name" . }}
+              key: cluster-id
+        ports:
+        - name: health
+          containerPort: 8081
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          periodSeconds: 20
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+      terminationGracePeriodSeconds: 30

@@ -1,0 +1,16 @@
+{
+  "profile": "profile",
+  "rule": "rule",
+  "source": "prometheus",
+  "labels": {
+    "backslash": "\\",
+    "delete": "\u007f",
+    "emoji": "\ud83d\ude00",
+    "latin": "\u00e9",
+    "quote": "\"",
+    "separator": "\u2028\u2029",
+    "slash": "/"
+  },
+  "canonical": "{\"labels\":{\"backslash\":\"\\\\\",\"delete\":\"\\u007f\",\"emoji\":\"\\ud83d\\ude00\",\"latin\":\"\\u00e9\",\"quote\":\"\\\"\",\"separator\":\"\\u2028\\u2029\",\"slash\":\"/\"},\"profile\":\"profile\",\"rule\":\"rule\",\"source\":\"prometheus\"}",
+  "identity": "signal-2M_J0XbaCzYCZT5OhPQqrb4qb29OXtGX_Cl7WxsSiVs"
+}

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["clusterID"],
+  "properties": {
+    "clusterID": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 63,
+      "pattern": "^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$"
+    },
+    "image": {
+      "type": "object"
+    },
+    "replicas": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "reconciliationPoll": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 32
+    },
+    "resources": {
+      "type": "object"
+    }
+  }
+}

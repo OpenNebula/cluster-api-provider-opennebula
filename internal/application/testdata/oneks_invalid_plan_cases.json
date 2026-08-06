@@ -1,0 +1,26 @@
+{
+  "version": "oneks.opennebula.io/plan-v1alpha1",
+  "cases": [
+    {"name":"repository-not-https","mutation":"repository-http","error":"repositoryURL must be HTTPS"},
+    {"name":"repository-userinfo","mutation":"repository-userinfo","error":"repositoryURL must be HTTPS"},
+    {"name":"repository-fragment","mutation":"repository-fragment","error":"repositoryURL must be HTTPS"},
+    {"name":"fixed-workload-namespace","mutation":"target-namespace","error":"targetNamespace must be oneks-poc-workloads"},
+    {"name":"namespace-creation","mutation":"create-namespace","error":"createNamespace must be false"},
+    {"name":"invalid-resource-id","mutation":"resource-id","error":"resource ID must be a label value"},
+    {"name":"invalid-resource-name","mutation":"resource-name","error":"name must be a Kubernetes DNS subdomain"},
+    {"name":"invalid-deletion-policy","mutation":"deletion-policy","error":"deletionPolicy must be Delete or Retain"},
+    {"name":"invalid-configmap-key","mutation":"configmap-key-syntax","error":"invalid ConfigMap key"},
+    {"name":"configmap-key-max-plus-one","mutation":"configmap-key-size","error":"invalid ConfigMap key"},
+    {"name":"configmap-value-max-plus-one","mutation":"configmap-value-size","error":"oversized ConfigMap value"},
+    {"name":"configmap-data-max-plus-one","mutation":"configmap-data-size","error":"aggregate bytes"},
+    {"name":"unresolved-values-placeholder","mutation":"values-placeholder","error":"unresolved placeholders"},
+    {"name":"sensitive-values","mutation":"values-sensitive","error":"sensitive value"},
+    {"name":"unresolved-configmap-placeholder","mutation":"configmap-placeholder","error":"unresolved placeholder"},
+    {"name":"sensitive-configmap-data","mutation":"configmap-sensitive","error":"sensitive ConfigMap data"},
+    {"name":"duplicate-resource-id","mutation":"duplicate-resource-id","error":"duplicate ConfigMap resource ID"},
+    {"name":"duplicate-resource-identity","mutation":"duplicate-resource-identity","error":"duplicate ConfigMap identity"},
+    {"name":"resource-count-max-plus-one","mutation":"resource-count","error":"at most 16 resources"},
+    {"name":"values-max-plus-one","mutation":"values-size","error":"valuesContent exceeds 65536 bytes"},
+    {"name":"canonical-plan-max-plus-one","mutation":"canonical-size","error":"canonical plan exceeds 131072 bytes"}
+  ]
+}

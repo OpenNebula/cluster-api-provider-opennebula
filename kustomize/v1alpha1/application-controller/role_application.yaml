@@ -1,0 +1,20 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: oneks-application-controller
+  namespace: oneks-system
+rules:
+- apiGroups: ["oneks.opennebula.io"]
+  resources: ["oneksapplications"]
+  # Root update is required because controller-runtime persists finalizers with
+  # Client.Update; CRD CEL validation keeps the application spec immutable.
+  verbs: ["get", "list", "watch", "update"]
+- apiGroups: ["oneks.opennebula.io"]
+  resources: ["oneksapplications/status"]
+  verbs: ["get", "patch", "update"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch", "update"]
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]

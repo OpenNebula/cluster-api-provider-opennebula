@@ -1,0 +1,17 @@
+clusterID: ""
+
+image:
+  repository: ghcr.io/opennebula/oneks-application-controller
+  tag: ""
+  pullPolicy: IfNotPresent
+
+replicas: 2
+reconciliationPoll: 15s
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 48Mi
+  limits:
+    cpu: 250m
+    memory: 128Mi

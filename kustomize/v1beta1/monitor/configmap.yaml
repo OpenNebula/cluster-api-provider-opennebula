@@ -2,9 +2,15 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: capone-cluster-monitor
+  namespace: kube-system
 data:
   # Replace these values before deploying.
   MONITOR_ENDPOINT: "https://monitoring.example.invalid/api/v1"
   MONITOR_CLUSTER_ID: "replace-me"
   MONITOR_CHART_ANNOTATION: "oneks.opennebula.io/chart-id"
   MONITOR_HTTP_TIMEOUT: "10s"
+  # Empty disables the separate metrics listener.
+  MONITOR_METRICS_ADDRESS: ""
+  MONITOR_PROFILE_NAMESPACE: "kube-system"
+  # Comma-separated namespaces containing allowed Prometheus Services.
+  MONITOR_PROMETHEUS_NAMESPACES: "monitoring"

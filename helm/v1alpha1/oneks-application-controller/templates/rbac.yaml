@@ -1,0 +1,108 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "oneks-application-controller.name" . }}
+  namespace: oneks-system
+rules:
+- apiGroups: ["oneks.opennebula.io"]
+  resources: ["oneksapplications"]
+  # Root update is required because controller-runtime persists finalizers with
+  # Client.Update; CRD CEL validation keeps the application spec immutable.
+  verbs: ["get", "list", "watch", "update"]
+- apiGroups: ["oneks.opennebula.io"]
+  resources: ["oneksapplications/status"]
+  verbs: ["get", "patch", "update"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch", "update"]
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "oneks-application-controller.name" . }}
+  namespace: oneks-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "oneks-application-controller.name" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "oneks-application-controller.name" . }}
+  namespace: oneks-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: oneks-application-controller-helm
+  namespace: kube-system
+rules:
+- apiGroups: ["helm.cattle.io"]
+  resources: ["helmcharts"]
+  verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "oneks-application-controller.name" . }}
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: oneks-application-controller-helm
+subjects:
+- kind: ServiceAccount
+  name: {{ include "oneks-application-controller.name" . }}
+  namespace: oneks-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: oneks-application-controller-configmap
+  namespace: oneks-poc-workloads
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "oneks-application-controller.name" . }}
+  namespace: oneks-poc-workloads
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: oneks-application-controller-configmap
+subjects:
+- kind: ServiceAccount
+  name: {{ include "oneks-application-controller.name" . }}
+  namespace: oneks-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: oneks-application-controller-namespace-reader
+rules:
+- apiGroups: [""]
+  resources: ["namespaces"]
+  resourceNames: ["oneks-poc-workloads"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: oneks-application-controller-namespace-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: oneks-application-controller-namespace-reader
+subjects:
+- kind: ServiceAccount
+  name: {{ include "oneks-application-controller.name" . }}
+  namespace: oneks-system

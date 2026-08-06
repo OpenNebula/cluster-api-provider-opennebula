@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oneks-application-controller
+  namespace: oneks-system
+data:
+  cluster-id: replace-me

@@ -12,3 +12,8 @@ monitor:
   chartNamespace: kube-system
   chartAnnotation: oneks.opennebula.io/chart-id
   httpTimeout: 10s
+  prometheusNamespaces: []
+
+metrics:
+  enabled: false
+  address: :8082

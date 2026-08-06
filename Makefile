@@ -46,6 +46,8 @@ IMG     ?= $(IMG_URL):latest
 E2E_IMG ?= $(IMG_URL):e2e
 MONITOR_IMG_URL ?= ghcr.io/opennebula/cluster-api-provider-opennebula-monitor
 MONITOR_IMG     ?= $(MONITOR_IMG_URL):latest
+APPLICATION_CONTROLLER_IMG_URL ?= ghcr.io/opennebula/oneks-application-controller
+APPLICATION_CONTROLLER_IMG     ?= $(APPLICATION_CONTROLLER_IMG_URL):latest
 
 # CONTAINER_TOOL defines the container tool to be used for building images.
 # Be aware that the target commands are only tested with Docker which is
@@ -132,13 +134,16 @@ lint-fix: $(GOLANGCI_LINT)
 
 # Build
 
-.PHONY: build build-monitor run run-monitor docker-build docker-build-monitor docker-push docker-push-monitor docker-build-e2e docker-release docker-release-monitor
+.PHONY: build build-monitor build-application-controller run run-monitor docker-build docker-build-monitor docker-build-application-controller docker-push docker-push-monitor docker-push-application-controller docker-build-e2e docker-release docker-release-monitor docker-release-application-controller
 
 build: manifests generate fmt vet
 	go build -o bin/manager cmd/main.go
 
 build-monitor: fmt vet
 	go build -o bin/monitor ./cmd/monitor
+
+build-application-controller:
+	go build -buildvcs=false -o bin/application-controller ./cmd/application-controller
 
 run: manifests generate fmt vet
 	go run cmd/main.go
@@ -152,11 +157,18 @@ docker-build:
 docker-build-monitor:
 	$(CONTAINER_TOOL) build -t $(MONITOR_IMG) -f Dockerfile.monitor .
 
+docker-build-application-controller:
+	$(CONTAINER_TOOL) build -t $(APPLICATION_CONTROLLER_IMG) \
+		-f Dockerfile.application-controller .
+
 docker-push: docker-build
 	$(CONTAINER_TOOL) push $(IMG)
 
 docker-push-monitor: docker-build-monitor
 	$(CONTAINER_TOOL) push $(MONITOR_IMG)
+
+docker-push-application-controller: docker-build-application-controller
+	$(CONTAINER_TOOL) push $(APPLICATION_CONTROLLER_IMG)
 
 docker-build-e2e:
 	$(CONTAINER_TOOL) build -t $(E2E_IMG) .
@@ -175,6 +187,7 @@ docker-release:
 	-$(CONTAINER_TOOL) buildx rm cluster-api-provider-opennebula-builder
 
 MONITOR_VERSION ?= $(subst v,,$(patsubst monitor-%,%,$(CLOSEST_TAG)))
+APPLICATION_CONTROLLER_VERSION ?= $(subst v,,$(patsubst application-controller-v%,%,$(CLOSEST_TAG)))
 
 docker-release-monitor:
 	-$(CONTAINER_TOOL) buildx create --name cluster-api-provider-opennebula-monitor-builder
@@ -184,9 +197,19 @@ docker-release-monitor:
 		-f Dockerfile.monitor .
 	-$(CONTAINER_TOOL) buildx rm cluster-api-provider-opennebula-monitor-builder
 
+docker-release-application-controller:
+	-$(CONTAINER_TOOL) buildx create --name oneks-application-controller-builder
+	$(CONTAINER_TOOL) buildx use oneks-application-controller-builder
+	$(CONTAINER_TOOL) buildx build --push --platform=$(_PLATFORMS) \
+		--build-arg VERSION=v$(APPLICATION_CONTROLLER_VERSION) \
+		-t $(APPLICATION_CONTROLLER_IMG_URL):v$(APPLICATION_CONTROLLER_VERSION) \
+		-t $(APPLICATION_CONTROLLER_IMG_URL):latest \
+		-f Dockerfile.application-controller .
+	-$(CONTAINER_TOOL) buildx rm oneks-application-controller-builder
+
 # Release
 
-.PHONY: release monitor-release
+.PHONY: release monitor-release application-controller-release
 
 release: charts $(KUSTOMIZE)
 	# Manifests
@@ -248,6 +271,8 @@ monitor-chart: $(MONITOR_CHART_PACKAGE)
 
 monitor-release: monitor-chart
 
+application-controller-release: application-controller-chart
+
 $(MONITOR_CHART_DIR): $(KUSTOMIZE) $(MONITOR_CHART_SOURCES)
 	install -m u=rwx,go=rx -d $(MONITOR_CHART_DIR)/templates
 	cp -rf helm/v1beta1/capone-monitor/. $(MONITOR_CHART_DIR)/.
@@ -258,6 +283,37 @@ $(MONITOR_CHART_PACKAGE): $(MONITOR_CHART_DIR) $(MONITOR_CHART_SOURCES) $(HELM)
 	$(HELM) package -d $(CHARTS_DIR)/$(MONITOR_RELEASE_TAG) \
 		--version $(MONITOR_VERSION) --app-version v$(MONITOR_VERSION) \
 		$(MONITOR_CHART_DIR)
+
+APPLICATION_CONTROLLER_RELEASE_TAG ?= application-controller-v$(APPLICATION_CONTROLLER_VERSION)
+APPLICATION_CONTROLLER_CHART_PACKAGE := $(CHARTS_DIR)/$(APPLICATION_CONTROLLER_RELEASE_TAG)/oneks-application-controller-$(APPLICATION_CONTROLLER_VERSION).tgz
+APPLICATION_CONTROLLER_CHART_DIR     := $(CHARTS_DIR)/$(APPLICATION_CONTROLLER_RELEASE_TAG)/oneks-application-controller
+APPLICATION_CONTROLLER_CHART_SOURCES := $(shell find helm/v1alpha1/oneks-application-controller -type f)
+
+.PHONY: application-controller-chart application-controller-package-check
+
+application-controller-chart: $(APPLICATION_CONTROLLER_CHART_PACKAGE)
+
+$(APPLICATION_CONTROLLER_CHART_DIR): $(APPLICATION_CONTROLLER_CHART_SOURCES)
+	install -m u=rwx,go=rx -d $(APPLICATION_CONTROLLER_CHART_DIR)
+	cp -rf helm/v1alpha1/oneks-application-controller/. $(APPLICATION_CONTROLLER_CHART_DIR)/.
+
+$(APPLICATION_CONTROLLER_CHART_PACKAGE): $(APPLICATION_CONTROLLER_CHART_DIR) $(APPLICATION_CONTROLLER_CHART_SOURCES) $(HELM)
+	$(HELM) package -d $(CHARTS_DIR)/$(APPLICATION_CONTROLLER_RELEASE_TAG) \
+		--version $(APPLICATION_CONTROLLER_VERSION) \
+		--app-version v$(APPLICATION_CONTROLLER_VERSION) \
+		$(APPLICATION_CONTROLLER_CHART_DIR)
+
+application-controller-package-check: $(HELM) $(KUSTOMIZE)
+	$(HELM) lint helm/v1alpha1/oneks-application-controller \
+		--set-string clusterID=packaging-check
+	$(HELM) template oneks-application-controller \
+		helm/v1alpha1/oneks-application-controller --include-crds \
+		--set-string clusterID=packaging-check >/dev/null
+	test "$$($(HELM) template oneks-application-controller \
+		helm/v1alpha1/oneks-application-controller \
+		--set-string clusterID=packaging-check \
+		| grep -c 'helm.sh/resource-policy: keep')" -eq 2
+	$(KUSTOMIZE) build kustomize/v1alpha1/application-controller >/dev/null
 
 # Deployment
 

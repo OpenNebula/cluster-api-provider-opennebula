@@ -1,0 +1,51 @@
+{
+  "observedGeneration": 1,
+  "observedPlanDigest": "sha256-M55-5y1MVfp5TI27rz_ssKVui_0RNKYTrM_wVWSfRqg",
+  "controllerVersion": "v0.1.0",
+  "supportedPlanVersions": [
+    "oneks.opennebula.io/plan-v1alpha1"
+  ],
+  "phase": "Ready",
+  "progress": {
+    "completed": 2,
+    "total": 2,
+    "current": "oneks-prometheus"
+  },
+  "conditions": [
+    {
+      "type": "PlanValid",
+      "status": "True",
+      "reason": "Validated",
+      "message": "Plan digest and schema are valid",
+      "observedGeneration": 1,
+      "lastTransitionTime": "2026-08-06T12:00:00Z"
+    },
+    {
+      "type": "Ready",
+      "status": "True",
+      "reason": "ApplicationReady",
+      "message": "Application resources and Helm release are ready",
+      "observedGeneration": 1,
+      "lastTransitionTime": "2026-08-06T12:01:00Z"
+    }
+  ],
+  "helmChartRef": {
+    "namespace": "kube-system",
+    "name": "oneks-prometheus",
+    "uid": "helmchart-uid",
+    "resourceVersion": "101"
+  },
+  "resources": [
+    {
+      "id": "operator-smoke-config",
+      "phase": "Ready",
+      "reason": "Applied",
+      "message": "ConfigMap is ready",
+      "resourceVersion": "100"
+    }
+  ],
+  "lastError": {
+    "reason": "",
+    "message": ""
+  }
+}

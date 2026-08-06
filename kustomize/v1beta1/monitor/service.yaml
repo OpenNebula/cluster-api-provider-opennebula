@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: capone-cluster-monitor-metrics
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: capone-cluster-monitor
+spec:
+  selector:
+    app.kubernetes.io/name: capone-cluster-monitor
+  ports:
+  - name: metrics
+    port: 8082
+    targetPort: metrics

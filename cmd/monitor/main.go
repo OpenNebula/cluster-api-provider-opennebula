@@ -16,6 +16,8 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
@@ -58,17 +60,39 @@ func main() {
 		klog.ErrorS(err, "unable to create dynamic Kubernetes client")
 		os.Exit(1)
 	}
-	watcher, err := monitor.New(config, client, dynamicClient, monitor.NewHTTPSender(config))
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(prometheus.NewGoCollector(), prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	metrics := monitor.NewMetrics(registry)
+	watcher, err := monitor.New(config, client, dynamicClient, monitor.NewHTTPSender(config), metrics)
 	if err != nil {
 		klog.ErrorS(err, "unable to create monitor")
 		os.Exit(1)
 	}
 
 	ctx := ctrl.SetupSignalHandler()
-	health := &http.Server{Addr: config.HealthAddress, Handler: healthHandler(watcher)}
+	health := &http.Server{
+		Addr:    config.HealthAddress,
+		Handler: healthHandler(watcher),
+	}
+	var metricsServer *http.Server
+	if config.MetricsAddress != "" {
+		metricsServer = &http.Server{
+			Addr:    config.MetricsAddress,
+			Handler: promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),
+		}
+		go func() {
+			klog.InfoS("starting metrics server", "address", config.MetricsAddress)
+			if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				klog.ErrorS(err, "metrics server failed")
+			}
+		}()
+	}
 	go func() {
 		<-ctx.Done()
 		_ = health.Close()
+		if metricsServer != nil {
+			_ = metricsServer.Close()
+		}
 	}()
 	go func() {
 		klog.InfoS("starting health server", "address", config.HealthAddress)

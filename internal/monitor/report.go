@@ -32,8 +32,14 @@ type Report struct {
 	Status                 map[string]any `json:"status,omitempty"`
 }
 
+func (Report) CallbackKind() string { return "resource-status" }
+
+type CallbackPayload interface {
+	CallbackKind() string
+}
+
 type Sender interface {
-	Send(context.Context, Report) error
+	Send(context.Context, CallbackPayload) error
 }
 
 type HTTPSender struct {
@@ -47,14 +53,19 @@ func NewHTTPSender(config Config) *HTTPSender {
 	return &HTTPSender{
 		endpoint: strings.TrimRight(config.Endpoint, "/") + "/clusters/" +
 			url.PathEscape(config.ClusterID) + "/status",
-		token:  config.Token,
-		auth:   config.Auth,
-		client: &http.Client{Timeout: config.HTTPTimeout},
+		token: config.Token,
+		auth:  config.Auth,
+		client: &http.Client{
+			Timeout: config.HTTPTimeout,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return fmt.Errorf("callback redirects are disabled")
+			},
+		},
 	}
 }
 
-func (s *HTTPSender) Send(ctx context.Context, report Report) error {
-	body, err := json.Marshal(report)
+func (s *HTTPSender) Send(ctx context.Context, payload CallbackPayload) error {
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("encode report: %w", err)
 	}

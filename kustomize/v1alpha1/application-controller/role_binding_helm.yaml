@@ -1,0 +1,13 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: oneks-application-controller
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: oneks-application-controller-helm
+subjects:
+- kind: ServiceAccount
+  name: oneks-application-controller
+  namespace: oneks-system

@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: capone-cluster-monitor
+  namespace: kube-system
   labels:
     app.kubernetes.io/name: capone-cluster-monitor
 spec:
@@ -30,6 +31,8 @@ spec:
         ports:
         - name: health
           containerPort: 8081
+        - name: metrics
+          containerPort: 8082
         readinessProbe:
           httpGet:
             path: /readyz

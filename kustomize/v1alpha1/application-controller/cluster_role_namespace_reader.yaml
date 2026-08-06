@@ -1,0 +1,9 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: oneks-application-controller-namespace-reader
+rules:
+- apiGroups: [""]
+  resources: ["namespaces"]
+  resourceNames: ["oneks-poc-workloads"]
+  verbs: ["get"]
