@@ -11,6 +11,7 @@ You may obtain a copy of the License at
 package monitor
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"os"
@@ -26,7 +27,7 @@ const defaultChartAnnotation = "oneks.opennebula.io/chart-id"
 type Config struct {
 	Endpoint             string
 	ClusterID            string
-	Token                string
+	Key                  []byte
 	Auth                 string
 	ChartAnnotation      string
 	HTTPTimeout          time.Duration
@@ -41,7 +42,6 @@ func ConfigFromEnv() (Config, error) {
 	c := Config{
 		Endpoint:        strings.TrimSpace(os.Getenv("MONITOR_ENDPOINT")),
 		ClusterID:       strings.TrimSpace(os.Getenv("MONITOR_CLUSTER_ID")),
-		Token:           strings.TrimSpace(os.Getenv("MONITOR_TOKEN")),
 		Auth:            strings.TrimSpace(os.Getenv("MONITOR_AUTH")),
 		ChartAnnotation: envOrDefault("MONITOR_CHART_ANNOTATION", defaultChartAnnotation),
 		HealthAddress:   envOrDefault("MONITOR_HEALTH_ADDRESS", ":8081"),
@@ -56,9 +56,10 @@ func ConfigFromEnv() (Config, error) {
 		return Config{}, fmt.Errorf("MONITOR_ENDPOINT is required")
 	}
 	endpoint, err := url.Parse(c.Endpoint)
-	if err != nil || !endpoint.IsAbs() || endpoint.Scheme != "https" || endpoint.Host == "" ||
+	if err != nil || !endpoint.IsAbs() ||
+		(endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Host == "" ||
 		endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
-		return Config{}, fmt.Errorf("MONITOR_ENDPOINT must be an absolute HTTPS URL without credentials, query, or fragment")
+		return Config{}, fmt.Errorf("MONITOR_ENDPOINT must be an absolute HTTP or HTTPS URL without credentials, query, or fragment")
 	}
 	if c.ClusterID == "" {
 		return Config{}, fmt.Errorf("MONITOR_CLUSTER_ID is required")
@@ -66,8 +67,12 @@ func ConfigFromEnv() (Config, error) {
 	if len(c.ClusterID) > 128 || !utf8.ValidString(c.ClusterID) {
 		return Config{}, fmt.Errorf("MONITOR_CLUSTER_ID must be valid UTF-8 and at most 128 bytes")
 	}
-	if c.Token == "" {
-		return Config{}, fmt.Errorf("MONITOR_TOKEN is required")
+	encodedKey := strings.TrimSpace(os.Getenv("MONITOR_KEY"))
+	if encodedKey == "" {
+		return Config{}, fmt.Errorf("MONITOR_KEY is required")
+	}
+	if c.Key, err = base64.StdEncoding.Strict().DecodeString(encodedKey); err != nil || len(c.Key) != 32 {
+		return Config{}, fmt.Errorf("MONITOR_KEY must be Base64-encoded and decode to exactly 32 bytes")
 	}
 	if c.Auth == "" {
 		return Config{}, fmt.Errorf("MONITOR_AUTH is required")

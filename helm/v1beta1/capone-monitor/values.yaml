@@ -7,7 +7,7 @@ image:
 monitor:
   endpoint: ""
   clusterID: ""
-  token: ""
+  key: ""
   authSecretName: ""
   chartNamespace: kube-system
   chartAnnotation: oneks.opennebula.io/chart-id

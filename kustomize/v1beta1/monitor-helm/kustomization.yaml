@@ -67,8 +67,8 @@ patches:
       path: /metadata/namespace
       value: '{{ .Release.Namespace }}'
     - op: replace
-      path: /stringData/MONITOR_TOKEN
-      value: '{{ required "monitor.token is required" .Values.monitor.token }}'
+      path: /stringData/MONITOR_KEY
+      value: '{{ required "monitor.key is required" .Values.monitor.key }}'
 - target:
     kind: Deployment
     name: capone-cluster-monitor

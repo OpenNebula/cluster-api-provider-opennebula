@@ -13,6 +13,10 @@ package monitor
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -42,32 +46,60 @@ type Sender interface {
 	Send(context.Context, CallbackPayload) error
 }
 
-type HTTPSender struct {
+type encryptedEnvelope struct {
+	Payload string `json:"payload"`
+}
+
+type HTTPEncryptedSender struct {
 	endpoint string
-	token    string
 	auth     string
+	aead     cipher.AEAD
+	random   io.Reader
 	client   *http.Client
 }
 
-func NewHTTPSender(config Config) *HTTPSender {
-	return &HTTPSender{
+func NewHTTPEncryptedSender(config Config) (*HTTPEncryptedSender, error) {
+	block, err := aes.NewCipher(config.Key)
+	if err != nil {
+		return nil, fmt.Errorf("create AES cipher: %w", err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("create AES-GCM: %w", err)
+	}
+	return &HTTPEncryptedSender{
 		endpoint: strings.TrimRight(config.Endpoint, "/") + "/clusters/" +
 			url.PathEscape(config.ClusterID) + "/status",
-		token: config.Token,
-		auth:  config.Auth,
+		auth:   config.Auth,
+		aead:   aead,
+		random: rand.Reader,
 		client: &http.Client{
 			Timeout: config.HTTPTimeout,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				return fmt.Errorf("callback redirects are disabled")
 			},
 		},
-	}
+	}, nil
 }
 
-func (s *HTTPSender) Send(ctx context.Context, payload CallbackPayload) error {
-	body, err := json.Marshal(payload)
+func (s *HTTPEncryptedSender) Send(ctx context.Context, payload CallbackPayload) error {
+	plaintext, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("encode report: %w", err)
+	}
+	nonce := make([]byte, s.aead.NonceSize())
+	if _, err := io.ReadFull(s.random, nonce); err != nil {
+		return fmt.Errorf("generate report nonce: %w", err)
+	}
+	sealed := s.aead.Seal(nil, nonce, plaintext, nil)
+	wirePayload := make([]byte, 0, len(nonce)+len(sealed))
+	wirePayload = append(wirePayload, nonce...)
+	wirePayload = append(wirePayload, sealed...)
+	body, err := json.Marshal(encryptedEnvelope{
+		Payload: base64.StdEncoding.EncodeToString(wirePayload),
+	})
+	if err != nil {
+		return fmt.Errorf("encode encrypted report: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -75,7 +107,6 @@ func (s *HTTPSender) Send(ctx context.Context, payload CallbackPayload) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "capone-cluster-monitor")
-	req.Header.Set("X-OneKS-Monitor-Token", s.token)
 	user, password, ok := strings.Cut(s.auth, ":")
 	if !ok || user == "" || password == "" {
 		return fmt.Errorf("MONITOR_AUTH must have the form user:password")

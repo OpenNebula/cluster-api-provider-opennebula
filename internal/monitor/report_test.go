@@ -8,7 +8,11 @@ you may not use this file except in compliance with the License.
 package monitor
 
 import (
+	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -57,7 +61,7 @@ func TestExistingHelmChartReportJSONIsStable(t *testing.T) {
 	}
 }
 
-func TestHTTPSender(t *testing.T) {
+func TestHTTPEncryptedSender(t *testing.T) {
 	var authorization, monitorToken, endpoint, method, contentType, body string
 	transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
 		authorization = request.Header.Get("Authorization")
@@ -74,34 +78,39 @@ func TestHTTPSender(t *testing.T) {
 			Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
 	})
 
-	sender := NewHTTPSender(Config{Endpoint: "https://monitor.example/api/v1", ClusterID: "42", Token: "cluster-token", Auth: "oneadmin:secret", HTTPTimeout: time.Second})
+	key := bytes.Repeat([]byte{0x42}, 32)
+	sender := newTestEncryptedSender(t, "http://monitor.example/api/v1", key)
 	sender.client.Transport = transport
 	if err := sender.Send(context.Background(), Report{Kind: "Node", Name: "worker-1", ResourceVersion: "42", Event: "Updated"}); err != nil {
 		t.Fatalf("Send returned an error: %v", err)
 	}
-	if authorization != "Basic b25lYWRtaW46c2VjcmV0" {
-		t.Fatalf("unexpected Authorization header: %q", authorization)
+	if authorization != "Basic b25lYWRtaW46c2VjcmV0" || monitorToken != "" {
+		t.Fatalf("unexpected authentication headers: authorization=%q token=%q", authorization, monitorToken)
 	}
-	if monitorToken != "cluster-token" {
-		t.Fatalf("unexpected X-OneKS-Monitor-Token header: %q", monitorToken)
-	}
-	if endpoint != "https://monitor.example/api/v1/clusters/42/status" {
+	if endpoint != "http://monitor.example/api/v1/clusters/42/status" {
 		t.Fatalf("unexpected endpoint: %q", endpoint)
 	}
-	if method != http.MethodPost {
-		t.Fatalf("unexpected method: %q", method)
+	if method != http.MethodPost || contentType != "application/json" {
+		t.Fatalf("unexpected request metadata: method=%q content-type=%q", method, contentType)
 	}
-	if contentType != "application/json" {
-		t.Fatalf("unexpected content type: %q", contentType)
+	var envelope encryptedEnvelope
+	if err := json.Unmarshal([]byte(body), &envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	wantPayload := "ERERERERERERERERyEVAegOooh0e0hfTBqLYt0tUb4VjY/ILjT7iboF7" +
+		"gjIRW2JB+gM8vgWrc7Ng6WI/5HgC1DZQ+YetiYw4JfKfrIYg4IcLZnUl" +
+		"TIMFCrYuiGHw0Z2kHBza3aQy"
+	if envelope.Payload != wantPayload {
+		t.Fatalf("encrypted payload changed:\n got: %s\nwant: %s", envelope.Payload, wantPayload)
 	}
 	wantBody := `{"kind":"Node","name":"worker-1","resourceVersion":"42","event":"Updated"}`
-	if body != wantBody {
-		t.Fatalf("unexpected request body:\n got: %s\nwant: %s", body, wantBody)
+	if decrypted := decryptEnvelope(t, body, key); decrypted != wantBody {
+		t.Fatalf("unexpected decrypted body:\n got: %s\nwant: %s", decrypted, wantBody)
 	}
 }
 
-func TestClusterSignalUsesExistingAuthenticatedCallbackWire(t *testing.T) {
-	var body, authorization, token, endpoint string
+func TestClusterSignalUsesEncryptedCallbackWire(t *testing.T) {
+	var body, authorization, token string
 	transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
 		payload, err := io.ReadAll(request.Body)
 		if err != nil {
@@ -110,16 +119,13 @@ func TestClusterSignalUsesExistingAuthenticatedCallbackWire(t *testing.T) {
 		body = string(payload)
 		authorization = request.Header.Get("Authorization")
 		token = request.Header.Get("X-OneKS-Monitor-Token")
-		endpoint = request.URL.String()
 		return &http.Response{
 			StatusCode: http.StatusNoContent, Status: "204 No Content",
 			Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header),
 		}, nil
 	})
-	sender := NewHTTPSender(Config{
-		Endpoint: "https://monitor.example/api/v1", ClusterID: "42",
-		Token: "cluster-token", Auth: "oneadmin:secret", HTTPTimeout: time.Second,
-	})
+	key := bytes.Repeat([]byte{0x24}, 32)
+	sender := newTestEncryptedSender(t, "http://monitor.example/api/v1", key)
 	sender.client.Transport = transport
 	signal := monitoring.ClusterSignal{
 		APIVersion: monitoring.APIVersion, Kind: monitoring.SignalKind,
@@ -132,19 +138,16 @@ func TestClusterSignalUsesExistingAuthenticatedCallbackWire(t *testing.T) {
 	if err := sender.Send(context.Background(), signal); err != nil {
 		t.Fatalf("send ClusterSignal: %v", err)
 	}
-	if authorization != "Basic b25lYWRtaW46c2VjcmV0" || token != "cluster-token" {
-		t.Fatalf("callback authentication changed: authorization=%q token=%q", authorization, token)
-	}
-	if endpoint != "https://monitor.example/api/v1/clusters/42/status" {
-		t.Fatalf("callback endpoint changed: %q", endpoint)
+	if authorization != "Basic b25lYWRtaW46c2VjcmV0" || token != "" {
+		t.Fatalf("unexpected callback headers: authorization=%q token=%q", authorization, token)
 	}
 	want := `{"apiVersion":"monitoring.oneks.opennebula.io/v1alpha1","kind":"ClusterSignal","clusterId":"42","identity":"signal-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG","profile":"health","rule":"availability","source":"prometheus","category":"monitoring","severity":"warning","status":"active","observedAt":"2026-08-06T12:30:00Z","value":0.5,"unit":"ratio","threshold":0.9,"labels":{"zone":"a"},"message":"availability warning"}`
-	if body != want {
-		t.Fatalf("unexpected ClusterSignal callback:\n got: %s\nwant: %s", body, want)
+	if decrypted := decryptEnvelope(t, body, key); decrypted != want {
+		t.Fatalf("unexpected decrypted callback:\n got: %s\nwant: %s", decrypted, want)
 	}
 }
 
-func TestHTTPSenderRejectsRedirectWithoutForwardingCredentials(t *testing.T) {
+func TestHTTPEncryptedSenderRejectsRedirect(t *testing.T) {
 	requests := 0
 	transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
 		requests++
@@ -160,21 +163,70 @@ func TestHTTPSenderRejectsRedirectWithoutForwardingCredentials(t *testing.T) {
 			Body: io.NopCloser(strings.NewReader("")),
 		}, nil
 	})
-	sender := NewHTTPSender(Config{
-		Endpoint: "https://monitor.example/api/v1", ClusterID: "42",
-		Token: "cluster-token", Auth: "oneadmin:secret", HTTPTimeout: time.Second,
-	})
+	sender := newTestEncryptedSender(t, "http://monitor.example/api/v1", bytes.Repeat([]byte{0x42}, 32))
 	sender.client.Transport = transport
-	err := sender.Send(
-		context.Background(),
-		Report{Kind: "Node", Name: "worker-1", Event: "Updated"},
-	)
+	err := sender.Send(context.Background(), Report{Kind: "Node", Name: "worker-1", Event: "Updated"})
 	if err == nil || !strings.Contains(err.Error(), "redirects are disabled") {
 		t.Fatalf("expected redirect rejection, got %v", err)
 	}
 	if requests != 1 {
-		t.Fatalf("expected exactly one HTTPS request, got %d", requests)
+		t.Fatalf("expected exactly one HTTP request, got %d", requests)
 	}
+}
+
+func newTestEncryptedSender(t *testing.T, endpoint string, key []byte) *HTTPEncryptedSender {
+	t.Helper()
+	sender, err := NewHTTPEncryptedSender(Config{
+		Endpoint: endpoint, ClusterID: "42", Key: key,
+		Auth: "oneadmin:secret", HTTPTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("create sender: %v", err)
+	}
+	sender.random = bytes.NewReader(bytes.Repeat([]byte{0x11}, sender.aead.NonceSize()))
+	return sender
+}
+
+func TestHTTPEncryptedSenderRejectsMalformedBasicAuth(t *testing.T) {
+	sender, err := NewHTTPEncryptedSender(Config{
+		Endpoint: "http://monitor.example/api/v1", ClusterID: "42",
+		Key: bytes.Repeat([]byte{0x42}, 32), Auth: "invalid", HTTPTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("create sender: %v", err)
+	}
+	err = sender.Send(context.Background(), Report{Kind: "Node", Name: "worker-1"})
+	if err == nil || !strings.Contains(err.Error(), "MONITOR_AUTH must have the form user:password") {
+		t.Fatalf("expected malformed Basic Auth rejection, got %v", err)
+	}
+}
+
+func decryptEnvelope(t *testing.T, body string, key []byte) string {
+	t.Helper()
+	var envelope encryptedEnvelope
+	if err := json.Unmarshal([]byte(body), &envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	raw, err := base64.StdEncoding.Strict().DecodeString(envelope.Payload)
+	if err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatalf("create AES cipher: %v", err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("create AES-GCM: %v", err)
+	}
+	if len(raw) < aead.NonceSize()+aead.Overhead() {
+		t.Fatalf("encrypted payload is too short")
+	}
+	plaintext, err := aead.Open(nil, raw[:aead.NonceSize()], raw[aead.NonceSize():], nil)
+	if err != nil {
+		t.Fatalf("decrypt payload: %v", err)
+	}
+	return string(plaintext)
 }
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)

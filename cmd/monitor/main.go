@@ -63,7 +63,12 @@ func main() {
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(prometheus.NewGoCollector(), prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
 	metrics := monitor.NewMetrics(registry)
-	watcher, err := monitor.New(config, client, dynamicClient, monitor.NewHTTPSender(config), metrics)
+	sender, err := monitor.NewHTTPEncryptedSender(config)
+	if err != nil {
+		klog.ErrorS(err, "unable to create encrypted callback sender")
+		os.Exit(1)
+	}
+	watcher, err := monitor.New(config, client, dynamicClient, sender, metrics)
 	if err != nil {
 		klog.ErrorS(err, "unable to create monitor")
 		os.Exit(1)

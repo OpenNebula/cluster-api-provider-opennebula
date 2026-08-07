@@ -5,7 +5,7 @@ metadata:
   namespace: kube-system
 data:
   # Replace these values before deploying.
-  MONITOR_ENDPOINT: "https://monitoring.example.invalid/api/v1"
+  MONITOR_ENDPOINT: "http://monitoring.example.invalid/api/v1"
   MONITOR_CLUSTER_ID: "replace-me"
   MONITOR_CHART_ANNOTATION: "oneks.opennebula.io/chart-id"
   MONITOR_HTTP_TIMEOUT: "10s"
