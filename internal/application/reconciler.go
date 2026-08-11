@@ -51,6 +51,7 @@ var helmChartGVK = schema.GroupVersionKind{
 
 type Reconciler struct {
 	client.Client
+	APIReader         client.Reader
 	Scheme            *runtime.Scheme
 	Recorder          record.EventRecorder
 	ClusterID         string
@@ -88,12 +89,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 		return r.recordTerminal(ctx, app, validationError.Reason, validationError.Message, false)
 	}
 
-	if !deleting {
-		if err := r.checkTargetNamespace(ctx); err != nil {
+	if !deleting && !app.Spec.Release.CreateNamespace {
+		if err := r.checkTargetNamespace(ctx, app.Spec.Release.TargetNamespace); err != nil {
 			if apierrors.IsNotFound(err) {
 				result, statusErr := r.recordTerminal(
 					ctx, app, "TargetNamespaceMissing",
-					fmt.Sprintf("target namespace %s is missing", WorkloadNamespace), false,
+					fmt.Sprintf("target namespace %s is missing", app.Spec.Release.TargetNamespace), false,
 				)
 				if statusErr != nil {
 					return ctrl.Result{}, statusErr
@@ -152,9 +153,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 	return r.reconcileStatus(ctx, app, false)
 }
 
-func (r *Reconciler) checkTargetNamespace(ctx context.Context) error {
+func (r *Reconciler) checkTargetNamespace(ctx context.Context, targetNamespace string) error {
 	namespace := &corev1.Namespace{}
-	return r.Get(ctx, types.NamespacedName{Name: WorkloadNamespace}, namespace)
+	reader := client.Reader(r.Client)
+	if r.APIReader != nil {
+		reader = r.APIReader
+	}
+	return reader.Get(ctx, types.NamespacedName{Name: targetNamespace}, namespace)
 }
 
 func (r *Reconciler) preflightOwnership(ctx context.Context, app *applicationv1.OneKSApplication, deleting bool) error {
@@ -271,11 +276,15 @@ func desiredHelmChart(app *applicationv1.OneKSApplication) *unstructured.Unstruc
 	object := helmChartObject(app.Spec.Release.ReleaseName)
 	object.SetLabels(ownershipLabels(app))
 	object.SetAnnotations(map[string]string{ChartIDAnnotation: app.Spec.Release.ChartID})
-	object.Object["spec"] = map[string]any{
-		"repo": app.Spec.Release.RepositoryURL, "chart": app.Spec.Release.Chart,
+	spec := map[string]any{
+		"chart":   app.Spec.Release.Chart,
 		"version": app.Spec.Release.Version, "targetNamespace": app.Spec.Release.TargetNamespace,
 		"createNamespace": app.Spec.Release.CreateNamespace, "valuesContent": app.Spec.Release.ValuesContent,
 	}
+	if app.Spec.Release.RepositoryURL != "" {
+		spec["repo"] = app.Spec.Release.RepositoryURL
+	}
+	object.Object["spec"] = spec
 	return object
 }
 

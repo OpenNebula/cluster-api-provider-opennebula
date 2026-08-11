@@ -32,21 +32,36 @@ const (
 	LabelApplicationUID       = "applications.oneks.opennebula.io/uid"
 	LabelClusterID            = "applications.oneks.opennebula.io/cluster-id"
 	LabelPlanDigest           = "applications.oneks.opennebula.io/plan-digest"
+	LabelRole                 = "applications.oneks.opennebula.io/role"
 	LabelManagedBy            = "applications.oneks.opennebula.io/managed-by"
 	ManagedByValue            = "oneks-application-controller"
 	RootManagedByValue        = "oneks"
 	ProducerValue             = "oneks-server"
+	RootRoleValue             = "root"
+	DependencyRoleValue       = "dependency"
 	ChartIDAnnotation         = "oneks.opennebula.io/chart-id"
 )
 
 func producerLabels(app *applicationv1.OneKSApplication) map[string]string {
-	return map[string]string{
+	labels := map[string]string{
 		LabelRootManagedBy:    RootManagedByValue,
 		LabelProducer:         ProducerValue,
 		LabelClusterID:        app.Spec.ClusterID,
 		LabelPlanDigest:       app.Spec.PlanDigest,
 		LabelCatalogueChartID: app.Spec.CatalogueChartID,
 	}
+	if app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha2 {
+		return labels
+	}
+	switch app.Spec.Role {
+	case applicationv1.ApplicationRoleRoot:
+		labels[LabelRole] = RootRoleValue
+	case applicationv1.ApplicationRoleDependency:
+		labels[LabelRootManagedBy] = ManagedByValue
+		labels[LabelProducer] = ManagedByValue
+		labels[LabelRole] = DependencyRoleValue
+	}
+	return labels
 }
 
 func producerLabelsMatch(app *applicationv1.OneKSApplication) bool {

@@ -5,5 +5,4 @@ metadata:
 rules:
 - apiGroups: [""]
   resources: ["namespaces"]
-  resourceNames: ["oneks-poc-workloads"]
   verbs: ["get"]

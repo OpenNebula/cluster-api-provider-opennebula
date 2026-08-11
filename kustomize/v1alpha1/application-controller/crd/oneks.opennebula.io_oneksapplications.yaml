@@ -69,17 +69,209 @@ spec:
                 - Delete
                 - Retain
                 type: string
+              dependencies:
+                items:
+                  properties:
+                    catalogueChartID:
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$
+                      type: string
+                    name:
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    planDigest:
+                      maxLength: 50
+                      pattern: ^sha256-[A-Za-z0-9_-]{43}$
+                      type: string
+                  required:
+                  - catalogueChartID
+                  - name
+                  - planDigest
+                  type: object
+                maxItems: 16
+                type: array
+              dependencyPlans:
+                items:
+                  properties:
+                    catalogueChartID:
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$
+                      type: string
+                    deletionPolicy:
+                      enum:
+                      - Delete
+                      - Retain
+                      type: string
+                    dependencies:
+                      items:
+                        properties:
+                          catalogueChartID:
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$
+                            type: string
+                          name:
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                            type: string
+                          planDigest:
+                            maxLength: 50
+                            pattern: ^sha256-[A-Za-z0-9_-]{43}$
+                            type: string
+                        required:
+                        - catalogueChartID
+                        - name
+                        - planDigest
+                        type: object
+                      maxItems: 16
+                      type: array
+                    name:
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    planDigest:
+                      maxLength: 50
+                      pattern: ^sha256-[A-Za-z0-9_-]{43}$
+                      type: string
+                    release:
+                      properties:
+                        chart:
+                          maxLength: 1024
+                          minLength: 1
+                          type: string
+                        chartID:
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$
+                          type: string
+                        createNamespace:
+                          type: boolean
+                        releaseName:
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                          type: string
+                        repositoryURL:
+                          maxLength: 2048
+                          type: string
+                        targetNamespace:
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                          type: string
+                        valuesContent:
+                          maxLength: 65536
+                          type: string
+                        version:
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                      required:
+                      - chart
+                      - chartID
+                      - createNamespace
+                      - releaseName
+                      - repositoryURL
+                      - targetNamespace
+                      - valuesContent
+                      - version
+                      type: object
+                    resources:
+                      items:
+                        properties:
+                          apiVersion:
+                            enum:
+                            - v1
+                            type: string
+                          data:
+                            additionalProperties:
+                              type: string
+                            maxProperties: 128
+                            type: object
+                          deletionPolicy:
+                            enum:
+                            - Delete
+                            - Retain
+                            type: string
+                          id:
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$
+                            type: string
+                          kind:
+                            enum:
+                            - ConfigMap
+                            type: string
+                          name:
+                            maxLength: 253
+                            minLength: 1
+                            pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
+                            type: string
+                          namespace:
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                            type: string
+                        required:
+                        - apiVersion
+                        - data
+                        - deletionPolicy
+                        - id
+                        - kind
+                        - name
+                        - namespace
+                        type: object
+                      maxItems: 16
+                      type: array
+                  required:
+                  - catalogueChartID
+                  - deletionPolicy
+                  - dependencies
+                  - name
+                  - planDigest
+                  - release
+                  - resources
+                  type: object
+                  x-kubernetes-validations:
+                  - message: release.chartID must equal catalogueChartID
+                    rule: self.release.chartID == self.catalogueChartID
+                  - message: dependency release must use either an HTTPS repositoryURL
+                      with a non-OCI chart or an empty repositoryURL with an OCI chart
+                    rule: (size(self.release.repositoryURL) == 0 && self.release.chart.matches('^oci://[^[:space:]]+$'))
+                      || (self.release.repositoryURL.matches('^https://[^[:space:]]+$')
+                      && !self.release.chart.startsWith('oci://'))
+                  - message: resources must use the release targetNamespace
+                    rule: self.resources.all(r, r.__namespace__ == self.release.targetNamespace)
+                  - message: dependency plan with createNamespace must not contain
+                      resources
+                    rule: '!self.release.createNamespace || size(self.resources) ==
+                      0'
+                  - message: dependency names must be unique
+                    rule: self.dependencies.all(d, self.dependencies.filter(x, x.name
+                      == d.name).size() == 1)
+                  - message: dependency plan must not directly reference itself
+                    rule: self.dependencies.all(d, d.name != self.name)
+                maxItems: 16
+                type: array
               executionMode:
                 enum:
                 - Observe
                 - Execute
                 type: string
               planDigest:
+                maxLength: 50
                 pattern: ^sha256-[A-Za-z0-9_-]{43}$
                 type: string
               planVersion:
                 enum:
                 - oneks.opennebula.io/plan-v1alpha1
+                - oneks.opennebula.io/plan-v1alpha2
                 type: string
               release:
                 properties:
@@ -101,14 +293,11 @@ spec:
                     type: string
                   repositoryURL:
                     maxLength: 2048
-                    minLength: 1
-                    pattern: ^https://[^[:space:]]+$
                     type: string
                   targetNamespace:
-                    enum:
-                    - oneks-poc-workloads
                     maxLength: 63
                     minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                     type: string
                   valuesContent:
                     maxLength: 65536
@@ -127,9 +316,6 @@ spec:
                 - valuesContent
                 - version
                 type: object
-                x-kubernetes-validations:
-                - message: createNamespace must be false
-                  rule: '!self.createNamespace'
               resources:
                 items:
                   properties:
@@ -162,10 +348,9 @@ spec:
                       pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
                       type: string
                     namespace:
-                      enum:
-                      - oneks-poc-workloads
                       maxLength: 63
                       minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                       type: string
                   required:
                   - apiVersion
@@ -178,6 +363,11 @@ spec:
                   type: object
                 maxItems: 16
                 type: array
+              role:
+                enum:
+                - Root
+                - Dependency
+                type: string
             required:
             - catalogueChartID
             - clusterID
@@ -191,6 +381,51 @@ spec:
             x-kubernetes-validations:
             - message: spec is immutable
               rule: self == oldSelf
+            - message: plan-v1alpha1 does not permit role or dependency fields and
+                requires the fixed workload namespace without namespace creation
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha1' || (!has(self.role)
+                && !has(self.dependencies) && !has(self.dependencyPlans) && self.release.targetNamespace
+                == 'oneks-poc-workloads' && !self.release.createNamespace && self.resources.all(r,
+                r.__namespace__ == 'oneks-poc-workloads'))
+            - message: plan-v1alpha1 requires a non-empty HTTPS repositoryURL
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha1' || (size(self.release.repositoryURL)
+                >= 1 && self.release.repositoryURL.matches('^https://[^[:space:]]+$'))
+            - message: plan-v1alpha2 requires role
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || has(self.role)
+            - message: plan-v1alpha2 release must use either an HTTPS repositoryURL
+                with a non-OCI chart or an empty repositoryURL with an OCI chart
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || ((size(self.release.repositoryURL)
+                == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$')
+                && !self.release.chart.startsWith('oci://')))
+            - message: plan-v1alpha2 Root requires the fixed workload namespace without
+                namespace creation
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role
+                != 'Root' || (self.release.targetNamespace == 'oneks-poc-workloads'
+                && !self.release.createNamespace)
+            - message: plan-v1alpha2 Dependency must not contain dependencyPlans
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role
+                != 'Dependency' || !has(self.dependencyPlans) || size(self.dependencyPlans)
+                == 0
+            - message: plan-v1alpha2 Dependency with createNamespace must not contain
+                resources
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role
+                != 'Dependency' || !self.release.createNamespace || size(self.resources)
+                == 0
+            - message: resources must use the release targetNamespace
+              rule: self.resources.all(r, r.__namespace__ == self.release.targetNamespace)
+            - message: dependency names must be unique
+              rule: '!has(self.dependencies) || self.dependencies.all(d, self.dependencies.filter(x,
+                x.name == d.name).size() == 1)'
+            - message: dependency plan names must be unique
+              rule: '!has(self.dependencyPlans) || self.dependencyPlans.all(p, self.dependencyPlans.filter(x,
+                x.name == p.name).size() == 1)'
+            - message: each direct Root dependency must resolve to exactly one matching
+                dependencyPlan
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role
+                != 'Root' || !has(self.dependencies) || (has(self.dependencyPlans)
+                && self.dependencies.all(d, self.dependencyPlans.filter(p, p.name
+                == d.name && p.catalogueChartID == d.catalogueChartID && p.planDigest
+                == d.planDigest).size() == 1))
           status:
             properties:
               conditions:
@@ -363,6 +598,11 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: a Dependency application must not directly reference itself
+          rule: self.spec.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.spec.role
+            != 'Dependency' || !has(self.spec.dependencies) || self.spec.dependencies.all(d,
+            d.name != self.metadata.name)
     served: true
     storage: true
     subresources:

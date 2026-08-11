@@ -19,7 +19,9 @@ package v1alpha1
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 const (
-	PlanVersion          = "oneks.opennebula.io/plan-v1alpha1"
+	PlanVersionV1Alpha1  = "oneks.opennebula.io/plan-v1alpha1"
+	PlanVersionV1Alpha2  = "oneks.opennebula.io/plan-v1alpha2"
+	PlanVersion          = PlanVersionV1Alpha1
 	ApplicationNamespace = "oneks-system"
 	ApplicationFinalizer = "applications.oneks.opennebula.io/finalizer"
 	FieldManager         = "oneks-application-controller"
@@ -40,6 +42,13 @@ const (
 	DeletionPolicyRetain DeletionPolicy = "Retain"
 )
 
+type ApplicationRole string
+
+const (
+	ApplicationRoleRoot       ApplicationRole = "Root"
+	ApplicationRoleDependency ApplicationRole = "Dependency"
+)
+
 type ApplicationPhase string
 
 const (
@@ -53,6 +62,17 @@ const (
 
 // OneKSApplicationSpec is an immutable, compiled application plan.
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha1' || (!has(self.role) && !has(self.dependencies) && !has(self.dependencyPlans) && self.release.targetNamespace == 'oneks-poc-workloads' && !self.release.createNamespace && self.resources.all(r, r.__namespace__ == 'oneks-poc-workloads'))",message="plan-v1alpha1 does not permit role or dependency fields and requires the fixed workload namespace without namespace creation"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha1' || (size(self.release.repositoryURL) >= 1 && self.release.repositoryURL.matches('^https://[^[:space:]]+$'))",message="plan-v1alpha1 requires a non-empty HTTPS repositoryURL"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || has(self.role)",message="plan-v1alpha2 requires role"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || ((size(self.release.repositoryURL) == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$') && !self.release.chart.startsWith('oci://')))",message="plan-v1alpha2 release must use either an HTTPS repositoryURL with a non-OCI chart or an empty repositoryURL with an OCI chart"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role != 'Root' || (self.release.targetNamespace == 'oneks-poc-workloads' && !self.release.createNamespace)",message="plan-v1alpha2 Root requires the fixed workload namespace without namespace creation"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role != 'Dependency' || !has(self.dependencyPlans) || size(self.dependencyPlans) == 0",message="plan-v1alpha2 Dependency must not contain dependencyPlans"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role != 'Dependency' || !self.release.createNamespace || size(self.resources) == 0",message="plan-v1alpha2 Dependency with createNamespace must not contain resources"
+// +kubebuilder:validation:XValidation:rule="self.resources.all(r, r.__namespace__ == self.release.targetNamespace)",message="resources must use the release targetNamespace"
+// +kubebuilder:validation:XValidation:rule="!has(self.dependencies) || self.dependencies.all(d, self.dependencies.filter(x, x.name == d.name).size() == 1)",message="dependency names must be unique"
+// +kubebuilder:validation:XValidation:rule="!has(self.dependencyPlans) || self.dependencyPlans.all(p, self.dependencyPlans.filter(x, x.name == p.name).size() == 1)",message="dependency plan names must be unique"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role != 'Root' || !has(self.dependencies) || (has(self.dependencyPlans) && self.dependencies.all(d, self.dependencyPlans.filter(p, p.name == d.name && p.catalogueChartID == d.catalogueChartID && p.planDigest == d.planDigest).size() == 1))",message="each direct Root dependency must resolve to exactly one matching dependencyPlan"
 type OneKSApplicationSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
@@ -62,8 +82,9 @@ type OneKSApplicationSpec struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$`
 	CatalogueChartID string `json:"catalogueChartID"`
-	// +kubebuilder:validation:Enum=oneks.opennebula.io/plan-v1alpha1
+	// +kubebuilder:validation:Enum=oneks.opennebula.io/plan-v1alpha1;oneks.opennebula.io/plan-v1alpha2
 	PlanVersion string `json:"planVersion"`
+	// +kubebuilder:validation:MaxLength=50
 	// +kubebuilder:validation:Pattern=`^sha256-[A-Za-z0-9_-]{43}$`
 	PlanDigest string `json:"planDigest"`
 	// +kubebuilder:validation:Enum=Observe;Execute
@@ -71,19 +92,22 @@ type OneKSApplicationSpec struct {
 	Release       ReleaseSpec   `json:"release"`
 	// +kubebuilder:validation:MaxItems=16
 	Resources []ResourceSpec `json:"resources"`
+	// +kubebuilder:validation:Enum=Root;Dependency
+	Role ApplicationRole `json:"role,omitempty"`
+	// +kubebuilder:validation:MaxItems=16
+	Dependencies []DependencyReference `json:"dependencies,omitempty"`
+	// +kubebuilder:validation:MaxItems=16
+	DependencyPlans []DependencyPlan `json:"dependencyPlans,omitempty"`
 	// +kubebuilder:validation:Enum=Delete;Retain
 	DeletionPolicy DeletionPolicy `json:"deletionPolicy"`
 }
 
-// +kubebuilder:validation:XValidation:rule="!self.createNamespace",message="createNamespace must be false"
 type ReleaseSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$`
 	ChartID string `json:"chartID"`
-	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=2048
-	// +kubebuilder:validation:Pattern=`^https://[^[:space:]]+$`
 	RepositoryURL string `json:"repositoryURL"`
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=1024
@@ -97,7 +121,7 @@ type ReleaseSpec struct {
 	ReleaseName string `json:"releaseName"`
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:Enum=oneks-poc-workloads
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	TargetNamespace string `json:"targetNamespace"`
 	CreateNamespace bool   `json:"createNamespace"`
 	// +kubebuilder:validation:MaxLength=65536
@@ -115,7 +139,7 @@ type ResourceSpec struct {
 	Kind string `json:"kind"`
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:Enum=oneks-poc-workloads
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	Namespace string `json:"namespace"`
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
@@ -123,6 +147,47 @@ type ResourceSpec struct {
 	Name string `json:"name"`
 	// +kubebuilder:validation:MaxProperties=128
 	Data map[string]string `json:"data"`
+	// +kubebuilder:validation:Enum=Delete;Retain
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy"`
+}
+
+type DependencyReference struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Name string `json:"name"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$`
+	CatalogueChartID string `json:"catalogueChartID"`
+	// +kubebuilder:validation:MaxLength=50
+	// +kubebuilder:validation:Pattern=`^sha256-[A-Za-z0-9_-]{43}$`
+	PlanDigest string `json:"planDigest"`
+}
+
+// +kubebuilder:validation:XValidation:rule="self.release.chartID == self.catalogueChartID",message="release.chartID must equal catalogueChartID"
+// +kubebuilder:validation:XValidation:rule="(size(self.release.repositoryURL) == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$') && !self.release.chart.startsWith('oci://'))",message="dependency release must use either an HTTPS repositoryURL with a non-OCI chart or an empty repositoryURL with an OCI chart"
+// +kubebuilder:validation:XValidation:rule="self.resources.all(r, r.__namespace__ == self.release.targetNamespace)",message="resources must use the release targetNamespace"
+// +kubebuilder:validation:XValidation:rule="!self.release.createNamespace || size(self.resources) == 0",message="dependency plan with createNamespace must not contain resources"
+// +kubebuilder:validation:XValidation:rule="self.dependencies.all(d, self.dependencies.filter(x, x.name == d.name).size() == 1)",message="dependency names must be unique"
+// +kubebuilder:validation:XValidation:rule="self.dependencies.all(d, d.name != self.name)",message="dependency plan must not directly reference itself"
+type DependencyPlan struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Name string `json:"name"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$`
+	CatalogueChartID string `json:"catalogueChartID"`
+	// +kubebuilder:validation:MaxLength=50
+	// +kubebuilder:validation:Pattern=`^sha256-[A-Za-z0-9_-]{43}$`
+	PlanDigest string      `json:"planDigest"`
+	Release    ReleaseSpec `json:"release"`
+	// +kubebuilder:validation:MaxItems=16
+	Resources []ResourceSpec `json:"resources"`
+	// +kubebuilder:validation:MaxItems=16
+	Dependencies []DependencyReference `json:"dependencies"`
 	// +kubebuilder:validation:Enum=Delete;Retain
 	DeletionPolicy DeletionPolicy `json:"deletionPolicy"`
 }
@@ -196,6 +261,7 @@ type OneKSApplicationStatus struct {
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Chart",type=string,JSONPath=`.spec.release.chart`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// +kubebuilder:validation:XValidation:rule="self.spec.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.spec.role != 'Dependency' || !has(self.spec.dependencies) || self.spec.dependencies.all(d, d.name != self.metadata.name)",message="a Dependency application must not directly reference itself"
 type OneKSApplication struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

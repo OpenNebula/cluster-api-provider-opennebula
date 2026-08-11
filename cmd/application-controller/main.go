@@ -111,7 +111,7 @@ func run(config controllerConfig) error {
 	}
 
 	reconciler := &application.Reconciler{
-		Client: manager.GetClient(), Scheme: manager.GetScheme(),
+		Client: manager.GetClient(), APIReader: manager.GetAPIReader(), Scheme: manager.GetScheme(),
 		Recorder:  manager.GetEventRecorderFor(applicationv1.FieldManager),
 		ClusterID: config.clusterID, ControllerVersion: config.controllerVersion,
 		RequeueAfter: config.reconciliationPoll,

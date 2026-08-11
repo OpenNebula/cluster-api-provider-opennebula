@@ -42,7 +42,10 @@ func baseStatus(app *applicationv1.OneKSApplication, controllerVersion string) a
 	status.ObservedGeneration = app.Generation
 	status.ObservedPlanDigest = app.Spec.PlanDigest
 	status.ControllerVersion = controllerVersion
-	status.SupportedPlanVersions = []string{applicationv1.PlanVersion}
+	status.SupportedPlanVersions = []string{
+		applicationv1.PlanVersionV1Alpha1,
+		applicationv1.PlanVersionV1Alpha2,
+	}
 	status.LastError = nil
 	return *status
 }
