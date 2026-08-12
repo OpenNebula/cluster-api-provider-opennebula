@@ -603,12 +603,30 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 		}
 	}
 
+	if err := r.removeApplicationFinalizer(ctx, app); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *Reconciler) removeApplicationFinalizer(ctx context.Context, app *applicationv1.OneKSApplication) error {
 	updated := app.DeepCopy()
 	updated.Finalizers = removeString(updated.Finalizers, applicationv1.ApplicationFinalizer)
 	if err := r.Update(ctx, updated); err != nil {
-		return ctrl.Result{}, fmt.Errorf("remove application finalizer: %w", err)
+		current := &applicationv1.OneKSApplication{}
+		getErr := r.authoritativeReader().Get(ctx, client.ObjectKeyFromObject(app), current)
+		if apierrors.IsNotFound(getErr) {
+			return nil
+		}
+		if getErr == nil && app.UID != "" && current.UID != "" && current.UID != app.UID {
+			return nil
+		}
+		if getErr != nil {
+			return fmt.Errorf("remove application finalizer: %w (authoritative verification failed: %v)", err, getErr)
+		}
+		return fmt.Errorf("remove application finalizer: %w", err)
 	}
-	return ctrl.Result{}, nil
+	return nil
 }
 
 func (r *Reconciler) recordTerminal(ctx context.Context, app *applicationv1.OneKSApplication, reason, message string, ownershipConflict bool) (ctrl.Result, error) {
