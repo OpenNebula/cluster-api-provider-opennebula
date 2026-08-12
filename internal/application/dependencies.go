@@ -17,9 +17,9 @@ limitations under the License.
 package application
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"reflect"
 
 	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -78,7 +78,18 @@ func dependencyCompatibilityError(existing, expected *applicationv1.OneKSApplica
 	if len(existing.OwnerReferences) != 0 {
 		return conflict("shared dependencies must not have ownerReferences")
 	}
-	if !reflect.DeepEqual(existing.Spec, expected.Spec) {
+	if existing.Spec.PlanDigest != expected.Spec.PlanDigest {
+		return conflict("immutable spec differs from the expected dependency plan")
+	}
+	existingCanonical, err := CanonicalPlan(existing.Spec)
+	if err != nil {
+		return conflict(fmt.Sprintf("current spec cannot be canonicalized: %v", err))
+	}
+	expectedCanonical, err := CanonicalPlan(expected.Spec)
+	if err != nil {
+		return conflict(fmt.Sprintf("expected dependency spec cannot be canonicalized: %v", err))
+	}
+	if !bytes.Equal(existingCanonical, expectedCanonical) {
 		return conflict("immutable spec differs from the expected dependency plan")
 	}
 	if !producerLabelsMatch(existing) {

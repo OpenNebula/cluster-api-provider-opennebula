@@ -18,6 +18,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"testing"
@@ -67,6 +68,48 @@ func TestRootMaterializesFlatTransitiveDependencyGraph(t *testing.T) {
 	}
 }
 
+func TestDependencyCompatibilityAcceptsAPINormalizedEmptyDependencies(t *testing.T) {
+	plan := dependencyPlanForTest(
+		"shared-release",
+		"shared-chart",
+		[]applicationv1.DependencyReference{},
+	)
+	root := validPlanV1Alpha2RootGraph(
+		t,
+		[]applicationv1.DependencyReference{dependencyReferenceForPlan(plan)},
+		[]applicationv1.DependencyPlan{plan},
+	)
+
+	expected := expectedDependencyApplication(root, plan)
+	if expected.Spec.Dependencies == nil {
+		t.Fatal("test setup did not produce a non-nil empty dependencies slice")
+	}
+
+	// Reproduce the Kubernetes API JSON round-trip. Dependencies uses
+	// json:",omitempty", so a non-nil empty slice is omitted on the wire and
+	// decoded back as nil.
+	payload, err := json.Marshal(expected)
+	if err != nil {
+		t.Fatalf("marshal expected dependency: %v", err)
+	}
+
+	existing := &applicationv1.OneKSApplication{}
+	if err := json.Unmarshal(payload, existing); err != nil {
+		t.Fatalf("unmarshal API-normalized dependency: %v", err)
+	}
+
+	// Simulate metadata assigned by the Kubernetes API server.
+	existing.UID = types.UID("uid-" + plan.Name)
+
+	if existing.Spec.Dependencies != nil {
+		t.Fatalf("API round-trip retained empty dependencies unexpectedly: %#v", existing.Spec.Dependencies)
+	}
+
+	if conflict := dependencyCompatibilityError(existing, expected, root.Spec.ClusterID); conflict != nil {
+		t.Fatalf("API-normalized empty dependencies were treated as conflicting: %v", conflict)
+	}
+}
+
 func TestDependencyPreflightReusesCompatibleAndCreatesMissing(t *testing.T) {
 	ctx := context.Background()
 	e := dependencyPlanForTest("oneks-e", "chart-e", nil)
@@ -74,12 +117,16 @@ func TestDependencyPreflightReusesCompatibleAndCreatesMissing(t *testing.T) {
 	root := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(d)}, []applicationv1.DependencyPlan{d, e})
 	existing := existingDependencyForTest(root, d)
 	existing.Annotations = map[string]string{"unrelated.example.test/kept": "true"}
+	existing.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	reconciler, _ := testReconciler(t, root, existing)
 
 	reconcileOnce(t, ctx, reconciler, root)
 	reused := getDependencyApplication(t, ctx, reconciler.Client, d.Name)
 	if reused.Annotations["unrelated.example.test/kept"] != "true" {
 		t.Fatalf("compatible dependency metadata was mutated: %#v", reused.Annotations)
+	}
+	if !containsString(reused.Finalizers, applicationv1.ApplicationFinalizer) {
+		t.Fatalf("compatible dependency finalizer was not preserved: %#v", reused.Finalizers)
 	}
 	getDependencyApplication(t, ctx, reconciler.Client, e.Name)
 }
@@ -214,13 +261,12 @@ func TestDependencyPreflightRejectsIncompatibleExistingApplications(t *testing.T
 		name   string
 		mutate func(*applicationv1.OneKSApplication)
 	}{
-		{"different spec and digest", func(app *applicationv1.OneKSApplication) { app.Spec.PlanDigest = validDependencyDigest() }},
+		{"different plan digest", func(app *applicationv1.OneKSApplication) { app.Spec.PlanDigest = validDependencyDigest() }},
 		{"wrong producer labels", func(app *applicationv1.OneKSApplication) { delete(app.Labels, LabelProducer) }},
 		{"Root role", func(app *applicationv1.OneKSApplication) { app.Spec.Role = applicationv1.ApplicationRoleRoot }},
 		{"owner reference", func(app *applicationv1.OneKSApplication) {
 			app.OwnerReferences = []metav1.OwnerReference{{APIVersion: "v1", Kind: "ConfigMap", Name: "owner", UID: "owner-uid"}}
 		}},
-		{"invalid immutable plan", func(app *applicationv1.OneKSApplication) { app.Finalizers = []string{"example.test/unexpected"} }},
 	}
 	for _, test := range mutations {
 		t.Run(test.name, func(t *testing.T) {
