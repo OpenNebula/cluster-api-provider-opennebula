@@ -6,10 +6,10 @@ metadata:
 rules:
 - apiGroups: ["oneks.opennebula.io"]
   resources: ["oneksapplications"]
-  # Create materializes shared dependency applications. Root update is required
-  # because controller-runtime persists finalizers with Client.Update; CRD CEL
-  # validation keeps the application spec immutable.
-  verbs: ["get", "list", "watch", "create", "update"]
+  # Create materializes shared Dependency applications, update persists
+  # application finalizers, and delete garbage-collects unreferenced shared
+  # Dependency applications. CRD CEL validation keeps the spec immutable.
+  verbs: ["get", "list", "watch", "create", "update", "delete"]
 - apiGroups: ["oneks.opennebula.io"]
   resources: ["oneksapplications/status"]
   verbs: ["get", "patch", "update"]

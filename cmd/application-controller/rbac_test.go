@@ -36,6 +36,7 @@ func TestApplicationRoleHasOnlyRequiredApplicationWrites(t *testing.T) {
 	}
 	foundRootUpdate := false
 	foundDependencyCreate := false
+	foundDependencyDelete := false
 	for _, rule := range role.Rules {
 		for _, resource := range rule.Resources {
 			if resource == "*" || resource == "secrets" || resource == "namespaces" {
@@ -57,6 +58,9 @@ func TestApplicationRoleHasOnlyRequiredApplicationWrites(t *testing.T) {
 				if verb == "create" {
 					foundDependencyCreate = true
 				}
+				if verb == "delete" {
+					foundDependencyDelete = true
+				}
 			}
 		}
 	}
@@ -65,6 +69,9 @@ func TestApplicationRoleHasOnlyRequiredApplicationWrites(t *testing.T) {
 	}
 	if !foundDependencyCreate {
 		t.Fatal("OneKSApplication create is required for dependency materialization")
+	}
+	if !foundDependencyDelete {
+		t.Fatal("OneKSApplication delete is required for shared dependency garbage collection")
 	}
 
 	helmRBAC, err := os.ReadFile("../../helm/v1alpha1/oneks-application-controller/templates/rbac.yaml")
@@ -75,8 +82,8 @@ func TestApplicationRoleHasOnlyRequiredApplicationWrites(t *testing.T) {
 	if strings.Contains(text, "oneksapplications/finalizers") || strings.Contains(text, "resources: [\"*\"]") || strings.Contains(text, "resources: [\"secrets\"]") {
 		t.Fatalf("Helm RBAC contains a forbidden permission")
 	}
-	if !strings.Contains(text, `verbs: ["get", "list", "watch", "create", "update"]`) {
-		t.Fatal("Helm RBAC lacks required OneKSApplication create/update permissions")
+	if !strings.Contains(text, `verbs: ["get", "list", "watch", "create", "update", "delete"]`) {
+		t.Fatal("Helm RBAC lacks required OneKSApplication create/update/delete permissions")
 	}
 }
 
