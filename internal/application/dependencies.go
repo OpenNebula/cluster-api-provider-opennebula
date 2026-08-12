@@ -61,6 +61,9 @@ func expectedDependencyApplication(root *applicationv1.OneKSApplication, plan ap
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: applicationv1.ApplicationNamespace,
 			Name:      plan.Name,
+			Finalizers: []string{
+				applicationv1.ApplicationFinalizer,
+			},
 		},
 		Spec: dependencyPlanChildSpec(root.Spec.ClusterID, plan),
 	}
@@ -104,7 +107,7 @@ func dependencyCompatibilityError(existing, expected *applicationv1.OneKSApplica
 // materializeRootDependencies performs a complete compatibility scan before it
 // creates any missing application. raced is true when Create reported
 // AlreadyExists; the caller must requeue so the next scan verifies that object.
-func (r *Reconciler) materializeRootDependencies(ctx context.Context, root *applicationv1.OneKSApplication) (raced bool, conflict *DependencyConflictError, err error) {
+func (r *Reconciler) materializeRootDependencies(ctx context.Context, root *applicationv1.OneKSApplication) (raced bool, terminating string, conflict *DependencyConflictError, err error) {
 	missing := make([]*applicationv1.OneKSApplication, 0, len(root.Spec.DependencyPlans))
 	reader := r.authoritativeReader()
 	for _, plan := range root.Spec.DependencyPlans {
@@ -116,23 +119,26 @@ func (r *Reconciler) materializeRootDependencies(ctx context.Context, root *appl
 			continue
 		}
 		if getErr != nil {
-			return false, nil, fmt.Errorf("preflight dependency %s/%s: %w", expected.Namespace, expected.Name, getErr)
+			return false, "", nil, fmt.Errorf("preflight dependency %s/%s: %w", expected.Namespace, expected.Name, getErr)
+		}
+		if !existing.DeletionTimestamp.IsZero() {
+			return false, existing.Name, nil, nil
 		}
 		if compatibilityError := dependencyCompatibilityError(existing, expected, root.Spec.ClusterID); compatibilityError != nil {
-			return false, compatibilityError, nil
+			return false, "", compatibilityError, nil
 		}
 	}
 
 	for _, expected := range missing {
 		if createErr := r.Create(ctx, expected); createErr != nil {
 			if apierrors.IsAlreadyExists(createErr) {
-				return true, nil, nil
+				return true, "", nil, nil
 			}
-			return false, nil, fmt.Errorf("create dependency application %s/%s: %w", expected.Namespace, expected.Name, createErr)
+			return false, "", nil, fmt.Errorf("create dependency application %s/%s: %w", expected.Namespace, expected.Name, createErr)
 		}
 		r.event(root, corev1.EventTypeNormal, "DependencyCreated", fmt.Sprintf("Dependency application %s/%s created", expected.Namespace, expected.Name))
 	}
-	return false, nil, nil
+	return false, "", nil, nil
 }
 
 func (r *Reconciler) observeDependencies(ctx context.Context, app *applicationv1.OneKSApplication) (dependencyObservation, error) {
@@ -161,6 +167,15 @@ func (r *Reconciler) observeDependencies(ctx context.Context, app *applicationv1
 		}
 		if err != nil {
 			return result, fmt.Errorf("observe dependency %s/%s: %w", applicationv1.ApplicationNamespace, reference.Name, err)
+		}
+		if !dependency.DeletionTimestamp.IsZero() {
+			result.ready = false
+			if result.reason == "" {
+				result.current = reference.Name
+				result.reason = "DependencyTerminating"
+				result.message = fmt.Sprintf("Direct dependency %s is terminating", reference.Name)
+			}
+			continue
 		}
 		if conflict := dependencyReferenceConflict(dependency, reference, app.Spec.ClusterID); conflict != nil {
 			result.ready = false
@@ -238,7 +253,7 @@ func dependencyReferenceConflict(dependency *applicationv1.OneKSApplication, ref
 }
 
 func dependencyStatusReady(dependency *applicationv1.OneKSApplication) bool {
-	if !dependencyStatusIsCurrent(dependency) || dependency.Status.Phase != applicationv1.PhaseReady {
+	if !dependency.DeletionTimestamp.IsZero() || !dependencyStatusIsCurrent(dependency) || dependency.Status.Phase != applicationv1.PhaseReady {
 		return false
 	}
 	condition := meta.FindStatusCondition(dependency.Status.Conditions, ConditionReady)
@@ -252,6 +267,82 @@ func dependencyStatusFailed(dependency *applicationv1.OneKSApplication) bool {
 func dependencyStatusIsCurrent(dependency *applicationv1.OneKSApplication) bool {
 	return dependency.Status.ObservedGeneration == dependency.Generation &&
 		dependency.Status.ObservedPlanDigest == dependency.Spec.PlanDigest
+}
+
+func (r *Reconciler) releaseDependencies(ctx context.Context, app *applicationv1.OneKSApplication) (retry bool, err error) {
+	if len(app.Spec.Dependencies) == 0 {
+		return false, nil
+	}
+
+	applications := &applicationv1.OneKSApplicationList{}
+	if err := r.authoritativeReader().List(ctx, applications, client.InNamespace(applicationv1.ApplicationNamespace)); err != nil {
+		return false, fmt.Errorf("list dependency consumers: %w", err)
+	}
+
+	for _, reference := range app.Spec.Dependencies {
+		if hasLiveDependencyConsumer(applications.Items, reference.Name) {
+			continue
+		}
+		retry, err := r.releaseDependency(ctx, app, reference)
+		if err != nil {
+			return false, err
+		}
+		if retry {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func hasLiveDependencyConsumer(applications []applicationv1.OneKSApplication, dependencyName string) bool {
+	for index := range applications {
+		consumer := &applications[index]
+		if consumer.Spec.ExecutionMode != applicationv1.ExecutionModeExecute || !consumer.DeletionTimestamp.IsZero() {
+			continue
+		}
+		for _, reference := range consumer.Spec.Dependencies {
+			if reference.Name == dependencyName {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (r *Reconciler) releaseDependency(ctx context.Context, consumer *applicationv1.OneKSApplication, reference applicationv1.DependencyReference) (retry bool, err error) {
+	dependency := &applicationv1.OneKSApplication{}
+	key := types.NamespacedName{Namespace: applicationv1.ApplicationNamespace, Name: reference.Name}
+	if err := r.authoritativeReader().Get(ctx, key, dependency); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("get dependency %s/%s for garbage collection: %w", key.Namespace, key.Name, err)
+	}
+	if !dependency.DeletionTimestamp.IsZero() {
+		return false, nil
+	}
+	if conflict := dependencyReferenceConflict(dependency, reference, consumer.Spec.ClusterID); conflict != nil {
+		r.event(consumer, corev1.EventTypeWarning, "DependencyGCConflict", conflict.Error())
+		return false, nil
+	}
+	if dependency.Spec.DeletionPolicy == applicationv1.DeletionPolicyRetain {
+		r.event(consumer, corev1.EventTypeNormal, "DependencyRetained", fmt.Sprintf("Dependency application %s/%s retained by policy", dependency.Namespace, dependency.Name))
+		return false, nil
+	}
+	if !containsString(dependency.Finalizers, applicationv1.ApplicationFinalizer) {
+		updated := dependency.DeepCopy()
+		updated.Finalizers = append(updated.Finalizers, applicationv1.ApplicationFinalizer)
+		if err := r.Update(ctx, updated); err != nil {
+			return false, fmt.Errorf("add dependency cleanup finalizer to %s/%s: %w", dependency.Namespace, dependency.Name, err)
+		}
+		r.event(consumer, corev1.EventTypeNormal, "DependencyFinalizerAdded", fmt.Sprintf("Dependency application %s/%s cleanup finalizer added", dependency.Namespace, dependency.Name))
+		return true, nil
+	}
+	if err := r.Delete(ctx, dependency, deletePreconditions(dependency)...); err != nil && !apierrors.IsNotFound(err) {
+		return false, fmt.Errorf("delete dependency application %s/%s: %w", dependency.Namespace, dependency.Name, err)
+	}
+	r.event(consumer, corev1.EventTypeNormal, "DependencyDeleted", fmt.Sprintf("Dependency application %s/%s deletion requested", dependency.Namespace, dependency.Name))
+	return false, nil
 }
 
 func directDependencyNames(object client.Object) []string {

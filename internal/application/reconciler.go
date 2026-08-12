@@ -132,10 +132,35 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 		return r.reconcileStatus(ctx, app, true, dependencies)
 	}
 
+	if err := r.preflightOwnership(ctx, app, false); err != nil {
+		var conflict *OwnershipConflictError
+		if errors.As(err, &conflict) {
+			return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
+		}
+		return ctrl.Result{}, err
+	}
+
+	if !containsString(app.Finalizers, applicationv1.ApplicationFinalizer) {
+		updated := app.DeepCopy()
+		updated.Finalizers = append(updated.Finalizers, applicationv1.ApplicationFinalizer)
+		if err := r.Update(ctx, updated); err != nil {
+			return ctrl.Result{}, fmt.Errorf("add application finalizer: %w", err)
+		}
+		r.event(updated, corev1.EventTypeNormal, "FinalizerAdded", "Application cleanup finalizer added")
+		return ctrl.Result{Requeue: true}, nil
+	}
+
 	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 && app.Spec.Role == applicationv1.ApplicationRoleRoot {
-		raced, conflict, err := r.materializeRootDependencies(ctx, app)
+		raced, terminating, conflict, err := r.materializeRootDependencies(ctx, app)
 		if err != nil {
 			return ctrl.Result{}, err
+		}
+		if terminating != "" {
+			dependencies := dependencyObservation{
+				enabled: true, ready: false, current: terminating,
+				reason: "DependencyTerminating", message: fmt.Sprintf("Dependency application %s is terminating", terminating),
+			}
+			return r.reconcileStatus(ctx, app, false, dependencies)
 		}
 		if conflict != nil {
 			dependencies := dependencyObservation{
@@ -160,24 +185,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 	}
 	if !dependencies.ready {
 		return r.reconcileStatus(ctx, app, false, dependencies)
-	}
-
-	if err := r.preflightOwnership(ctx, app, false); err != nil {
-		var conflict *OwnershipConflictError
-		if errors.As(err, &conflict) {
-			return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
-		}
-		return ctrl.Result{}, err
-	}
-
-	if !containsString(app.Finalizers, applicationv1.ApplicationFinalizer) {
-		updated := app.DeepCopy()
-		updated.Finalizers = append(updated.Finalizers, applicationv1.ApplicationFinalizer)
-		if err := r.Update(ctx, updated); err != nil {
-			return ctrl.Result{}, fmt.Errorf("add application finalizer: %w", err)
-		}
-		r.event(updated, corev1.EventTypeNormal, "FinalizerAdded", "Application cleanup finalizer added")
-		return ctrl.Result{Requeue: true}, nil
 	}
 
 	resourcesReady, err := r.reconcileConfigMaps(ctx, app)
@@ -584,6 +591,16 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 		}
 		r.event(app, corev1.EventTypeNormal, "ResourceDeleted", fmt.Sprintf("ConfigMap %s/%s deletion requested", resource.Namespace, resource.Name))
 		return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
+	}
+
+	if app.Spec.ExecutionMode == applicationv1.ExecutionModeExecute && containsString(app.Finalizers, applicationv1.ApplicationFinalizer) {
+		retry, err := r.releaseDependencies(ctx, app)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if retry {
+			return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
+		}
 	}
 
 	updated := app.DeepCopy()
