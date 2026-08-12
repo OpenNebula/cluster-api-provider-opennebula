@@ -25,7 +25,7 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-func TestApplicationRoleHasOnlyTheRequiredRootUpdate(t *testing.T) {
+func TestApplicationRoleHasOnlyRequiredApplicationWrites(t *testing.T) {
 	payload, err := os.ReadFile("../../kustomize/v1alpha1/application-controller/role_application.yaml")
 	if err != nil {
 		t.Fatalf("read application Role: %v", err)
@@ -35,6 +35,7 @@ func TestApplicationRoleHasOnlyTheRequiredRootUpdate(t *testing.T) {
 		t.Fatalf("decode application Role: %v", err)
 	}
 	foundRootUpdate := false
+	foundDependencyCreate := false
 	for _, rule := range role.Rules {
 		for _, resource := range rule.Resources {
 			if resource == "*" || resource == "secrets" || resource == "namespaces" {
@@ -53,11 +54,17 @@ func TestApplicationRoleHasOnlyTheRequiredRootUpdate(t *testing.T) {
 				if verb == "update" {
 					foundRootUpdate = true
 				}
+				if verb == "create" {
+					foundDependencyCreate = true
+				}
 			}
 		}
 	}
 	if !foundRootUpdate {
 		t.Fatal("root OneKSApplication update is required for Client.Update finalizers")
+	}
+	if !foundDependencyCreate {
+		t.Fatal("OneKSApplication create is required for dependency materialization")
 	}
 
 	helmRBAC, err := os.ReadFile("../../helm/v1alpha1/oneks-application-controller/templates/rbac.yaml")
@@ -68,7 +75,38 @@ func TestApplicationRoleHasOnlyTheRequiredRootUpdate(t *testing.T) {
 	if strings.Contains(text, "oneksapplications/finalizers") || strings.Contains(text, "resources: [\"*\"]") || strings.Contains(text, "resources: [\"secrets\"]") {
 		t.Fatalf("Helm RBAC contains a forbidden permission")
 	}
-	if !strings.Contains(text, `verbs: ["get", "list", "watch", "update"]`) {
-		t.Fatal("Helm RBAC lacks root OneKSApplication update")
+	if !strings.Contains(text, `verbs: ["get", "list", "watch", "create", "update"]`) {
+		t.Fatal("Helm RBAC lacks required OneKSApplication create/update permissions")
+	}
+}
+
+func TestConfigMapRBACSupportsCompiledDependencyNamespaces(t *testing.T) {
+	payload, err := os.ReadFile("../../kustomize/v1alpha1/application-controller/role_configmap.yaml")
+	if err != nil {
+		t.Fatalf("read ConfigMap ClusterRole: %v", err)
+	}
+	role := rbacv1.ClusterRole{}
+	if err := yaml.Unmarshal(payload, &role); err != nil {
+		t.Fatalf("decode ConfigMap ClusterRole: %v", err)
+	}
+	if role.Kind != "ClusterRole" || len(role.Rules) != 1 || !containsValue(role.Rules[0].Resources, "configmaps") {
+		t.Fatalf("ConfigMap permissions are not cluster-scoped and resource-bounded: %#v", role)
+	}
+	for _, forbidden := range []string{"*", "secrets"} {
+		if containsValue(role.Rules[0].Resources, forbidden) {
+			t.Fatalf("ConfigMap ClusterRole grants forbidden resource %q", forbidden)
+		}
+	}
+
+	bindingPayload, err := os.ReadFile("../../kustomize/v1alpha1/application-controller/role_binding_configmap.yaml")
+	if err != nil {
+		t.Fatalf("read ConfigMap ClusterRoleBinding: %v", err)
+	}
+	binding := rbacv1.ClusterRoleBinding{}
+	if err := yaml.Unmarshal(bindingPayload, &binding); err != nil {
+		t.Fatalf("decode ConfigMap ClusterRoleBinding: %v", err)
+	}
+	if binding.Kind != "ClusterRoleBinding" || binding.RoleRef.Kind != "ClusterRole" || binding.RoleRef.Name != role.Name {
+		t.Fatalf("ConfigMap ClusterRole binding mismatch: %#v", binding)
 	}
 }

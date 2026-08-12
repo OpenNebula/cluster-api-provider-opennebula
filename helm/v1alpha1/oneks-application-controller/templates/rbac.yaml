@@ -6,9 +6,10 @@ metadata:
 rules:
 - apiGroups: ["oneks.opennebula.io"]
   resources: ["oneksapplications"]
-  # Root update is required because controller-runtime persists finalizers with
-  # Client.Update; CRD CEL validation keeps the application spec immutable.
-  verbs: ["get", "list", "watch", "update"]
+  # Create materializes shared dependency applications. Root update is required
+  # because controller-runtime persists finalizers with Client.Update; CRD CEL
+  # validation keeps the application spec immutable.
+  verbs: ["get", "list", "watch", "create", "update"]
 - apiGroups: ["oneks.opennebula.io"]
   resources: ["oneksapplications/status"]
   verbs: ["get", "patch", "update"]
@@ -61,23 +62,21 @@ subjects:
   namespace: oneks-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
   name: oneks-application-controller-configmap
-  namespace: oneks-poc-workloads
 rules:
 - apiGroups: [""]
   resources: ["configmaps"]
   verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: ClusterRoleBinding
 metadata:
   name: {{ include "oneks-application-controller.name" . }}
-  namespace: oneks-poc-workloads
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: Role
+  kind: ClusterRole
   name: oneks-application-controller-configmap
 subjects:
 - kind: ServiceAccount

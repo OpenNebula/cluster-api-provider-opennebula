@@ -26,6 +26,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -56,10 +57,10 @@ func TestControllerConfigValidation(t *testing.T) {
 	}
 }
 
-func TestControllerCacheMatchesNamespaceScopedRBAC(t *testing.T) {
+func TestControllerCacheMatchesRBACScopes(t *testing.T) {
 	options := controllerCacheOptions()
 	assertCacheNamespaces(t, options, &applicationv1.OneKSApplication{}, applicationv1.ApplicationNamespace)
-	assertCacheNamespaces(t, options, &corev1.ConfigMap{}, application.WorkloadNamespace)
+	assertCacheAllNamespaces(t, options, &corev1.ConfigMap{})
 	assertCacheNamespaces(t, options, &batchv1.Job{}, application.HelmChartNamespace)
 
 	foundHelm := false
@@ -79,6 +80,69 @@ func TestControllerCacheMatchesNamespaceScopedRBAC(t *testing.T) {
 	if !foundHelm {
 		t.Fatal("HelmChart cache scope is missing")
 	}
+}
+
+func TestConfigMapCacheFiltersForControllerManagedObjects(t *testing.T) {
+	options := controllerCacheOptions()
+	for object, byObject := range options.ByObject {
+		if reflect.TypeOf(object) != reflect.TypeOf(&corev1.ConfigMap{}) {
+			continue
+		}
+		if byObject.Namespaces == nil || len(byObject.Namespaces) != 0 {
+			t.Fatalf("ConfigMap cache is not cluster-wide: %#v", byObject.Namespaces)
+		}
+		if byObject.Label == nil {
+			t.Fatal("ConfigMap cache lacks a label selector")
+		}
+		managed := labels.Set{application.LabelManagedBy: application.ManagedByValue}
+		if !byObject.Label.Matches(managed) {
+			t.Fatalf("managed ConfigMap does not match cache selector %q", byObject.Label.String())
+		}
+		for _, unmanaged := range []labels.Set{
+			{},
+			{application.LabelManagedBy: "another-controller"},
+			{"unrelated.example.test/label": "value"},
+		} {
+			if byObject.Label.Matches(unmanaged) {
+				t.Fatalf("unmanaged ConfigMap labels %#v match cache selector %q", unmanaged, byObject.Label.String())
+			}
+		}
+		return
+	}
+	t.Fatal("ConfigMap cache configuration is missing")
+}
+
+func TestControllerClientReadsConflictSensitiveObjectsDirectly(t *testing.T) {
+	options := controllerClientOptions()
+	if options.Cache == nil {
+		t.Fatal("controller client cache options are missing")
+	}
+	disabled := map[reflect.Type]bool{}
+	for _, object := range options.Cache.DisableFor {
+		disabled[reflect.TypeOf(object)] = true
+	}
+	for _, expected := range []client.Object{&corev1.Namespace{}, &corev1.ConfigMap{}} {
+		if !disabled[reflect.TypeOf(expected)] {
+			t.Fatalf("%T reads are not configured to bypass the cache", expected)
+		}
+	}
+	if disabled[reflect.TypeOf(&applicationv1.OneKSApplication{})] {
+		t.Fatal("OneKSApplication reads must remain cached for dependency indexing and watches")
+	}
+}
+
+func assertCacheAllNamespaces(t *testing.T, options cache.Options, expected client.Object) {
+	t.Helper()
+	for object, byObject := range options.ByObject {
+		if reflect.TypeOf(object) != reflect.TypeOf(expected) {
+			continue
+		}
+		if byObject.Namespaces == nil || len(byObject.Namespaces) != 0 {
+			t.Fatalf("%T cache is not configured for all namespaces: %#v", expected, byObject.Namespaces)
+		}
+		return
+	}
+	t.Fatalf("cache scope for %T is missing", expected)
 }
 
 func assertCacheNamespaces(t *testing.T, options cache.Options, expected client.Object, namespace string) {

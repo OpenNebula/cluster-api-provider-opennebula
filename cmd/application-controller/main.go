@@ -27,6 +27,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -101,10 +102,7 @@ func run(config controllerConfig) error {
 		LeaderElectionID:        applicationv1.LeaderElectionID,
 		LeaderElectionNamespace: applicationv1.ApplicationNamespace,
 		Cache:                   controllerCacheOptions(),
-		Client: client.Options{Cache: &client.CacheOptions{
-			DisableFor:   []client.Object{&corev1.Namespace{}},
-			Unstructured: true,
-		}},
+		Client:                  controllerClientOptions(),
 	})
 	if err != nil {
 		return fmt.Errorf("create manager: %w", err)
@@ -128,6 +126,13 @@ func run(config controllerConfig) error {
 	return manager.Start(ctrl.SetupSignalHandler())
 }
 
+func controllerClientOptions() client.Options {
+	return client.Options{Cache: &client.CacheOptions{
+		DisableFor:   []client.Object{&corev1.Namespace{}, &corev1.ConfigMap{}},
+		Unstructured: true,
+	}}
+}
+
 func controllerCacheOptions() cache.Options {
 	helmChart := &unstructured.Unstructured{}
 	helmChart.SetGroupVersionKind(schema.GroupVersionKind{
@@ -142,7 +147,10 @@ func controllerCacheOptions() cache.Options {
 				Namespaces: namespaceCache(applicationv1.ApplicationNamespace),
 			},
 			&corev1.ConfigMap{}: {
-				Namespaces: namespaceCache(application.WorkloadNamespace),
+				Namespaces: map[string]cache.Config{},
+				Label: labels.SelectorFromSet(labels.Set{
+					application.LabelManagedBy: application.ManagedByValue,
+				}),
 			},
 			helmChart: {
 				Namespaces: namespaceCache(application.HelmChartNamespace),

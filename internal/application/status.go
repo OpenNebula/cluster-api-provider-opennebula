@@ -26,6 +26,7 @@ import (
 
 const (
 	ConditionPlanValid         = "PlanValid"
+	ConditionDependenciesReady = "DependenciesReady"
 	ConditionResourcesReady    = "ResourcesReady"
 	ConditionHelmReleaseReady  = "HelmReleaseReady"
 	ConditionReady             = "Ready"
@@ -48,6 +49,14 @@ func baseStatus(app *applicationv1.OneKSApplication, controllerVersion string) a
 	}
 	status.LastError = nil
 	return *status
+}
+
+func applicationProgressTotal(app *applicationv1.OneKSApplication) int32 {
+	total := len(app.Spec.Resources) + 1
+	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 {
+		total += len(app.Spec.Dependencies)
+	}
+	return int32(total)
 }
 
 func setCondition(status *applicationv1.OneKSApplicationStatus, generation int64, conditionType string, conditionStatus metav1.ConditionStatus, reason, message string) {

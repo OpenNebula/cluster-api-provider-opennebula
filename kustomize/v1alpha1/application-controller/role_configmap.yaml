@@ -1,8 +1,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
   name: oneks-application-controller-configmap
-  namespace: oneks-poc-workloads
 rules:
 - apiGroups: [""]
   resources: ["configmaps"]

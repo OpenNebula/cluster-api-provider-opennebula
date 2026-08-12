@@ -392,7 +392,7 @@ func validateDependencyPlanDigest(clusterID string, plan applicationv1.Dependenc
 func dependencyPlanChildSpec(clusterID string, plan applicationv1.DependencyPlan) applicationv1.OneKSApplicationSpec {
 	return applicationv1.OneKSApplicationSpec{
 		ClusterID: clusterID, CatalogueChartID: plan.CatalogueChartID,
-		PlanVersion:   applicationv1.PlanVersionV1Alpha2,
+		PlanVersion: applicationv1.PlanVersionV1Alpha2, PlanDigest: plan.PlanDigest,
 		ExecutionMode: applicationv1.ExecutionModeExecute,
 		Release:       plan.Release, Resources: plan.Resources,
 		Role: applicationv1.ApplicationRoleDependency, Dependencies: plan.Dependencies,
