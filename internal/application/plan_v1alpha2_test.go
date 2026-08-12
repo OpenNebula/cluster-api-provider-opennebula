@@ -33,6 +33,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/yaml"
 )
@@ -201,6 +202,139 @@ func TestPlanV1Alpha2AcceptsCompleteDependencyDAGs(t *testing.T) {
 				t.Fatalf("valid dependency DAG rejected: %v", err)
 			}
 		})
+	}
+}
+
+func TestDependencyApplicationNameContract(t *testing.T) {
+	const releaseName = "oneks-prometheus"
+	const expected = "oneks-dep-oneks-prometheus-1cba8adc21bd540f9773"
+
+	if got := dependencyApplicationName(releaseName); got != expected {
+		t.Fatalf("fixed dependency application name = %q, want %q", got, expected)
+	}
+	if first, second := dependencyApplicationName(releaseName), dependencyApplicationName(releaseName); first != second {
+		t.Fatalf("same releaseName produced different names: %q and %q", first, second)
+	}
+	if first, second := dependencyApplicationName("oneks-prometheus"), dependencyApplicationName("oneks-grafana"); first == second {
+		t.Fatalf("different releaseNames produced the same name %q", first)
+	}
+
+	longName := dependencyApplicationName(strings.Repeat("a", 63))
+	if len(longName) > 63 {
+		t.Fatalf("dependency application name has %d characters: %q", len(longName), longName)
+	}
+	if errors := validation.IsDNS1123Label(longName); len(errors) != 0 {
+		t.Fatalf("dependency application name %q is not DNS-1123: %v", longName, errors)
+	}
+}
+
+func TestRootDependencyGraphUsesDeterministicApplicationNames(t *testing.T) {
+	plan := dependencyPlanForTest("shared-release", "shared-chart", nil)
+	expectedName := dependencyApplicationName(plan.Release.ReleaseName)
+	if plan.Name != expectedName {
+		t.Fatalf("dependencyPlan name = %q, want %q", plan.Name, expectedName)
+	}
+	reference := dependencyReferenceForPlan(plan)
+	if reference.Name != expectedName {
+		t.Fatalf("dependency reference name = %q, want %q", reference.Name, expectedName)
+	}
+	app := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{reference}, []applicationv1.DependencyPlan{plan})
+	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
+		t.Fatalf("deterministically named Root dependency graph rejected: %v", err)
+	}
+}
+
+func TestRootRejectsArbitraryDependencyApplicationName(t *testing.T) {
+	plan := dependencyPlanForTest("shared-release", "shared-chart", nil)
+	digestBeforeRename := plan.PlanDigest
+	plan.Name = "arbitrary-dependency"
+	app := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
+	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err == nil || err.Reason != "InvalidDependencyApplicationName" {
+		t.Fatalf("got error %#v, want InvalidDependencyApplicationName", err)
+	}
+	canonical, err := CanonicalPlan(dependencyPlanChildSpec("42", plan))
+	if err != nil {
+		t.Fatalf("canonicalize renamed dependency child: %v", err)
+	}
+	if got := digestForPlanV1Alpha2Test(canonical); got != digestBeforeRename {
+		t.Fatalf("metadata name changed child spec digest: got %s, want %s", got, digestBeforeRename)
+	}
+}
+
+func TestSharedReleaseNameCannotEscapeDependencyIdentity(t *testing.T) {
+	first := dependencyPlanForTest("shared-release", "shared-chart", nil)
+	second := first
+	second.Release.TargetNamespace = "other-monitoring"
+	second.Release.Version = "2.0.0"
+	second.Release.ValuesContent = "mode: other\n"
+	refreshDependencyPlanDigestForTest("42", &second)
+
+	firstExpected := dependencyApplicationName(first.Release.ReleaseName)
+	secondExpected := dependencyApplicationName(second.Release.ReleaseName)
+	if firstExpected != secondExpected || first.Name != firstExpected || second.Name != secondExpected {
+		t.Fatalf("same releaseName escaped shared identity: first=%q second=%q", firstExpected, secondExpected)
+	}
+	if first.PlanDigest == second.PlanDigest {
+		t.Fatal("changed targetNamespace/version/values did not change child digest")
+	}
+
+	app := validPlanV1Alpha2RootGraph(
+		t,
+		[]applicationv1.DependencyReference{dependencyReferenceForPlan(first)},
+		[]applicationv1.DependencyPlan{first, second},
+	)
+	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err == nil || err.Reason != "DuplicateDependencyPlanName" {
+		t.Fatalf("same releaseName escaped duplicate identity validation: %#v", err)
+	}
+}
+
+func TestPlanV1Alpha2DependencyWithDeterministicMetadataNamePasses(t *testing.T) {
+	app := validPlanV1Alpha2Dependency(t)
+	want := dependencyApplicationName(app.Spec.Release.ReleaseName)
+	if app.Name != want {
+		t.Fatalf("dependency metadata.name = %q, want %q", app.Name, want)
+	}
+	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
+		t.Fatalf("deterministically named Dependency rejected: %v", err)
+	}
+}
+
+func TestPlanV1Alpha2DependencyRejectsArbitraryMetadataName(t *testing.T) {
+	app := validPlanV1Alpha2Dependency(t)
+	app.Name = "arbitrary-dependency"
+	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err == nil || err.Reason != "InvalidDependencyApplicationName" {
+		t.Fatalf("got error %#v, want InvalidDependencyApplicationName", err)
+	}
+}
+
+func TestPlanV1Alpha2DependencyMetadataNameUsesOnlyReleaseName(t *testing.T) {
+	app := validPlanV1Alpha2Dependency(t)
+	want := app.Name
+	app.Spec.Release.TargetNamespace = "other-monitoring"
+	app.Spec.Release.Version = "2.0.0"
+	app.Spec.Release.ValuesContent = "mode: other\n"
+	refreshPlanV1Alpha2TestDigest(app)
+
+	if got := dependencyApplicationName(app.Spec.Release.ReleaseName); got != want {
+		t.Fatalf("changed release fields changed dependency metadata.name: got %q, want %q", got, want)
+	}
+	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
+		t.Fatalf("Dependency with unchanged deterministic metadata.name rejected: %v", err)
+	}
+
+	app.Name = "other-dependency"
+	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err == nil || err.Reason != "InvalidDependencyApplicationName" {
+		t.Fatalf("got error %#v, want InvalidDependencyApplicationName", err)
+	}
+}
+
+func TestPlanV1Alpha1DoesNotRequireDependencyApplicationMetadataName(t *testing.T) {
+	app := planV1Alpha1FixtureApplication(t)
+	if app.Name == dependencyApplicationName(app.Spec.Release.ReleaseName) {
+		t.Fatalf("fixture metadata.name unexpectedly equals the dependency identity %q", app.Name)
+	}
+	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
+		t.Fatalf("plan-v1alpha1 application rejected: %v", err)
 	}
 }
 
@@ -632,7 +766,7 @@ func validPlanV1Alpha2Dependency(t *testing.T) *applicationv1.OneKSApplication {
 	t.Helper()
 	app := &applicationv1.OneKSApplication{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "oneks-prometheus", Namespace: applicationv1.ApplicationNamespace,
+			Name: dependencyApplicationName("oneks-prometheus"), Namespace: applicationv1.ApplicationNamespace,
 			UID: types.UID("uid-oneks-prometheus"),
 		},
 		Spec: applicationv1.OneKSApplicationSpec{
@@ -683,7 +817,7 @@ func validDependencyReference() applicationv1.DependencyReference {
 
 func validDependencyPlan() applicationv1.DependencyPlan {
 	plan := applicationv1.DependencyPlan{
-		Name: "oneks-alertmanager", CatalogueChartID: "alertmanager", PlanDigest: validDependencyDigest(),
+		Name: dependencyApplicationName("oneks-alertmanager"), CatalogueChartID: "alertmanager", PlanDigest: validDependencyDigest(),
 		Release: applicationv1.ReleaseSpec{
 			ChartID: "alertmanager", RepositoryURL: "https://prometheus-community.github.io/helm-charts",
 			Chart: "alertmanager", Version: "1.0.0", ReleaseName: "oneks-alertmanager",
@@ -711,12 +845,12 @@ func validPlanV1Alpha2RootGraph(t *testing.T, dependencies []applicationv1.Depen
 	return app
 }
 
-func dependencyPlanForTest(name, catalogueChartID string, dependencies []applicationv1.DependencyReference) applicationv1.DependencyPlan {
+func dependencyPlanForTest(releaseName, catalogueChartID string, dependencies []applicationv1.DependencyReference) applicationv1.DependencyPlan {
 	plan := applicationv1.DependencyPlan{
-		Name: name, CatalogueChartID: catalogueChartID,
+		Name: dependencyApplicationName(releaseName), CatalogueChartID: catalogueChartID,
 		Release: applicationv1.ReleaseSpec{
 			ChartID: catalogueChartID, RepositoryURL: "https://charts.example.test",
-			Chart: catalogueChartID, Version: "1.0.0", ReleaseName: name,
+			Chart: catalogueChartID, Version: "1.0.0", ReleaseName: releaseName,
 			TargetNamespace: "monitoring", CreateNamespace: true, ValuesContent: "{}\n",
 		},
 		Resources: []applicationv1.ResourceSpec{}, Dependencies: dependencies,

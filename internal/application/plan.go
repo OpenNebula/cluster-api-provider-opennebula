@@ -139,6 +139,12 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 	if !validUTF8Bytes(app.Spec.Release.ReleaseName, 1, 63) || len(validation.IsDNS1123Label(app.Spec.Release.ReleaseName)) > 0 {
 		return invalid("InvalidReleaseName", "releaseName is not a DNS-1123 label of at most 63 characters")
 	}
+	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 && app.Spec.Role == applicationv1.ApplicationRoleDependency {
+		expectedName := dependencyApplicationName(app.Spec.Release.ReleaseName)
+		if app.Name != expectedName {
+			return invalid("InvalidDependencyApplicationName", "application name must be %q for releaseName %q", expectedName, app.Spec.Release.ReleaseName)
+		}
+	}
 	if !validUTF8Bytes(app.Spec.Release.TargetNamespace, 1, 63) || len(validation.IsDNS1123Label(app.Spec.Release.TargetNamespace)) > 0 {
 		return invalid("InvalidTargetNamespace", "targetNamespace is not a DNS-1123 label of at most 63 characters")
 	}
@@ -284,6 +290,12 @@ func validateDependencyContract(app *applicationv1.OneKSApplication) *PlanError 
 		if err := validateDependencyPlan(*plan, path); err != nil {
 			return err
 		}
+		if app.Spec.Role == applicationv1.ApplicationRoleRoot {
+			expectedName := dependencyApplicationName(plan.Release.ReleaseName)
+			if plan.Name != expectedName {
+				return invalid("InvalidDependencyApplicationName", "%s.name must be %q for releaseName %q", path, expectedName, plan.Release.ReleaseName)
+			}
+		}
 	}
 
 	if app.Spec.Role == applicationv1.ApplicationRoleRoot {
@@ -297,6 +309,17 @@ func validateDependencyContract(app *applicationv1.OneKSApplication) *PlanError 
 		}
 	}
 	return nil
+}
+
+// dependencyApplicationName maps the HelmChart collision domain to one stable
+// OneKSApplication metadata.name. Only releaseName participates intentionally.
+func dependencyApplicationName(releaseName string) string {
+	prefix := releaseName
+	if len(prefix) > 32 {
+		prefix = prefix[:32]
+	}
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(releaseName)))
+	return "oneks-dep-" + prefix + "-" + digest[:20]
 }
 
 func validateRootDependencyGraph(rootDependencies []applicationv1.DependencyReference, plans []applicationv1.DependencyPlan, planIndex map[string]*applicationv1.DependencyPlan) *PlanError {
