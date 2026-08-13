@@ -45,6 +45,7 @@ const (
 	maxConfigMapDataBytes  = 65536
 	maxDependencies        = 16
 	maxDependencyPlans     = 16
+	maxManagedResources    = 16
 	WorkloadNamespace      = "oneks-poc-workloads"
 )
 
@@ -101,12 +102,22 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 	}
 	switch app.Spec.PlanVersion {
 	case applicationv1.PlanVersionV1Alpha1:
-		if app.Spec.Role != "" || app.Spec.Dependencies != nil || app.Spec.DependencyPlans != nil {
+		if app.Spec.Role != "" || app.Spec.Dependencies != nil || app.Spec.DependencyPlans != nil || app.Spec.ManagedResources != nil {
 			return invalid("InvalidPlanV1Alpha1Fields", "plan-v1alpha1 does not permit role or dependency fields")
 		}
 	case applicationv1.PlanVersionV1Alpha2:
+		if app.Spec.ManagedResources != nil {
+			return invalid("InvalidPlanV1Alpha2Fields", "plan-v1alpha2 does not permit managedResources")
+		}
 		if app.Spec.Role != applicationv1.ApplicationRoleRoot && app.Spec.Role != applicationv1.ApplicationRoleDependency {
 			return invalid("InvalidApplicationRole", "plan-v1alpha2 role must be Root or Dependency")
+		}
+	case applicationv1.PlanVersionV1Alpha3:
+		if app.Spec.Role != applicationv1.ApplicationRoleRoot {
+			return invalid("InvalidApplicationRole", "plan-v1alpha3 supports only Root applications")
+		}
+		if len(app.Spec.Resources) != 0 {
+			return invalid("InvalidPlanV1Alpha3Resources", "plan-v1alpha3 does not permit legacy resources")
 		}
 	default:
 		return invalid("UnsupportedPlanVersion", "unsupported planVersion %q", app.Spec.PlanVersion)
@@ -139,7 +150,7 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 	if !validUTF8Bytes(app.Spec.Release.ReleaseName, 1, 63) || len(validation.IsDNS1123Label(app.Spec.Release.ReleaseName)) > 0 {
 		return invalid("InvalidReleaseName", "releaseName is not a DNS-1123 label of at most 63 characters")
 	}
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 && app.Spec.Role == applicationv1.ApplicationRoleDependency {
+	if app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha1 && app.Spec.Role == applicationv1.ApplicationRoleDependency {
 		expectedName := dependencyApplicationName(app.Spec.Release.ReleaseName)
 		if app.Name != expectedName {
 			return invalid("InvalidDependencyApplicationName", "application name must be %q for releaseName %q", expectedName, app.Spec.Release.ReleaseName)
@@ -225,8 +236,13 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 		}
 	}
 
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 {
+	if app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha1 {
 		if err := validateDependencyContract(app); err != nil {
+			return err
+		}
+	}
+	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 {
+		if err := validateManagedResources(app.Spec.ManagedResources); err != nil {
 			return err
 		}
 	}
@@ -530,9 +546,69 @@ func CanonicalPlan(spec applicationv1.OneKSApplicationSpec) ([]byte, error) {
 		return canonicalPlanV1Alpha1(spec)
 	case applicationv1.PlanVersionV1Alpha2:
 		return canonicalPlanV1Alpha2(spec)
+	case applicationv1.PlanVersionV1Alpha3:
+		return canonicalPlanV1Alpha3(spec)
 	default:
 		return nil, fmt.Errorf("unsupported planVersion %q", spec.PlanVersion)
 	}
+}
+
+func canonicalPlanV1Alpha3(spec applicationv1.OneKSApplicationSpec) ([]byte, error) {
+	dependencies := make([]any, len(spec.Dependencies))
+	for index, dependency := range spec.Dependencies {
+		dependencies[index] = canonicalDependencyReference(dependency)
+	}
+	dependencyPlans := make([]any, len(spec.DependencyPlans))
+	for index, dependencyPlan := range spec.DependencyPlans {
+		dependencyPlans[index] = canonicalDependencyPlan(dependencyPlan)
+	}
+	managed := make([]any, len(spec.ManagedResources))
+	for index, resource := range spec.ManagedResources {
+		conditions := make([]any, len(resource.Readiness.Conditions))
+		for i, condition := range resource.Readiness.Conditions {
+			conditions[i] = map[string]any{"type": condition.Type, "status": condition.Status}
+		}
+		required := make([]any, len(resource.Readiness.RequiredResources))
+		for i, reference := range resource.Readiness.RequiredResources {
+			required[i] = map[string]any{
+				"apiVersion": reference.APIVersion, "kind": reference.Kind,
+				"apiResource": reference.APIResource, "namespace": reference.Namespace, "name": reference.Name,
+			}
+		}
+		checks := make([]any, len(resource.Readiness.Checks))
+		for i, check := range resource.Readiness.Checks {
+			checks[i] = map[string]any{
+				"type": string(check.Type), "hostname": check.Hostname,
+				"service": map[string]any{"namespace": check.Service.Namespace, "name": check.Service.Name},
+			}
+		}
+		dependsOn := make([]any, len(resource.DependsOn))
+		for i, dependency := range resource.DependsOn {
+			dependsOn[i] = dependency
+		}
+		managed[index] = map[string]any{
+			"id": resource.ID, "scope": string(resource.Scope), "apiVersion": resource.APIVersion,
+			"kind": resource.Kind, "apiResource": resource.APIResource, "namespace": resource.Namespace,
+			"name": resource.Name, "manifestJSON": resource.ManifestJSON, "dependsOn": dependsOn,
+			"readiness": map[string]any{
+				"conditions": conditions, "requiredResources": required, "checks": checks,
+				"timeoutSeconds": resource.Readiness.TimeoutSeconds,
+			},
+			"deletionPolicy": string(resource.DeletionPolicy),
+		}
+	}
+	plan := map[string]any{
+		"clusterID": spec.ClusterID, "catalogueChartID": spec.CatalogueChartID,
+		"planVersion": spec.PlanVersion, "executionMode": string(spec.ExecutionMode),
+		"release": canonicalRelease(spec.Release), "resources": canonicalResources(spec.Resources),
+		"role": string(spec.Role), "dependencies": dependencies, "dependencyPlans": dependencyPlans,
+		"managedResources": managed, "deletionPolicy": string(spec.DeletionPolicy),
+	}
+	var output bytes.Buffer
+	if err := writeCanonicalJSON(&output, plan); err != nil {
+		return nil, err
+	}
+	return output.Bytes(), nil
 }
 
 func canonicalPlanV1Alpha1(spec applicationv1.OneKSApplicationSpec) ([]byte, error) {

@@ -91,9 +91,9 @@ func TestHelmKeepsControllerNamespacesOnUninstall(t *testing.T) {
 	}
 }
 
-func TestNamespaceReaderCanGetAnyTargetNamespaceReadOnly(t *testing.T) {
+func TestNamespacePermissionSupportsManagedClusterResources(t *testing.T) {
 	for _, path := range []string{
-		"../../kustomize/v1alpha1/application-controller/cluster_role_namespace_reader.yaml",
+		"../../kustomize/v1alpha1/application-controller/role_configmap.yaml",
 		"../../helm/v1alpha1/oneks-application-controller/templates/rbac.yaml",
 	} {
 		payload, err := os.ReadFile(path)
@@ -101,11 +101,11 @@ func TestNamespaceReaderCanGetAnyTargetNamespaceReadOnly(t *testing.T) {
 			t.Fatalf("read %s: %v", path, err)
 		}
 		text := string(payload)
-		if !strings.Contains(text, `resources: ["namespaces"]`) || !strings.Contains(text, `verbs: ["get"]`) {
-			t.Fatalf("%s lacks read-only namespace get permission", path)
+		if !strings.Contains(text, `resources: ["namespaces", "configmaps"]`) || !strings.Contains(text, `verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]`) {
+			t.Fatalf("%s lacks bounded managed Namespace permissions", path)
 		}
-		if strings.Contains(text, "resourceNames:") || strings.Contains(text, `resources: ["namespaces"]\n  verbs: ["get",`) {
-			t.Fatalf("%s restricts target namespace names or grants additional Namespace verbs", path)
+		if strings.Contains(text, "resourceNames:") || strings.Contains(text, `resources: ["*"]`) {
+			t.Fatalf("%s restricts managed namespace names or grants wildcard resources", path)
 		}
 	}
 }

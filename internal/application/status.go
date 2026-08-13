@@ -46,6 +46,7 @@ func baseStatus(app *applicationv1.OneKSApplication, controllerVersion string) a
 	status.SupportedPlanVersions = []string{
 		applicationv1.PlanVersionV1Alpha1,
 		applicationv1.PlanVersionV1Alpha2,
+		applicationv1.PlanVersionV1Alpha3,
 	}
 	status.LastError = nil
 	return *status
@@ -53,7 +54,10 @@ func baseStatus(app *applicationv1.OneKSApplication, controllerVersion string) a
 
 func applicationProgressTotal(app *applicationv1.OneKSApplication) int32 {
 	total := len(app.Spec.Resources) + 1
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 {
+	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 && app.Spec.Role == applicationv1.ApplicationRoleRoot {
+		total = len(app.Spec.ManagedResources) + 1
+	}
+	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 {
 		total += len(app.Spec.Dependencies)
 	}
 	return int32(total)

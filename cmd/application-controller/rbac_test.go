@@ -87,33 +87,84 @@ func TestApplicationRoleHasOnlyRequiredApplicationWrites(t *testing.T) {
 	}
 }
 
-func TestConfigMapRBACSupportsCompiledDependencyNamespaces(t *testing.T) {
+func TestManagedResourceRBACIsKindAndVerbBounded(t *testing.T) {
 	payload, err := os.ReadFile("../../kustomize/v1alpha1/application-controller/role_configmap.yaml")
 	if err != nil {
-		t.Fatalf("read ConfigMap ClusterRole: %v", err)
+		t.Fatalf("read managed-resource ClusterRole: %v", err)
 	}
 	role := rbacv1.ClusterRole{}
 	if err := yaml.Unmarshal(payload, &role); err != nil {
-		t.Fatalf("decode ConfigMap ClusterRole: %v", err)
+		t.Fatalf("decode managed-resource ClusterRole: %v", err)
 	}
-	if role.Kind != "ClusterRole" || len(role.Rules) != 1 || !containsValue(role.Rules[0].Resources, "configmaps") {
-		t.Fatalf("ConfigMap permissions are not cluster-scoped and resource-bounded: %#v", role)
+	if role.Kind != "ClusterRole" || len(role.Rules) != 6 {
+		t.Fatalf("managed-resource permissions are not cluster-scoped and bounded: %#v", role)
 	}
-	for _, forbidden := range []string{"*", "secrets"} {
-		if containsValue(role.Rules[0].Resources, forbidden) {
-			t.Fatalf("ConfigMap ClusterRole grants forbidden resource %q", forbidden)
+	managedVerbs := []string{"get", "list", "watch", "create", "patch", "update", "delete"}
+	want := map[string]map[string][]string{
+		"":                      {"namespaces": managedVerbs, "configmaps": managedVerbs, "services": {"get"}, "secrets": {"get"}},
+		"helm.cattle.io":        {"helmchartconfigs": managedVerbs},
+		"cert-manager.io":       {"clusterissuers": managedVerbs, "certificates": managedVerbs},
+		"trust.cert-manager.io": {"bundles": managedVerbs},
+		"networking.k8s.io":     {"ingressclasses": {"get"}},
+	}
+	seen := make(map[string]map[string][]string)
+	for _, rule := range role.Rules {
+		if len(rule.APIGroups) != 1 {
+			t.Fatalf("unexpected API groups: %#v", rule)
 		}
+		group := rule.APIGroups[0]
+		if seen[group] == nil {
+			seen[group] = make(map[string][]string)
+		}
+		for _, resource := range rule.Resources {
+			if resource == "*" || containsValue(rule.Verbs, "*") {
+				t.Fatalf("wildcard managed-resource permission: %#v", rule)
+			}
+			seen[group][resource] = append([]string(nil), rule.Verbs...)
+		}
+	}
+	for group, resources := range want {
+		for resource, verbs := range resources {
+			actual, found := seen[group][resource]
+			if !found || strings.Join(actual, ",") != strings.Join(verbs, ",") {
+				t.Fatalf("permission %s/%s = %#v, want %#v", group, resource, actual, verbs)
+			}
+			delete(seen[group], resource)
+		}
+	}
+	for group, resources := range seen {
+		if len(resources) != 0 {
+			t.Fatalf("unexpected permissions in %q: %#v", group, resources)
+		}
+	}
+
+	helmPayload, err := os.ReadFile("../../helm/v1alpha1/oneks-application-controller/templates/rbac.yaml")
+	if err != nil {
+		t.Fatalf("read Helm RBAC: %v", err)
+	}
+	for _, required := range []string{
+		`resources: ["namespaces", "configmaps"]`, `resources: ["helmchartconfigs"]`,
+		`resources: ["clusterissuers", "certificates"]`, `resources: ["bundles"]`,
+		"- apiGroups: [\"\"]\n  resources: [\"services\", \"secrets\"]\n  verbs: [\"get\"]",
+		"- apiGroups: [\"networking.k8s.io\"]\n  resources: [\"ingressclasses\"]\n  verbs: [\"get\"]",
+	} {
+		if !strings.Contains(string(helmPayload), required) {
+			t.Fatalf("Helm RBAC is missing %q", required)
+		}
+	}
+	if strings.Contains(string(helmPayload), `resources: ["*"]`) || strings.Contains(string(helmPayload), `verbs: ["*"]`) {
+		t.Fatal("Helm managed-resource RBAC contains a wildcard permission")
 	}
 
 	bindingPayload, err := os.ReadFile("../../kustomize/v1alpha1/application-controller/role_binding_configmap.yaml")
 	if err != nil {
-		t.Fatalf("read ConfigMap ClusterRoleBinding: %v", err)
+		t.Fatalf("read managed-resource ClusterRoleBinding: %v", err)
 	}
 	binding := rbacv1.ClusterRoleBinding{}
 	if err := yaml.Unmarshal(bindingPayload, &binding); err != nil {
-		t.Fatalf("decode ConfigMap ClusterRoleBinding: %v", err)
+		t.Fatalf("decode managed-resource ClusterRoleBinding: %v", err)
 	}
 	if binding.Kind != "ClusterRoleBinding" || binding.RoleRef.Kind != "ClusterRole" || binding.RoleRef.Name != role.Name {
-		t.Fatalf("ConfigMap ClusterRole binding mismatch: %#v", binding)
+		t.Fatalf("managed-resource ClusterRole binding mismatch: %#v", binding)
 	}
 }

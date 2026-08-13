@@ -5,7 +5,7 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: oneks-application-controller-configmap
+  name: oneks-application-controller-managed-resources
 subjects:
 - kind: ServiceAccount
   name: oneks-application-controller

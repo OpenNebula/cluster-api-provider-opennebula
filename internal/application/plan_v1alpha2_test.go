@@ -156,10 +156,10 @@ func TestGeneratedCRDPreservesV1Alpha1AndBoundsV1Alpha2(t *testing.T) {
 	}
 }
 
-func TestStatusAdvertisesBothPlanVersions(t *testing.T) {
+func TestStatusAdvertisesSupportedPlanVersions(t *testing.T) {
 	app := validPlanV1Alpha2Dependency(t)
 	status := baseStatus(app, "test")
-	want := []string{applicationv1.PlanVersionV1Alpha1, applicationv1.PlanVersionV1Alpha2}
+	want := []string{applicationv1.PlanVersionV1Alpha1, applicationv1.PlanVersionV1Alpha2, applicationv1.PlanVersionV1Alpha3}
 	if len(status.SupportedPlanVersions) != len(want) {
 		t.Fatalf("supported versions = %#v, want %#v", status.SupportedPlanVersions, want)
 	}

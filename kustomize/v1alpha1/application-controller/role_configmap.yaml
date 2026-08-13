@@ -1,8 +1,23 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: oneks-application-controller-configmap
+  name: oneks-application-controller-managed-resources
 rules:
 - apiGroups: [""]
-  resources: ["configmaps"]
+  resources: ["namespaces", "configmaps"]
   verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+- apiGroups: ["helm.cattle.io"]
+  resources: ["helmchartconfigs"]
+  verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+- apiGroups: ["cert-manager.io"]
+  resources: ["clusterissuers", "certificates"]
+  verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+- apiGroups: ["trust.cert-manager.io"]
+  resources: ["bundles"]
+  verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+- apiGroups: [""]
+  resources: ["services", "secrets"]
+  verbs: ["get"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingressclasses"]
+  verbs: ["get"]

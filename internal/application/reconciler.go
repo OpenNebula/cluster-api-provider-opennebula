@@ -57,18 +57,23 @@ type Reconciler struct {
 	ClusterID         string
 	ControllerVersion string
 	RequeueAfter      time.Duration
+	DNSLookup         func(context.Context, string) ([]string, error)
+	Now               func() time.Time
 }
 
 type observation struct {
-	resources    []applicationv1.ResourceStatus
-	helm         *unstructured.Unstructured
-	helmReady    bool
-	helmFailed   bool
-	helmReason   string
-	helmMessage  string
-	current      string
-	completed    int32
-	allResources bool
+	resources        []applicationv1.ResourceStatus
+	helm             *unstructured.Unstructured
+	helmReady        bool
+	helmFailed       bool
+	helmReason       string
+	helmMessage      string
+	resourcesFailed  bool
+	resourcesReason  string
+	resourcesMessage string
+	current          string
+	completed        int32
+	allResources     bool
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.Result, error) {
@@ -107,6 +112,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 	}
 
 	if deleting {
+		if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 && app.Spec.ExecutionMode == applicationv1.ExecutionModeObserve {
+			return ctrl.Result{}, nil
+		}
 		if err := r.preflightOwnership(ctx, app, true); err != nil {
 			var conflict *OwnershipConflictError
 			if errors.As(err, &conflict) {
@@ -150,7 +158,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 && app.Spec.Role == applicationv1.ApplicationRoleRoot {
+	if (app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3) && app.Spec.Role == applicationv1.ApplicationRoleRoot {
 		raced, terminating, conflict, err := r.materializeRootDependencies(ctx, app)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -187,7 +195,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 		return r.reconcileStatus(ctx, app, false, dependencies)
 	}
 
-	resourcesReady, err := r.reconcileConfigMaps(ctx, app)
+	var resourcesReady bool
+	if usesManagedResources(app) {
+		resourcesReady, err = r.reconcileManagedResources(ctx, app)
+	} else {
+		resourcesReady, err = r.reconcileConfigMaps(ctx, app)
+	}
 	if err != nil {
 		var conflict *OwnershipConflictError
 		if errors.As(err, &conflict) {
@@ -223,20 +236,27 @@ func (r *Reconciler) authoritativeReader() client.Reader {
 
 func (r *Reconciler) preflightOwnership(ctx context.Context, app *applicationv1.OneKSApplication, deleting bool) error {
 	reader := r.authoritativeReader()
-	for _, resource := range app.Spec.Resources {
-		if deleting && resource.DeletionPolicy == applicationv1.DeletionPolicyRetain {
-			continue
+	if !deleting {
+		if err := r.preflightManagedOwnership(ctx, app, false); err != nil {
+			return err
 		}
-		object := &corev1.ConfigMap{}
-		err := reader.Get(ctx, types.NamespacedName{Namespace: resource.Namespace, Name: resource.Name}, object)
-		if apierrors.IsNotFound(err) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("preflight ConfigMap %s/%s: %w", resource.Namespace, resource.Name, err)
-		}
-		if !ownershipMatches(app, object) {
-			return &OwnershipConflictError{Kind: "ConfigMap", Namespace: resource.Namespace, Name: resource.Name}
+	}
+	if !usesManagedResources(app) {
+		for _, resource := range app.Spec.Resources {
+			if deleting && resource.DeletionPolicy == applicationv1.DeletionPolicyRetain {
+				continue
+			}
+			object := &corev1.ConfigMap{}
+			err := reader.Get(ctx, types.NamespacedName{Namespace: resource.Namespace, Name: resource.Name}, object)
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("preflight ConfigMap %s/%s: %w", resource.Namespace, resource.Name, err)
+			}
+			if !ownershipMatches(app, object) {
+				return &OwnershipConflictError{Kind: "ConfigMap", Namespace: resource.Namespace, Name: resource.Name}
+			}
 		}
 	}
 
@@ -378,7 +398,7 @@ func ownedLabelsEqual(actual, expected map[string]string) bool {
 }
 
 func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.OneKSApplication, observeOnly bool, dependencies dependencyObservation) (ctrl.Result, error) {
-	observed, err := r.observe(ctx, app)
+	observed, err := r.observe(ctx, app, dependencies.ready)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -409,7 +429,19 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 	if observed.allResources {
 		resourceCondition = metav1.ConditionTrue
 	}
-	setCondition(&status, app.Generation, ConditionResourcesReady, resourceCondition, conditionReason(resourceCondition, "ResourcesReady", "ResourcesPending"), conditionMessage(resourceCondition, "All ConfigMaps are ready", "ConfigMaps are not ready"))
+	resourceReason := conditionReason(resourceCondition, "ResourcesReady", "ResourcesPending")
+	resourceMessage := conditionMessage(resourceCondition, "All managed resources are ready", "Managed resources are not ready")
+	if !usesManagedResources(app) {
+		resourceMessage = conditionMessage(resourceCondition, "All ConfigMaps are ready", "ConfigMaps are not ready")
+	} else if observed.resourcesFailed {
+		resourceReason = observed.resourcesReason
+		resourceMessage = observed.resourcesMessage
+	} else if dependencies.enabled && !dependencies.ready {
+		resourceCondition = metav1.ConditionUnknown
+		resourceReason = "DependenciesPending"
+		resourceMessage = "Managed resources are gated by direct dependencies"
+	}
+	setCondition(&status, app.Generation, ConditionResourcesReady, resourceCondition, resourceReason, resourceMessage)
 	helmCondition := metav1.ConditionFalse
 	if observed.helmReady {
 		helmCondition = metav1.ConditionTrue
@@ -424,7 +456,10 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 	}
 	readyReason := "ApplicationProgressing"
 	readyMessage := "Application installation is in progress"
-	if dependencies.enabled && !dependencies.ready {
+	if observed.resourcesFailed {
+		readyReason = observed.resourcesReason
+		readyMessage = observed.resourcesMessage
+	} else if dependencies.enabled && !dependencies.ready {
 		readyReason = dependencies.reason
 		readyMessage = dependencies.message
 	}
@@ -436,6 +471,9 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 	} else if dependencies.failed || dependencies.conflict {
 		status.Phase = applicationv1.PhaseFailed
 		setLastError(&status, dependencies.reason, dependencies.message)
+	} else if observed.resourcesFailed {
+		status.Phase = applicationv1.PhaseFailed
+		setLastError(&status, observed.resourcesReason, observed.resourcesMessage)
 	} else if observed.helmFailed {
 		status.Phase = applicationv1.PhaseFailed
 		setLastError(&status, observed.helmReason, observed.helmMessage)
@@ -450,7 +488,14 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 	return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
 }
 
-func (r *Reconciler) observe(ctx context.Context, app *applicationv1.OneKSApplication) (observation, error) {
+func (r *Reconciler) observe(ctx context.Context, app *applicationv1.OneKSApplication, managedReadinessEnabled bool) (observation, error) {
+	if usesManagedResources(app) {
+		result, err := r.observeManagedResources(ctx, app, managedReadinessEnabled)
+		if err != nil {
+			return result, err
+		}
+		return r.observeHelm(ctx, app, result)
+	}
 	result := observation{allResources: true, current: app.Spec.Release.ReleaseName}
 	for _, resource := range app.Spec.Resources {
 		object := &corev1.ConfigMap{}
@@ -482,6 +527,10 @@ func (r *Reconciler) observe(ctx context.Context, app *applicationv1.OneKSApplic
 		result.resources = append(result.resources, status)
 	}
 
+	return r.observeHelm(ctx, app, result)
+}
+
+func (r *Reconciler) observeHelm(ctx context.Context, app *applicationv1.OneKSApplication, result observation) (observation, error) {
 	helm := helmChartObject(app.Spec.Release.ReleaseName)
 	if err := r.Get(ctx, client.ObjectKeyFromObject(helm), helm); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -547,6 +596,9 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 	status := baseStatus(app, r.ControllerVersion)
 	status.Phase = applicationv1.PhaseDeleting
 	status.Progress = applicationv1.ApplicationProgress{Total: applicationProgressTotal(app), Current: app.Spec.Release.ReleaseName}
+	if usesManagedResources(app) {
+		status.Resources = deletingManagedResourceStatuses(app)
+	}
 	clearLastError(&status)
 	if err := r.updateStatus(ctx, app, status); err != nil {
 		return ctrl.Result{}, err
@@ -569,28 +621,42 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 		return ctrl.Result{}, fmt.Errorf("get deleting HelmChart: %w", err)
 	}
 
-	for index := len(app.Spec.Resources) - 1; index >= 0; index-- {
-		resource := app.Spec.Resources[index]
-		object := &corev1.ConfigMap{}
-		err := r.authoritativeReader().Get(ctx, types.NamespacedName{Namespace: resource.Namespace, Name: resource.Name}, object)
-		if apierrors.IsNotFound(err) {
-			continue
+	if usesManagedResources(app) {
+		deleted, deleteErr := r.reconcileDeleteManagedResources(ctx, app)
+		if deleteErr != nil {
+			var conflict *OwnershipConflictError
+			if errors.As(deleteErr, &conflict) {
+				return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
+			}
+			return ctrl.Result{}, deleteErr
 		}
-		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("get deleting ConfigMap %s/%s: %w", resource.Namespace, resource.Name, err)
+		if deleted {
+			return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
 		}
-		if resource.DeletionPolicy == applicationv1.DeletionPolicyRetain {
-			continue
+	} else {
+		for index := len(app.Spec.Resources) - 1; index >= 0; index-- {
+			resource := app.Spec.Resources[index]
+			object := &corev1.ConfigMap{}
+			err := r.authoritativeReader().Get(ctx, types.NamespacedName{Namespace: resource.Namespace, Name: resource.Name}, object)
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			if err != nil {
+				return ctrl.Result{}, fmt.Errorf("get deleting ConfigMap %s/%s: %w", resource.Namespace, resource.Name, err)
+			}
+			if resource.DeletionPolicy == applicationv1.DeletionPolicyRetain {
+				continue
+			}
+			if !ownershipMatches(app, object) {
+				conflict := (&OwnershipConflictError{Kind: "ConfigMap", Namespace: object.Namespace, Name: object.Name}).Error()
+				return r.recordTerminal(ctx, app, "OwnershipConflict", conflict, true)
+			}
+			if err := r.Delete(ctx, object, deletePreconditions(object)...); err != nil && !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, fmt.Errorf("delete ConfigMap %s/%s: %w", resource.Namespace, resource.Name, err)
+			}
+			r.event(app, corev1.EventTypeNormal, "ResourceDeleted", fmt.Sprintf("ConfigMap %s/%s deletion requested", resource.Namespace, resource.Name))
+			return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
 		}
-		if !ownershipMatches(app, object) {
-			conflict := (&OwnershipConflictError{Kind: "ConfigMap", Namespace: object.Namespace, Name: object.Name}).Error()
-			return r.recordTerminal(ctx, app, "OwnershipConflict", conflict, true)
-		}
-		if err := r.Delete(ctx, object, deletePreconditions(object)...); err != nil && !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, fmt.Errorf("delete ConfigMap %s/%s: %w", resource.Namespace, resource.Name, err)
-		}
-		r.event(app, corev1.EventTypeNormal, "ResourceDeleted", fmt.Sprintf("ConfigMap %s/%s deletion requested", resource.Namespace, resource.Name))
-		return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
 	}
 
 	if app.Spec.ExecutionMode == applicationv1.ExecutionModeExecute && containsString(app.Finalizers, applicationv1.ApplicationFinalizer) {
@@ -639,7 +705,7 @@ func (r *Reconciler) recordTerminal(ctx context.Context, app *applicationv1.OneK
 		planCondition = metav1.ConditionFalse
 	}
 	setCondition(&status, app.Generation, ConditionPlanValid, planCondition, reason, message)
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 {
+	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 {
 		if len(app.Spec.Dependencies) == 0 {
 			setCondition(&status, app.Generation, ConditionDependenciesReady, metav1.ConditionTrue, "NoDependencies", "Application has no direct dependencies")
 		} else {

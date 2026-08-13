@@ -264,6 +264,156 @@ spec:
                 - Observe
                 - Execute
                 type: string
+              managedResources:
+                items:
+                  properties:
+                    apiResource:
+                      maxLength: 128
+                      type: string
+                    apiVersion:
+                      maxLength: 128
+                      minLength: 1
+                      type: string
+                    deletionPolicy:
+                      enum:
+                      - Delete
+                      - Retain
+                      type: string
+                    dependsOn:
+                      items:
+                        maxLength: 63
+                        type: string
+                      maxItems: 16
+                      type: array
+                    id:
+                      maxLength: 63
+                      minLength: 1
+                      type: string
+                    kind:
+                      maxLength: 128
+                      minLength: 1
+                      type: string
+                    manifestJSON:
+                      maxLength: 131072
+                      minLength: 2
+                      type: string
+                    name:
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    namespace:
+                      maxLength: 63
+                      type: string
+                    readiness:
+                      properties:
+                        checks:
+                          items:
+                            properties:
+                              hostname:
+                                maxLength: 253
+                                minLength: 1
+                                type: string
+                              service:
+                                properties:
+                                  name:
+                                    maxLength: 253
+                                    minLength: 1
+                                    type: string
+                                  namespace:
+                                    maxLength: 63
+                                    minLength: 1
+                                    type: string
+                                required:
+                                - name
+                                - namespace
+                                type: object
+                              type:
+                                enum:
+                                - DNSMatchesService
+                                type: string
+                            required:
+                            - hostname
+                            - service
+                            - type
+                            type: object
+                          maxItems: 16
+                          type: array
+                        conditions:
+                          items:
+                            properties:
+                              status:
+                                enum:
+                                - "True"
+                                - "False"
+                                - Unknown
+                                type: string
+                              type:
+                                maxLength: 128
+                                minLength: 1
+                                type: string
+                            required:
+                            - status
+                            - type
+                            type: object
+                          maxItems: 16
+                          type: array
+                        requiredResources:
+                          items:
+                            properties:
+                              apiResource:
+                                maxLength: 128
+                                type: string
+                              apiVersion:
+                                maxLength: 128
+                                minLength: 1
+                                type: string
+                              kind:
+                                maxLength: 128
+                                minLength: 1
+                                type: string
+                              name:
+                                maxLength: 253
+                                minLength: 1
+                                type: string
+                              namespace:
+                                maxLength: 63
+                                type: string
+                            required:
+                            - apiVersion
+                            - kind
+                            - name
+                            type: object
+                          maxItems: 16
+                          type: array
+                        timeoutSeconds:
+                          format: int32
+                          maximum: 86400
+                          minimum: 1
+                          type: integer
+                      required:
+                      - checks
+                      - conditions
+                      - requiredResources
+                      - timeoutSeconds
+                      type: object
+                    scope:
+                      enum:
+                      - namespaced
+                      - cluster
+                      type: string
+                  required:
+                  - apiVersion
+                  - deletionPolicy
+                  - dependsOn
+                  - id
+                  - kind
+                  - manifestJSON
+                  - name
+                  - readiness
+                  - scope
+                  type: object
+                maxItems: 16
+                type: array
               planDigest:
                 maxLength: 50
                 pattern: ^sha256-[A-Za-z0-9_-]{43}$
@@ -272,6 +422,7 @@ spec:
                 enum:
                 - oneks.opennebula.io/plan-v1alpha1
                 - oneks.opennebula.io/plan-v1alpha2
+                - oneks.opennebula.io/plan-v1alpha3
                 type: string
               release:
                 properties:
@@ -381,12 +532,13 @@ spec:
             x-kubernetes-validations:
             - message: spec is immutable
               rule: self == oldSelf
-            - message: plan-v1alpha1 does not permit role or dependency fields and
-                requires the fixed workload namespace without namespace creation
+            - message: plan-v1alpha1 does not permit role, dependency, or managedResources
+                fields and requires the fixed workload namespace without namespace
+                creation
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha1' || (!has(self.role)
-                && !has(self.dependencies) && !has(self.dependencyPlans) && self.release.targetNamespace
-                == 'oneks-poc-workloads' && !self.release.createNamespace && self.resources.all(r,
-                r.__namespace__ == 'oneks-poc-workloads'))
+                && !has(self.dependencies) && !has(self.dependencyPlans) && !has(self.managedResources)
+                && self.release.targetNamespace == 'oneks-poc-workloads' && !self.release.createNamespace
+                && self.resources.all(r, r.__namespace__ == 'oneks-poc-workloads'))
             - message: plan-v1alpha1 requires a non-empty HTTPS repositoryURL
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha1' || (size(self.release.repositoryURL)
                 >= 1 && self.release.repositoryURL.matches('^https://[^[:space:]]+$'))
@@ -411,6 +563,24 @@ spec:
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role
                 != 'Dependency' || !self.release.createNamespace || size(self.resources)
                 == 0
+            - message: plan-v1alpha2 does not permit managedResources
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || !has(self.managedResources)
+            - message: plan-v1alpha3 supports only Root applications
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || (has(self.role)
+                && self.role == 'Root')
+            - message: plan-v1alpha3 release must use either an HTTPS repositoryURL
+                with a non-OCI chart or an empty repositoryURL with an OCI chart
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || ((size(self.release.repositoryURL)
+                == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$')
+                && !self.release.chart.startsWith('oci://')))
+            - message: plan-v1alpha3 Root requires the fixed workload namespace without
+                namespace creation
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || self.role
+                != 'Root' || (self.release.targetNamespace == 'oneks-poc-workloads'
+                && !self.release.createNamespace)
+            - message: plan-v1alpha3 does not permit legacy resources
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || size(self.resources)
+                == 0
             - message: resources must use the release targetNamespace
               rule: self.resources.all(r, r.__namespace__ == self.release.targetNamespace)
             - message: dependency names must be unique
@@ -422,6 +592,13 @@ spec:
             - message: each direct Root dependency must resolve to exactly one matching
                 dependencyPlan
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role
+                != 'Root' || !has(self.dependencies) || (has(self.dependencyPlans)
+                && self.dependencies.all(d, self.dependencyPlans.filter(p, p.name
+                == d.name && p.catalogueChartID == d.catalogueChartID && p.planDigest
+                == d.planDigest).size() == 1))
+            - message: each direct Root dependency must resolve to exactly one matching
+                dependencyPlan
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || self.role
                 != 'Root' || !has(self.dependencies) || (has(self.dependencyPlans)
                 && self.dependencies.all(d, self.dependencyPlans.filter(p, p.name
                 == d.name && p.catalogueChartID == d.catalogueChartID && p.planDigest
@@ -575,6 +752,9 @@ spec:
                       - Retained
                       - Observing
                       maxLength: 32
+                      type: string
+                    readinessStartedAt:
+                      format: date-time
                       type: string
                     reason:
                       maxLength: 128

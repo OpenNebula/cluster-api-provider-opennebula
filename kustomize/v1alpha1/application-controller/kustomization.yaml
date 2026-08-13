@@ -12,8 +12,6 @@ resources:
 - role_binding_helm.yaml
 - role_configmap.yaml
 - role_binding_configmap.yaml
-- cluster_role_namespace_reader.yaml
-- cluster_role_binding_namespace_reader.yaml
 - deployment.yaml
 images:
 - name: application-controller

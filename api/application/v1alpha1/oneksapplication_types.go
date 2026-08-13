@@ -21,6 +21,7 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 const (
 	PlanVersionV1Alpha1  = "oneks.opennebula.io/plan-v1alpha1"
 	PlanVersionV1Alpha2  = "oneks.opennebula.io/plan-v1alpha2"
+	PlanVersionV1Alpha3  = "oneks.opennebula.io/plan-v1alpha3"
 	PlanVersion          = PlanVersionV1Alpha1
 	ApplicationNamespace = "oneks-system"
 	ApplicationFinalizer = "applications.oneks.opennebula.io/finalizer"
@@ -62,17 +63,23 @@ const (
 
 // OneKSApplicationSpec is an immutable, compiled application plan.
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha1' || (!has(self.role) && !has(self.dependencies) && !has(self.dependencyPlans) && self.release.targetNamespace == 'oneks-poc-workloads' && !self.release.createNamespace && self.resources.all(r, r.__namespace__ == 'oneks-poc-workloads'))",message="plan-v1alpha1 does not permit role or dependency fields and requires the fixed workload namespace without namespace creation"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha1' || (!has(self.role) && !has(self.dependencies) && !has(self.dependencyPlans) && !has(self.managedResources) && self.release.targetNamespace == 'oneks-poc-workloads' && !self.release.createNamespace && self.resources.all(r, r.__namespace__ == 'oneks-poc-workloads'))",message="plan-v1alpha1 does not permit role, dependency, or managedResources fields and requires the fixed workload namespace without namespace creation"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha1' || (size(self.release.repositoryURL) >= 1 && self.release.repositoryURL.matches('^https://[^[:space:]]+$'))",message="plan-v1alpha1 requires a non-empty HTTPS repositoryURL"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || has(self.role)",message="plan-v1alpha2 requires role"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || ((size(self.release.repositoryURL) == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$') && !self.release.chart.startsWith('oci://')))",message="plan-v1alpha2 release must use either an HTTPS repositoryURL with a non-OCI chart or an empty repositoryURL with an OCI chart"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role != 'Root' || (self.release.targetNamespace == 'oneks-poc-workloads' && !self.release.createNamespace)",message="plan-v1alpha2 Root requires the fixed workload namespace without namespace creation"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role != 'Dependency' || !has(self.dependencyPlans) || size(self.dependencyPlans) == 0",message="plan-v1alpha2 Dependency must not contain dependencyPlans"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role != 'Dependency' || !self.release.createNamespace || size(self.resources) == 0",message="plan-v1alpha2 Dependency with createNamespace must not contain resources"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || !has(self.managedResources)",message="plan-v1alpha2 does not permit managedResources"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || (has(self.role) && self.role == 'Root')",message="plan-v1alpha3 supports only Root applications"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || ((size(self.release.repositoryURL) == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$') && !self.release.chart.startsWith('oci://')))",message="plan-v1alpha3 release must use either an HTTPS repositoryURL with a non-OCI chart or an empty repositoryURL with an OCI chart"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || self.role != 'Root' || (self.release.targetNamespace == 'oneks-poc-workloads' && !self.release.createNamespace)",message="plan-v1alpha3 Root requires the fixed workload namespace without namespace creation"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || size(self.resources) == 0",message="plan-v1alpha3 does not permit legacy resources"
 // +kubebuilder:validation:XValidation:rule="self.resources.all(r, r.__namespace__ == self.release.targetNamespace)",message="resources must use the release targetNamespace"
 // +kubebuilder:validation:XValidation:rule="!has(self.dependencies) || self.dependencies.all(d, self.dependencies.filter(x, x.name == d.name).size() == 1)",message="dependency names must be unique"
 // +kubebuilder:validation:XValidation:rule="!has(self.dependencyPlans) || self.dependencyPlans.all(p, self.dependencyPlans.filter(x, x.name == p.name).size() == 1)",message="dependency plan names must be unique"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role != 'Root' || !has(self.dependencies) || (has(self.dependencyPlans) && self.dependencies.all(d, self.dependencyPlans.filter(p, p.name == d.name && p.catalogueChartID == d.catalogueChartID && p.planDigest == d.planDigest).size() == 1))",message="each direct Root dependency must resolve to exactly one matching dependencyPlan"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || self.role != 'Root' || !has(self.dependencies) || (has(self.dependencyPlans) && self.dependencies.all(d, self.dependencyPlans.filter(p, p.name == d.name && p.catalogueChartID == d.catalogueChartID && p.planDigest == d.planDigest).size() == 1))",message="each direct Root dependency must resolve to exactly one matching dependencyPlan"
 type OneKSApplicationSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
@@ -82,7 +89,7 @@ type OneKSApplicationSpec struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$`
 	CatalogueChartID string `json:"catalogueChartID"`
-	// +kubebuilder:validation:Enum=oneks.opennebula.io/plan-v1alpha1;oneks.opennebula.io/plan-v1alpha2
+	// +kubebuilder:validation:Enum=oneks.opennebula.io/plan-v1alpha1;oneks.opennebula.io/plan-v1alpha2;oneks.opennebula.io/plan-v1alpha3
 	PlanVersion string `json:"planVersion"`
 	// +kubebuilder:validation:MaxLength=50
 	// +kubebuilder:validation:Pattern=`^sha256-[A-Za-z0-9_-]{43}$`
@@ -98,8 +105,105 @@ type OneKSApplicationSpec struct {
 	Dependencies []DependencyReference `json:"dependencies,omitempty"`
 	// +kubebuilder:validation:MaxItems=16
 	DependencyPlans []DependencyPlan `json:"dependencyPlans,omitempty"`
+	// +kubebuilder:validation:MaxItems=16
+	ManagedResources []ManagedResourceSpec `json:"managedResources,omitempty"`
 	// +kubebuilder:validation:Enum=Delete;Retain
 	DeletionPolicy DeletionPolicy `json:"deletionPolicy"`
+}
+
+type ManagedResourceScope string
+
+const (
+	ManagedResourceScopeNamespaced ManagedResourceScope = "namespaced"
+	ManagedResourceScopeCluster    ManagedResourceScope = "cluster"
+)
+
+type ManagedResourceSpec struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	ID string `json:"id"`
+	// +kubebuilder:validation:Enum=namespaced;cluster
+	Scope ManagedResourceScope `json:"scope"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	APIVersion string `json:"apiVersion"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	Kind string `json:"kind"`
+	// +kubebuilder:validation:MaxLength=128
+	APIResource string `json:"apiResource,omitempty"`
+	// +kubebuilder:validation:MaxLength=63
+	Namespace string `json:"namespace,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+	// +kubebuilder:validation:MinLength=2
+	// +kubebuilder:validation:MaxLength=131072
+	ManifestJSON string `json:"manifestJSON"`
+	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:items:MaxLength=63
+	DependsOn []string                 `json:"dependsOn"`
+	Readiness ManagedResourceReadiness `json:"readiness"`
+	// +kubebuilder:validation:Enum=Delete;Retain
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy"`
+}
+
+type ManagedResourceReadiness struct {
+	// +kubebuilder:validation:MaxItems=16
+	Conditions []ManagedResourceCondition `json:"conditions"`
+	// +kubebuilder:validation:MaxItems=16
+	RequiredResources []ManagedResourceReference `json:"requiredResources"`
+	// +kubebuilder:validation:MaxItems=16
+	Checks []ManagedResourceCheck `json:"checks"`
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=86400
+	TimeoutSeconds int32 `json:"timeoutSeconds"`
+}
+
+type ManagedResourceCondition struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	Type string `json:"type"`
+	// +kubebuilder:validation:Enum=True;False;Unknown
+	Status string `json:"status"`
+}
+
+type ManagedResourceReference struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	APIVersion string `json:"apiVersion"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	Kind string `json:"kind"`
+	// +kubebuilder:validation:MaxLength=128
+	APIResource string `json:"apiResource,omitempty"`
+	// +kubebuilder:validation:MaxLength=63
+	Namespace string `json:"namespace,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+}
+
+type ManagedResourceCheck struct {
+	// +kubebuilder:validation:Enum=DNSMatchesService
+	Type ManagedResourceCheckType `json:"type"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Hostname string                          `json:"hostname"`
+	Service  ManagedResourceServiceReference `json:"service"`
+}
+
+type ManagedResourceCheckType string
+
+const ManagedResourceCheckDNSMatchesService ManagedResourceCheckType = "DNSMatchesService"
+
+type ManagedResourceServiceReference struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	Namespace string `json:"namespace"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
 }
 
 type ReleaseSpec struct {
@@ -223,7 +327,8 @@ type ResourceStatus struct {
 	// +kubebuilder:validation:MaxLength=512
 	Message string `json:"message,omitempty"`
 	// +kubebuilder:validation:MaxLength=64
-	ResourceVersion string `json:"resourceVersion,omitempty"`
+	ResourceVersion    string       `json:"resourceVersion,omitempty"`
+	ReadinessStartedAt *metav1.Time `json:"readinessStartedAt,omitempty"`
 }
 
 type ApplicationError struct {

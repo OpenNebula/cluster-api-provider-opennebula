@@ -50,7 +50,7 @@ func producerLabels(app *applicationv1.OneKSApplication) map[string]string {
 		LabelPlanDigest:       app.Spec.PlanDigest,
 		LabelCatalogueChartID: app.Spec.CatalogueChartID,
 	}
-	if app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha2 {
+	if app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha2 && app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha3 {
 		return labels
 	}
 	switch app.Spec.Role {
