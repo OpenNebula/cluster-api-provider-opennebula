@@ -35,7 +35,22 @@ import (
 )
 
 func usesManagedResources(app *applicationv1.OneKSApplication) bool {
-	return app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 && app.Spec.Role == applicationv1.ApplicationRoleRoot
+	return (app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4) && app.Spec.Role == applicationv1.ApplicationRoleRoot
+}
+
+func managesTargetNamespace(app *applicationv1.OneKSApplication) bool {
+	if !usesManagedResources(app) {
+		return false
+	}
+	matches := 0
+	for _, resource := range app.Spec.ManagedResources {
+		if resource.Scope == applicationv1.ManagedResourceScopeCluster &&
+			resource.APIVersion == "v1" && resource.Kind == "Namespace" &&
+			resource.Name == app.Spec.Release.TargetNamespace && resource.Namespace == "" {
+			matches++
+		}
+	}
+	return matches == 1
 }
 
 func desiredManagedResource(app *applicationv1.OneKSApplication, resource applicationv1.ManagedResourceSpec) (*unstructured.Unstructured, error) {

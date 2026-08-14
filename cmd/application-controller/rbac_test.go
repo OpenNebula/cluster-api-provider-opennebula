@@ -79,7 +79,7 @@ func TestApplicationRoleHasOnlyRequiredApplicationWrites(t *testing.T) {
 		t.Fatalf("read Helm RBAC template: %v", err)
 	}
 	text := string(helmRBAC)
-	if strings.Contains(text, "oneksapplications/finalizers") || strings.Contains(text, "resources: [\"*\"]") || strings.Contains(text, "resources: [\"secrets\"]") {
+	if strings.Contains(text, "oneksapplications/finalizers") || strings.Contains(text, "resources: [\"*\"]") {
 		t.Fatalf("Helm RBAC contains a forbidden permission")
 	}
 	if !strings.Contains(text, `verbs: ["get", "list", "watch", "create", "update", "delete"]`) {
@@ -96,12 +96,12 @@ func TestManagedResourceRBACIsKindAndVerbBounded(t *testing.T) {
 	if err := yaml.Unmarshal(payload, &role); err != nil {
 		t.Fatalf("decode managed-resource ClusterRole: %v", err)
 	}
-	if role.Kind != "ClusterRole" || len(role.Rules) != 6 {
+	if role.Kind != "ClusterRole" || len(role.Rules) != 7 {
 		t.Fatalf("managed-resource permissions are not cluster-scoped and bounded: %#v", role)
 	}
 	managedVerbs := []string{"get", "list", "watch", "create", "patch", "update", "delete"}
 	want := map[string]map[string][]string{
-		"":                      {"namespaces": managedVerbs, "configmaps": managedVerbs, "services": {"get"}, "secrets": {"get"}},
+		"":                      {"namespaces": managedVerbs, "configmaps": managedVerbs, "services": {"get"}, "secrets": {"get", "create", "update", "delete"}},
 		"helm.cattle.io":        {"helmchartconfigs": managedVerbs},
 		"cert-manager.io":       {"clusterissuers": managedVerbs, "certificates": managedVerbs},
 		"trust.cert-manager.io": {"bundles": managedVerbs},
@@ -145,7 +145,8 @@ func TestManagedResourceRBACIsKindAndVerbBounded(t *testing.T) {
 	for _, required := range []string{
 		`resources: ["namespaces", "configmaps"]`, `resources: ["helmchartconfigs"]`,
 		`resources: ["clusterissuers", "certificates"]`, `resources: ["bundles"]`,
-		"- apiGroups: [\"\"]\n  resources: [\"services\", \"secrets\"]\n  verbs: [\"get\"]",
+		"- apiGroups: [\"\"]\n  resources: [\"services\"]\n  verbs: [\"get\"]",
+		"- apiGroups: [\"\"]\n  resources: [\"secrets\"]\n  # Get reads readiness metadata and immutable input/target Secrets. Create,\n  # update, and delete implement protected Secret lifecycle without patching.\n  verbs: [\"get\", \"create\", \"update\", \"delete\"]",
 		"- apiGroups: [\"networking.k8s.io\"]\n  resources: [\"ingressclasses\"]\n  verbs: [\"get\"]",
 	} {
 		if !strings.Contains(string(helmPayload), required) {

@@ -62,18 +62,23 @@ type Reconciler struct {
 }
 
 type observation struct {
-	resources        []applicationv1.ResourceStatus
-	helm             *unstructured.Unstructured
-	helmReady        bool
-	helmFailed       bool
-	helmReason       string
-	helmMessage      string
-	resourcesFailed  bool
-	resourcesReason  string
-	resourcesMessage string
-	current          string
-	completed        int32
-	allResources     bool
+	resources               []applicationv1.ResourceStatus
+	managedResourcesReady   bool
+	protectedSecretsReady   bool
+	protectedSecretsFailed  bool
+	protectedSecretsReason  string
+	protectedSecretsMessage string
+	helm                    *unstructured.Unstructured
+	helmReady               bool
+	helmFailed              bool
+	helmReason              string
+	helmMessage             string
+	resourcesFailed         bool
+	resourcesReason         string
+	resourcesMessage        string
+	current                 string
+	completed               int32
+	allResources            bool
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.Result, error) {
@@ -97,22 +102,25 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 	if !deleting && !app.Spec.Release.CreateNamespace {
 		if err := r.checkTargetNamespace(ctx, app.Spec.Release.TargetNamespace); err != nil {
 			if apierrors.IsNotFound(err) {
-				result, statusErr := r.recordTerminal(
-					ctx, app, "TargetNamespaceMissing",
-					fmt.Sprintf("target namespace %s is missing", app.Spec.Release.TargetNamespace), false,
-				)
-				if statusErr != nil {
-					return ctrl.Result{}, statusErr
+				if !managesTargetNamespace(app) {
+					result, statusErr := r.recordTerminal(
+						ctx, app, "TargetNamespaceMissing",
+						fmt.Sprintf("target namespace %s is missing", app.Spec.Release.TargetNamespace), false,
+					)
+					if statusErr != nil {
+						return ctrl.Result{}, statusErr
+					}
+					result.RequeueAfter = r.requeueDuration()
+					return result, nil
 				}
-				result.RequeueAfter = r.requeueDuration()
-				return result, nil
+			} else {
+				return ctrl.Result{}, fmt.Errorf("check target namespace: %w", err)
 			}
-			return ctrl.Result{}, fmt.Errorf("check target namespace: %w", err)
 		}
 	}
 
 	if deleting {
-		if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 && app.Spec.ExecutionMode == applicationv1.ExecutionModeObserve {
+		if (app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4) && app.Spec.ExecutionMode == applicationv1.ExecutionModeObserve {
 			return ctrl.Result{}, nil
 		}
 		if err := r.preflightOwnership(ctx, app, true); err != nil {
@@ -158,7 +166,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	if (app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3) && app.Spec.Role == applicationv1.ApplicationRoleRoot {
+	if (app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4) && app.Spec.Role == applicationv1.ApplicationRoleRoot {
 		raced, terminating, conflict, err := r.materializeRootDependencies(ctx, app)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -211,6 +219,23 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 	if !resourcesReady {
 		return r.reconcileStatus(ctx, app, false, dependencies)
 	}
+	if usesProtectedSecrets(app) {
+		protectedReady, protectedErr := r.reconcileProtectedSecrets(ctx, app)
+		if protectedErr != nil {
+			var conflict *OwnershipConflictError
+			if errors.As(protectedErr, &conflict) {
+				return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
+			}
+			var invalidInput *InputSecretValidationError
+			if errors.As(protectedErr, &invalidInput) {
+				return r.recordTerminal(ctx, app, "InputSecretInvalid", invalidInput.Error(), false)
+			}
+			return ctrl.Result{}, protectedErr
+		}
+		if !protectedReady {
+			return r.reconcileStatus(ctx, app, false, dependencies)
+		}
+	}
 
 	if err := r.reconcileHelmChart(ctx, app); err != nil {
 		var conflict *OwnershipConflictError
@@ -238,6 +263,9 @@ func (r *Reconciler) preflightOwnership(ctx context.Context, app *applicationv1.
 	reader := r.authoritativeReader()
 	if !deleting {
 		if err := r.preflightManagedOwnership(ctx, app, false); err != nil {
+			return err
+		}
+		if err := r.preflightProtectedSecretOwnership(ctx, app, false); err != nil {
 			return err
 		}
 	}
@@ -426,7 +454,11 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 		setCondition(&status, app.Generation, ConditionDependenciesReady, dependencyCondition, dependencies.reason, dependencies.message)
 	}
 	resourceCondition := metav1.ConditionFalse
-	if observed.allResources {
+	resourcesReady := observed.allResources
+	if usesManagedResources(app) {
+		resourcesReady = observed.managedResourcesReady
+	}
+	if resourcesReady {
 		resourceCondition = metav1.ConditionTrue
 	}
 	resourceReason := conditionReason(resourceCondition, "ResourcesReady", "ResourcesPending")
@@ -442,6 +474,17 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 		resourceMessage = "Managed resources are gated by direct dependencies"
 	}
 	setCondition(&status, app.Generation, ConditionResourcesReady, resourceCondition, resourceReason, resourceMessage)
+	if usesProtectedSecrets(app) {
+		protectedCondition := metav1.ConditionFalse
+		if observed.protectedSecretsReady {
+			protectedCondition = metav1.ConditionTrue
+		}
+		setCondition(
+			&status, app.Generation, ConditionProtectedSecretsReady, protectedCondition,
+			conditionReason(protectedCondition, "ProtectedSecretsReady", observed.protectedSecretsReason),
+			conditionMessage(protectedCondition, "All protected Secrets are ready", observed.protectedSecretsMessage),
+		)
+	}
 	helmCondition := metav1.ConditionFalse
 	if observed.helmReady {
 		helmCondition = metav1.ConditionTrue
@@ -459,6 +502,9 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 	if observed.resourcesFailed {
 		readyReason = observed.resourcesReason
 		readyMessage = observed.resourcesMessage
+	} else if observed.protectedSecretsFailed {
+		readyReason = observed.protectedSecretsReason
+		readyMessage = observed.protectedSecretsMessage
 	} else if dependencies.enabled && !dependencies.ready {
 		readyReason = dependencies.reason
 		readyMessage = dependencies.message
@@ -474,6 +520,9 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 	} else if observed.resourcesFailed {
 		status.Phase = applicationv1.PhaseFailed
 		setLastError(&status, observed.resourcesReason, observed.resourcesMessage)
+	} else if observed.protectedSecretsFailed {
+		status.Phase = applicationv1.PhaseFailed
+		setLastError(&status, observed.protectedSecretsReason, observed.protectedSecretsMessage)
 	} else if observed.helmFailed {
 		status.Phase = applicationv1.PhaseFailed
 		setLastError(&status, observed.helmReason, observed.helmMessage)
@@ -493,6 +542,23 @@ func (r *Reconciler) observe(ctx context.Context, app *applicationv1.OneKSApplic
 		result, err := r.observeManagedResources(ctx, app, managedReadinessEnabled)
 		if err != nil {
 			return result, err
+		}
+		result.managedResourcesReady = result.allResources
+		if usesProtectedSecrets(app) {
+			protected, protectedErr := r.observeProtectedSecrets(ctx, app, result.managedResourcesReady)
+			if protectedErr != nil {
+				return result, protectedErr
+			}
+			result.resources = append(result.resources, protected.statuses...)
+			result.completed += protected.completed
+			result.protectedSecretsReady = protected.ready
+			result.protectedSecretsFailed = protected.failed
+			result.protectedSecretsReason = protected.reason
+			result.protectedSecretsMessage = protected.message
+			result.allResources = result.managedResourcesReady && protected.ready
+			if result.managedResourcesReady && !protected.ready && protected.current != "" {
+				result.current = protected.current
+			}
 		}
 		return r.observeHelm(ctx, app, result)
 	}
@@ -598,6 +664,9 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 	status.Progress = applicationv1.ApplicationProgress{Total: applicationProgressTotal(app), Current: app.Spec.Release.ReleaseName}
 	if usesManagedResources(app) {
 		status.Resources = deletingManagedResourceStatuses(app)
+		if usesProtectedSecrets(app) {
+			status.Resources = append(status.Resources, deletingProtectedSecretStatuses(app)...)
+		}
 	}
 	clearLastError(&status)
 	if err := r.updateStatus(ctx, app, status); err != nil {
@@ -619,6 +688,27 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 	}
 	if err != nil && !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, fmt.Errorf("get deleting HelmChart: %w", err)
+	}
+
+	if usesProtectedSecrets(app) {
+		pending, protectedErr := r.reconcileDeleteProtectedSecrets(ctx, app)
+		if protectedErr != nil {
+			var conflict *OwnershipConflictError
+			if errors.As(protectedErr, &conflict) {
+				return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
+			}
+			return ctrl.Result{}, protectedErr
+		}
+		if pending {
+			return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
+		}
+		inputPending, inputErr := r.reconcileDeleteSecretInput(ctx, app)
+		if inputErr != nil {
+			return ctrl.Result{}, inputErr
+		}
+		if inputPending {
+			return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
+		}
 	}
 
 	if usesManagedResources(app) {
@@ -701,16 +791,19 @@ func (r *Reconciler) recordTerminal(ctx context.Context, app *applicationv1.OneK
 	status.Progress = applicationv1.ApplicationProgress{Total: applicationProgressTotal(app)}
 	setLastError(&status, reason, message)
 	planCondition := metav1.ConditionTrue
-	if !ownershipConflict && reason != "TargetNamespaceMissing" {
+	if !ownershipConflict && reason != "TargetNamespaceMissing" && reason != "InputSecretInvalid" {
 		planCondition = metav1.ConditionFalse
 	}
 	setCondition(&status, app.Generation, ConditionPlanValid, planCondition, reason, message)
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 {
+	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 {
 		if len(app.Spec.Dependencies) == 0 {
 			setCondition(&status, app.Generation, ConditionDependenciesReady, metav1.ConditionTrue, "NoDependencies", "Application has no direct dependencies")
 		} else {
 			setCondition(&status, app.Generation, ConditionDependenciesReady, metav1.ConditionFalse, "DependenciesPending", "Direct dependencies have not been evaluated")
 		}
+	}
+	if usesProtectedSecrets(app) {
+		setCondition(&status, app.Generation, ConditionProtectedSecretsReady, metav1.ConditionFalse, reason, message)
 	}
 	conflictCondition := metav1.ConditionFalse
 	if ownershipConflict {

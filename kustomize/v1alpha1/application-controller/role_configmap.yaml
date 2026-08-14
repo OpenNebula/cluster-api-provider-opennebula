@@ -16,8 +16,13 @@ rules:
   resources: ["bundles"]
   verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
 - apiGroups: [""]
-  resources: ["services", "secrets"]
+  resources: ["services"]
   verbs: ["get"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  # Get reads readiness metadata and immutable input/target Secrets. Create,
+  # update, and delete implement protected Secret lifecycle without patching.
+  verbs: ["get", "create", "update", "delete"]
 - apiGroups: ["networking.k8s.io"]
   resources: ["ingressclasses"]
   verbs: ["get"]

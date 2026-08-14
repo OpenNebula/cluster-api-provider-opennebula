@@ -619,6 +619,11 @@ func (c *recordingClient) Patch(ctx context.Context, object client.Object, patch
 	return c.Client.Patch(ctx, object, patch, options...)
 }
 
+func (c *recordingClient) Update(ctx context.Context, object client.Object, options ...client.UpdateOption) error {
+	c.record("update", object)
+	return c.Client.Update(ctx, object, options...)
+}
+
 func (c *recordingClient) Delete(ctx context.Context, object client.Object, options ...client.DeleteOption) error {
 	c.record("delete", object)
 	deleteOptions := (&client.DeleteOptions{}).ApplyOptions(options)
@@ -637,9 +642,11 @@ func (c *recordingClient) record(verb string, object client.Object) {
 			kind = "ConfigMap"
 		case *corev1.Namespace:
 			kind = "Namespace"
+		case *corev1.Secret:
+			kind = "Secret"
 		}
 	}
-	if kind == "ConfigMap" || kind == "HelmChart" || kind == "Namespace" {
+	if kind == "ConfigMap" || kind == "HelmChart" || kind == "Namespace" || kind == "Secret" {
 		c.childWrites = append(c.childWrites, fmt.Sprintf("%s:%s", verb, kind))
 	}
 }

@@ -22,6 +22,7 @@ const (
 	PlanVersionV1Alpha1  = "oneks.opennebula.io/plan-v1alpha1"
 	PlanVersionV1Alpha2  = "oneks.opennebula.io/plan-v1alpha2"
 	PlanVersionV1Alpha3  = "oneks.opennebula.io/plan-v1alpha3"
+	PlanVersionV1Alpha4  = "oneks.opennebula.io/plan-v1alpha4"
 	PlanVersion          = PlanVersionV1Alpha1
 	ApplicationNamespace = "oneks-system"
 	ApplicationFinalizer = "applications.oneks.opennebula.io/finalizer"
@@ -63,7 +64,7 @@ const (
 
 // OneKSApplicationSpec is an immutable, compiled application plan.
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha1' || (!has(self.role) && !has(self.dependencies) && !has(self.dependencyPlans) && !has(self.managedResources) && self.release.targetNamespace == 'oneks-poc-workloads' && !self.release.createNamespace && self.resources.all(r, r.__namespace__ == 'oneks-poc-workloads'))",message="plan-v1alpha1 does not permit role, dependency, or managedResources fields and requires the fixed workload namespace without namespace creation"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha1' || (!has(self.role) && !has(self.dependencies) && !has(self.dependencyPlans) && !has(self.managedResources) && !has(self.secretInputRef) && !has(self.protectedSecrets) && self.release.targetNamespace == 'oneks-poc-workloads' && !self.release.createNamespace && self.resources.all(r, r.__namespace__ == 'oneks-poc-workloads'))",message="plan-v1alpha1 does not permit role, dependency, managedResources, or protected Secret fields and requires the fixed workload namespace without namespace creation"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha1' || (size(self.release.repositoryURL) >= 1 && self.release.repositoryURL.matches('^https://[^[:space:]]+$'))",message="plan-v1alpha1 requires a non-empty HTTPS repositoryURL"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || has(self.role)",message="plan-v1alpha2 requires role"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || ((size(self.release.repositoryURL) == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$') && !self.release.chart.startsWith('oci://')))",message="plan-v1alpha2 release must use either an HTTPS repositoryURL with a non-OCI chart or an empty repositoryURL with an OCI chart"
@@ -71,15 +72,27 @@ const (
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role != 'Dependency' || !has(self.dependencyPlans) || size(self.dependencyPlans) == 0",message="plan-v1alpha2 Dependency must not contain dependencyPlans"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role != 'Dependency' || !self.release.createNamespace || size(self.resources) == 0",message="plan-v1alpha2 Dependency with createNamespace must not contain resources"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || !has(self.managedResources)",message="plan-v1alpha2 does not permit managedResources"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || (!has(self.secretInputRef) && !has(self.protectedSecrets))",message="plan-v1alpha2 does not permit protected Secret fields"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || (has(self.role) && self.role == 'Root')",message="plan-v1alpha3 supports only Root applications"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || ((size(self.release.repositoryURL) == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$') && !self.release.chart.startsWith('oci://')))",message="plan-v1alpha3 release must use either an HTTPS repositoryURL with a non-OCI chart or an empty repositoryURL with an OCI chart"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || self.role != 'Root' || (self.release.targetNamespace == 'oneks-poc-workloads' && !self.release.createNamespace)",message="plan-v1alpha3 Root requires the fixed workload namespace without namespace creation"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || size(self.resources) == 0",message="plan-v1alpha3 does not permit legacy resources"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || (!has(self.secretInputRef) && !has(self.protectedSecrets))",message="plan-v1alpha3 does not permit protected Secret fields"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || (has(self.role) && self.role == 'Root')",message="plan-v1alpha4 supports only Root applications"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || ((size(self.release.repositoryURL) == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$') && !self.release.chart.startsWith('oci://')))",message="plan-v1alpha4 release must use either an HTTPS repositoryURL with a non-OCI chart or an empty repositoryURL with an OCI chart"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || (self.release.targetNamespace == 'oneks-poc-workloads' && !self.release.createNamespace)",message="plan-v1alpha4 Root requires the fixed workload namespace without namespace creation"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || size(self.resources) == 0",message="plan-v1alpha4 does not permit legacy resources"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || (has(self.secretInputRef) && has(self.protectedSecrets) && size(self.protectedSecrets) > 0)",message="plan-v1alpha4 requires secretInputRef and protectedSecrets"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || !has(self.managedResources) || !has(self.protectedSecrets) || size(self.managedResources) + size(self.protectedSecrets) <= 16",message="plan-v1alpha4 permits at most 16 combined managedResources and protectedSecrets"
 // +kubebuilder:validation:XValidation:rule="self.resources.all(r, r.__namespace__ == self.release.targetNamespace)",message="resources must use the release targetNamespace"
 // +kubebuilder:validation:XValidation:rule="!has(self.dependencies) || self.dependencies.all(d, self.dependencies.filter(x, x.name == d.name).size() == 1)",message="dependency names must be unique"
 // +kubebuilder:validation:XValidation:rule="!has(self.dependencyPlans) || self.dependencyPlans.all(p, self.dependencyPlans.filter(x, x.name == p.name).size() == 1)",message="dependency plan names must be unique"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role != 'Root' || !has(self.dependencies) || (has(self.dependencyPlans) && self.dependencies.all(d, self.dependencyPlans.filter(p, p.name == d.name && p.catalogueChartID == d.catalogueChartID && p.planDigest == d.planDigest).size() == 1))",message="each direct Root dependency must resolve to exactly one matching dependencyPlan"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || self.role != 'Root' || !has(self.dependencies) || (has(self.dependencyPlans) && self.dependencies.all(d, self.dependencyPlans.filter(p, p.name == d.name && p.catalogueChartID == d.catalogueChartID && p.planDigest == d.planDigest).size() == 1))",message="each direct Root dependency must resolve to exactly one matching dependencyPlan"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || !has(self.dependencies) || (has(self.dependencyPlans) && self.dependencies.all(d, self.dependencyPlans.filter(p, p.name == d.name && p.catalogueChartID == d.catalogueChartID && p.planDigest == d.planDigest).size() == 1))",message="each direct Root dependency must resolve to exactly one matching dependencyPlan"
+// +kubebuilder:validation:XValidation:rule="!has(self.protectedSecrets) || self.protectedSecrets.all(p, self.protectedSecrets.filter(x, x.id == p.id).size() == 1)",message="protected Secret IDs must be unique"
+// +kubebuilder:validation:XValidation:rule="!has(self.protectedSecrets) || self.protectedSecrets.all(p, self.protectedSecrets.filter(x, x.__namespace__ == p.__namespace__ && x.name == p.name).size() == 1)",message="protected Secret target identities must be unique"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || !has(self.managedResources) || !has(self.protectedSecrets) || self.protectedSecrets.all(p, self.managedResources.filter(m, m.id == p.id).size() == 0)",message="protected Secret IDs must not collide with managed resource IDs"
 type OneKSApplicationSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
@@ -89,7 +102,7 @@ type OneKSApplicationSpec struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$`
 	CatalogueChartID string `json:"catalogueChartID"`
-	// +kubebuilder:validation:Enum=oneks.opennebula.io/plan-v1alpha1;oneks.opennebula.io/plan-v1alpha2;oneks.opennebula.io/plan-v1alpha3
+	// +kubebuilder:validation:Enum=oneks.opennebula.io/plan-v1alpha1;oneks.opennebula.io/plan-v1alpha2;oneks.opennebula.io/plan-v1alpha3;oneks.opennebula.io/plan-v1alpha4
 	PlanVersion string `json:"planVersion"`
 	// +kubebuilder:validation:MaxLength=50
 	// +kubebuilder:validation:Pattern=`^sha256-[A-Za-z0-9_-]{43}$`
@@ -107,8 +120,82 @@ type OneKSApplicationSpec struct {
 	DependencyPlans []DependencyPlan `json:"dependencyPlans,omitempty"`
 	// +kubebuilder:validation:MaxItems=16
 	ManagedResources []ManagedResourceSpec `json:"managedResources,omitempty"`
+	SecretInputRef   *SecretInputReference `json:"secretInputRef,omitempty"`
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	ProtectedSecrets []ProtectedSecretSpec `json:"protectedSecrets,omitempty"`
 	// +kubebuilder:validation:Enum=Delete;Retain
 	DeletionPolicy DeletionPolicy `json:"deletionPolicy"`
+}
+
+type SecretInputReference struct {
+	// +kubebuilder:validation:Enum=oneks-system
+	Namespace string `json:"namespace"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
+	Name string `json:"name"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	UID string `json:"uid"`
+}
+
+type ProtectedSecretBuilderType string
+
+const (
+	ProtectedSecretBuilderBasicAuth        ProtectedSecretBuilderType = "basicAuthSecret"
+	ProtectedSecretBuilderOpaque           ProtectedSecretBuilderType = "opaqueSecret"
+	ProtectedSecretBuilderDockerConfigJSON ProtectedSecretBuilderType = "dockerConfigJsonSecret"
+)
+
+// +kubebuilder:validation:XValidation:rule="self.builderType != 'basicAuthSecret' || (has(self.username) && has(self.passwordInputKey) && !has(self.opaqueData) && !has(self.registry) && !has(self.email))",message="basicAuthSecret requires username and passwordInputKey only"
+// +kubebuilder:validation:XValidation:rule="self.builderType != 'opaqueSecret' || (has(self.opaqueData) && size(self.opaqueData) > 0 && !has(self.username) && !has(self.passwordInputKey) && !has(self.registry) && !has(self.email))",message="opaqueSecret requires opaqueData only"
+// +kubebuilder:validation:XValidation:rule="self.builderType != 'dockerConfigJsonSecret' || (has(self.registry) && has(self.username) && has(self.passwordInputKey) && has(self.email) && !has(self.opaqueData))",message="dockerConfigJsonSecret requires registry, username, passwordInputKey, and email only"
+// +kubebuilder:validation:XValidation:rule="!has(self.opaqueData) || self.opaqueData.all(d, self.opaqueData.filter(x, x.key == d.key).size() == 1)",message="opaqueData target keys must be unique"
+type ProtectedSecretSpec struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$`
+	ID string `json:"id"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Namespace string `json:"namespace"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
+	Name string `json:"name"`
+	// +kubebuilder:validation:Enum=basicAuthSecret;opaqueSecret;dockerConfigJsonSecret
+	BuilderType ProtectedSecretBuilderType `json:"builderType"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
+	Username string `json:"username,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[-._a-zA-Z0-9]+$`
+	PasswordInputKey string `json:"passwordInputKey,omitempty"`
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	OpaqueData []ProtectedSecretDataMapping `json:"opaqueData,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=2048
+	Registry string `json:"registry,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=320
+	Email string `json:"email,omitempty"`
+	// +kubebuilder:validation:Enum=Delete;Retain
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy"`
+}
+
+type ProtectedSecretDataMapping struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[-._a-zA-Z0-9]+$`
+	Key string `json:"key"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[-._a-zA-Z0-9]+$`
+	InputKey string `json:"inputKey"`
 }
 
 type ManagedResourceScope string
