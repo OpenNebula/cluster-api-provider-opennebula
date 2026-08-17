@@ -78,8 +78,11 @@ const (
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || self.role != 'Root' || (self.release.targetNamespace == 'oneks-poc-workloads' && !self.release.createNamespace)",message="plan-v1alpha3 Root requires the fixed workload namespace without namespace creation"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || size(self.resources) == 0",message="plan-v1alpha3 does not permit legacy resources"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || (!has(self.secretInputRef) && !has(self.protectedSecrets))",message="plan-v1alpha3 does not permit protected Secret fields"
+// +kubebuilder:validation:XValidation:rule="self.planVersion == 'oneks.opennebula.io/plan-v1alpha4' || !has(self.release.authSecret)",message="only plan-v1alpha4 permits release.authSecret"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || (has(self.role) && self.role == 'Root')",message="plan-v1alpha4 supports only Root applications"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || ((size(self.release.repositoryURL) == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$') && !self.release.chart.startsWith('oci://')))",message="plan-v1alpha4 release must use either an HTTPS repositoryURL with a non-OCI chart or an empty repositoryURL with an OCI chart"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || !has(self.release.authSecret) || self.release.repositoryURL.matches('^https://[^[:space:]]+$')",message="plan-v1alpha4 release.authSecret requires an HTTPS repositoryURL"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || !has(self.release.authSecret) || (has(self.protectedSecrets) && self.protectedSecrets.filter(p, p.builderType == 'basicAuthSecret' && p.__namespace__ == 'kube-system' && p.name == self.release.authSecret.name).size() == 1)",message="release.authSecret must match exactly one protected basicAuthSecret in kube-system"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || (self.release.targetNamespace == 'oneks-poc-workloads' && !self.release.createNamespace)",message="plan-v1alpha4 Root requires the fixed workload namespace without namespace creation"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || size(self.resources) == 0",message="plan-v1alpha4 does not permit legacy resources"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || (has(self.secretInputRef) && has(self.protectedSecrets) && size(self.protectedSecrets) > 0)",message="plan-v1alpha4 requires secretInputRef and protectedSecrets"
@@ -293,6 +296,13 @@ type ManagedResourceServiceReference struct {
 	Name string `json:"name"`
 }
 
+type HelmAuthSecretReference struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
+	Name string `json:"name"`
+}
+
 type ReleaseSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
@@ -313,8 +323,9 @@ type ReleaseSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
-	TargetNamespace string `json:"targetNamespace"`
-	CreateNamespace bool   `json:"createNamespace"`
+	TargetNamespace string                   `json:"targetNamespace"`
+	CreateNamespace bool                     `json:"createNamespace"`
+	AuthSecret      *HelmAuthSecretReference `json:"authSecret,omitempty"`
 	// +kubebuilder:validation:MaxLength=65536
 	ValuesContent string `json:"valuesContent"`
 }
@@ -362,6 +373,7 @@ type DependencyReference struct {
 // +kubebuilder:validation:XValidation:rule="!self.release.createNamespace || size(self.resources) == 0",message="dependency plan with createNamespace must not contain resources"
 // +kubebuilder:validation:XValidation:rule="self.dependencies.all(d, self.dependencies.filter(x, x.name == d.name).size() == 1)",message="dependency names must be unique"
 // +kubebuilder:validation:XValidation:rule="self.dependencies.all(d, d.name != self.name)",message="dependency plan must not directly reference itself"
+// +kubebuilder:validation:XValidation:rule="!has(self.release.authSecret)",message="dependency plans do not permit release.authSecret"
 type DependencyPlan struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63

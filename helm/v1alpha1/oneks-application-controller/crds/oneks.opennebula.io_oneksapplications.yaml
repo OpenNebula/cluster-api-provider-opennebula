@@ -141,6 +141,16 @@ spec:
                       type: string
                     release:
                       properties:
+                        authSecret:
+                          properties:
+                            name:
+                              maxLength: 253
+                              minLength: 1
+                              pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
+                              type: string
+                          required:
+                          - name
+                          type: object
                         chart:
                           maxLength: 1024
                           minLength: 1
@@ -257,6 +267,8 @@ spec:
                       == d.name).size() == 1)
                   - message: dependency plan must not directly reference itself
                     rule: self.dependencies.all(d, d.name != self.name)
+                  - message: dependency plans do not permit release.authSecret
+                    rule: '!has(self.release.authSecret)'
                 maxItems: 16
                 type: array
               executionMode:
@@ -521,6 +533,16 @@ spec:
                 type: array
               release:
                 properties:
+                  authSecret:
+                    properties:
+                      name:
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
+                        type: string
+                    required:
+                    - name
+                    type: object
                   chart:
                     maxLength: 1024
                     minLength: 1
@@ -703,6 +725,8 @@ spec:
             - message: plan-v1alpha3 does not permit protected Secret fields
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || (!has(self.secretInputRef)
                 && !has(self.protectedSecrets))
+            - message: only plan-v1alpha4 permits release.authSecret
+              rule: self.planVersion == 'oneks.opennebula.io/plan-v1alpha4' || !has(self.release.authSecret)
             - message: plan-v1alpha4 supports only Root applications
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || (has(self.role)
                 && self.role == 'Root')
@@ -711,6 +735,15 @@ spec:
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || ((size(self.release.repositoryURL)
                 == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$')
                 && !self.release.chart.startsWith('oci://')))
+            - message: plan-v1alpha4 release.authSecret requires an HTTPS repositoryURL
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || !has(self.release.authSecret)
+                || self.release.repositoryURL.matches('^https://[^[:space:]]+$')
+            - message: release.authSecret must match exactly one protected basicAuthSecret
+                in kube-system
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || !has(self.release.authSecret)
+                || (has(self.protectedSecrets) && self.protectedSecrets.filter(p,
+                p.builderType == 'basicAuthSecret' && p.__namespace__ == 'kube-system'
+                && p.name == self.release.authSecret.name).size() == 1)
             - message: plan-v1alpha4 Root requires the fixed workload namespace without
                 namespace creation
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || (self.release.targetNamespace

@@ -29,6 +29,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -87,6 +88,9 @@ func TestGeneratedCRDEnforcesPlanV1Alpha4Boundaries(t *testing.T) {
 		"dockerConfigJsonSecret requires registry, username, passwordInputKey,",
 		"protected Secret target identities must be unique",
 		"protected Secret IDs must not collide with managed resource",
+		"only plan-v1alpha4 permits release.authSecret",
+		"plan-v1alpha4 release.authSecret requires an HTTPS repositoryURL",
+		"release.authSecret must match exactly one protected basicAuthSecret",
 		"enum:\n                    - oneks-system",
 	} {
 		if !strings.Contains(text, required) {
@@ -324,12 +328,92 @@ func TestEarlierPlansRejectProtectedSecretFields(t *testing.T) {
 	}
 }
 
+func TestReleaseAuthSecretValidationBoundaries(t *testing.T) {
+	t.Run("valid matching basic auth", func(t *testing.T) {
+		app := runAIPlanV1Alpha4(t)
+		if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
+			t.Fatalf("valid authSecret plan rejected: %v", err)
+		}
+	})
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*applicationv1.OneKSApplication)
+		reason string
+	}{
+		{"no matching protected Secret", func(app *applicationv1.OneKSApplication) {
+			app.Spec.ProtectedSecrets = app.Spec.ProtectedSecrets[1:]
+		}, "InvalidAuthSecretProtectedSecret"},
+		{"wrong namespace", func(app *applicationv1.OneKSApplication) {
+			app.Spec.ProtectedSecrets[0].Namespace = WorkloadNamespace
+		}, "InvalidAuthSecretProtectedSecret"},
+		{"wrong builder", func(app *applicationv1.OneKSApplication) {
+			secret := &app.Spec.ProtectedSecrets[0]
+			secret.BuilderType = applicationv1.ProtectedSecretBuilderOpaque
+			secret.Username = ""
+			secret.PasswordInputKey = ""
+			secret.OpaqueData = []applicationv1.ProtectedSecretDataMapping{{Key: "TOKEN", InputKey: "ngcApiKey"}}
+		}, "InvalidAuthSecretProtectedSecret"},
+		{"different name", func(app *applicationv1.OneKSApplication) {
+			app.Spec.Release.AuthSecret.Name = "other-repository-credentials"
+		}, "InvalidAuthSecretProtectedSecret"},
+		{"OCI repository", func(app *applicationv1.OneKSApplication) {
+			app.Spec.Release.RepositoryURL = ""
+			app.Spec.Release.Chart = "oci://registry.example.test/runai"
+		}, "InvalidAuthSecretRepository"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			app := runAIPlanV1Alpha4(t)
+			test.mutate(app)
+			refreshV4(t, app)
+			err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID})
+			if err == nil || err.Reason != test.reason {
+				t.Fatalf("authSecret validation error = %#v, want %s", err, test.reason)
+			}
+		})
+	}
+}
+
+func TestEarlierPlansAndDependencyPlansRejectReleaseAuthSecret(t *testing.T) {
+	for _, version := range []string{applicationv1.PlanVersionV1Alpha1, applicationv1.PlanVersionV1Alpha2, applicationv1.PlanVersionV1Alpha3} {
+		t.Run(version, func(t *testing.T) {
+			var app *applicationv1.OneKSApplication
+			switch version {
+			case applicationv1.PlanVersionV1Alpha1:
+				app = goldenApplication(t)
+			case applicationv1.PlanVersionV1Alpha2:
+				app = validPlanV1Alpha2Dependency(t)
+			default:
+				app = validPlanV1Alpha3(t)
+			}
+			app.Spec.Release.AuthSecret = &applicationv1.HelmAuthSecretReference{Name: "repository-credentials"}
+			refreshDigest(t, app)
+			app.Labels = producerLabels(app)
+			err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID})
+			if err == nil || !strings.HasPrefix(err.Reason, "InvalidPlanV1Alpha") {
+				t.Fatalf("pre-v4 authSecret error = %#v", err)
+			}
+		})
+	}
+
+	t.Run("dependency plan", func(t *testing.T) {
+		plan := dependencyPlanForTest("dependency", "dependency-chart", nil)
+		plan.Release.AuthSecret = &applicationv1.HelmAuthSecretReference{Name: "repository-credentials"}
+		root := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
+		err := ValidatePlan(root, ValidationConfig{ClusterID: root.Spec.ClusterID})
+		if err == nil || err.Reason != "InvalidDependencyAuthSecret" {
+			t.Fatalf("dependency authSecret error = %#v", err)
+		}
+	})
+}
+
 func TestPlanV1Alpha4ProtectedFieldsAffectDigestWithoutSorting(t *testing.T) {
 	base := runAIPlanV1Alpha4(t).Spec
 	baseDigest := digestSpec(t, base)
 	mutations := []func(*applicationv1.OneKSApplicationSpec){
 		func(spec *applicationv1.OneKSApplicationSpec) { spec.SecretInputRef.Name = "other-input" },
 		func(spec *applicationv1.OneKSApplicationSpec) { spec.SecretInputRef.UID = "other-uid" },
+		func(spec *applicationv1.OneKSApplicationSpec) { spec.Release.AuthSecret.Name = "other-auth-secret" },
 		func(spec *applicationv1.OneKSApplicationSpec) { spec.ProtectedSecrets[0].Username = "other-user" },
 		func(spec *applicationv1.OneKSApplicationSpec) {
 			spec.ProtectedSecrets[1].OpaqueData[0].InputKey = "other-input-key"
@@ -437,6 +521,9 @@ func TestPlanV1Alpha4RunAIProtectedSecretsMaterializeWithoutLeakingValues(t *tes
 		t.Fatalf("protected Secret was created before finalizer: %#v", recorder.childWrites)
 	}
 	reconcileOnce(t, ctx, reconciler, app)
+	if got := strings.Join(recorder.childWrites, ","); got != "create:Secret,create:Secret,create:Secret,create:Secret,create:HelmChart" {
+		t.Fatalf("protected credentials were not created before HelmChart: %s", got)
+	}
 
 	for _, resource := range app.Spec.ProtectedSecrets {
 		secret := &corev1.Secret{}
@@ -464,7 +551,12 @@ func TestPlanV1Alpha4RunAIProtectedSecretsMaterializeWithoutLeakingValues(t *tes
 			t.Fatal("Docker config Secret content mismatch")
 		}
 	}
-	assertExists(t, ctx, reconciler.Client, helmChartObject(app.Spec.Release.ReleaseName), HelmChartNamespace, app.Spec.Release.ReleaseName)
+	helm := helmChartObject(app.Spec.Release.ReleaseName)
+	assertExists(t, ctx, reconciler.Client, helm, HelmChartNamespace, app.Spec.Release.ReleaseName)
+	authSecretName, found, err := unstructured.NestedString(helm.Object, "spec", "authSecret", "name")
+	if err != nil || !found || authSecretName != "runai-test-helm-repo-creds" {
+		t.Fatalf("HelmChart authSecret = %q, found %v, err %v", authSecretName, found, err)
+	}
 
 	canonical, err := CanonicalPlan(app.Spec)
 	if err != nil {
@@ -473,9 +565,11 @@ func TestPlanV1Alpha4RunAIProtectedSecretsMaterializeWithoutLeakingValues(t *tes
 	stored := getApplication(t, ctx, reconciler.Client, app)
 	serializedSpec, _ := json.Marshal(stored.Spec)
 	serializedStatus, _ := json.Marshal(stored.Status)
+	serializedHelm, _ := json.Marshal(helm.Object)
 	eventText := drainEvents(events)
 	for label, payload := range map[string][]byte{
-		"canonical": canonical, "spec": serializedSpec, "status": serializedStatus, "events": []byte(eventText),
+		"canonical": canonical, "spec": serializedSpec, "HelmChart": serializedHelm,
+		"status": serializedStatus, "events": []byte(eventText),
 	} {
 		if bytes.Contains(payload, []byte(adminValue)) || bytes.Contains(payload, []byte(ngcValue)) {
 			t.Fatalf("%s leaked sentinel Secret input", label)
@@ -713,6 +807,7 @@ func runAIPlanV1Alpha4(t *testing.T) *applicationv1.OneKSApplication {
 	app := validPlanV1Alpha4(t)
 	app.Name = "runai-test-application"
 	app.Spec.Release.ReleaseName = "runai-test"
+	app.Spec.Release.AuthSecret = &applicationv1.HelmAuthSecretReference{Name: "runai-test-helm-repo-creds"}
 	app.Spec.ManagedResources = nil
 	app.Spec.SecretInputRef = &applicationv1.SecretInputReference{
 		Namespace: applicationv1.ApplicationNamespace,

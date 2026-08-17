@@ -103,18 +103,18 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 	}
 	switch app.Spec.PlanVersion {
 	case applicationv1.PlanVersionV1Alpha1:
-		if app.Spec.Role != "" || app.Spec.Dependencies != nil || app.Spec.DependencyPlans != nil || app.Spec.ManagedResources != nil || app.Spec.SecretInputRef != nil || app.Spec.ProtectedSecrets != nil {
+		if app.Spec.Role != "" || app.Spec.Dependencies != nil || app.Spec.DependencyPlans != nil || app.Spec.ManagedResources != nil || app.Spec.SecretInputRef != nil || app.Spec.ProtectedSecrets != nil || app.Spec.Release.AuthSecret != nil {
 			return invalid("InvalidPlanV1Alpha1Fields", "plan-v1alpha1 does not permit role or dependency fields")
 		}
 	case applicationv1.PlanVersionV1Alpha2:
-		if app.Spec.ManagedResources != nil || app.Spec.SecretInputRef != nil || app.Spec.ProtectedSecrets != nil {
+		if app.Spec.ManagedResources != nil || app.Spec.SecretInputRef != nil || app.Spec.ProtectedSecrets != nil || app.Spec.Release.AuthSecret != nil {
 			return invalid("InvalidPlanV1Alpha2Fields", "plan-v1alpha2 does not permit managedResources")
 		}
 		if app.Spec.Role != applicationv1.ApplicationRoleRoot && app.Spec.Role != applicationv1.ApplicationRoleDependency {
 			return invalid("InvalidApplicationRole", "plan-v1alpha2 role must be Root or Dependency")
 		}
 	case applicationv1.PlanVersionV1Alpha3:
-		if app.Spec.SecretInputRef != nil || app.Spec.ProtectedSecrets != nil {
+		if app.Spec.SecretInputRef != nil || app.Spec.ProtectedSecrets != nil || app.Spec.Release.AuthSecret != nil {
 			return invalid("InvalidPlanV1Alpha3Fields", "plan-v1alpha3 does not permit protected Secret fields")
 		}
 		if app.Spec.Role != applicationv1.ApplicationRoleRoot {
@@ -259,6 +259,9 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 	}
 	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 {
 		if err := validateProtectedSecretContract(app.Spec); err != nil {
+			return err
+		}
+		if err := validateReleaseAuthSecret(app.Spec); err != nil {
 			return err
 		}
 	}
@@ -446,6 +449,9 @@ func validateDependencyReference(reference applicationv1.DependencyReference, pa
 }
 
 func validateDependencyPlan(plan applicationv1.DependencyPlan, path string) *PlanError {
+	if plan.Release.AuthSecret != nil {
+		return invalid("InvalidDependencyAuthSecret", "%s.release does not permit authSecret", path)
+	}
 	if plan.Release.ChartID != plan.CatalogueChartID {
 		return invalid("DependencyChartIDMismatch", "%s.release.chartID must equal catalogueChartID", path)
 	}
@@ -498,6 +504,30 @@ func validateDependencyPlan(plan applicationv1.DependencyPlan, path string) *Pla
 			return invalid("DuplicateDependencyName", "%s dependency name %q is duplicated", path, dependency.Name)
 		}
 		names[dependency.Name] = struct{}{}
+	}
+	return nil
+}
+
+func validateReleaseAuthSecret(spec applicationv1.OneKSApplicationSpec) *PlanError {
+	authSecret := spec.Release.AuthSecret
+	if authSecret == nil {
+		return nil
+	}
+	if !validUTF8Bytes(authSecret.Name, 1, 253) || len(validation.IsDNS1123Subdomain(authSecret.Name)) > 0 {
+		return invalid("InvalidAuthSecretName", "release.authSecret.name is not a DNS-1123 subdomain")
+	}
+	if err := validateRepositoryURL(spec.Release.RepositoryURL); err != nil {
+		return invalid("InvalidAuthSecretRepository", "release.authSecret requires an HTTPS repositoryURL")
+	}
+	matches := 0
+	for _, protected := range spec.ProtectedSecrets {
+		if protected.BuilderType == applicationv1.ProtectedSecretBuilderBasicAuth &&
+			protected.Namespace == HelmChartNamespace && protected.Name == authSecret.Name {
+			matches++
+		}
+	}
+	if matches != 1 {
+		return invalid("InvalidAuthSecretProtectedSecret", "release.authSecret must match exactly one protected basicAuthSecret in kube-system")
 	}
 	return nil
 }
@@ -698,7 +728,7 @@ func canonicalPlanV1Alpha4(spec applicationv1.OneKSApplicationSpec) ([]byte, err
 	plan := map[string]any{
 		"clusterID": spec.ClusterID, "catalogueChartID": spec.CatalogueChartID,
 		"planVersion": spec.PlanVersion, "executionMode": string(spec.ExecutionMode),
-		"release": canonicalRelease(spec.Release), "resources": canonicalResources(spec.Resources),
+		"release": canonicalReleaseV1Alpha4(spec.Release), "resources": canonicalResources(spec.Resources),
 		"role": string(spec.Role), "dependencies": dependencies, "dependencyPlans": dependencyPlans,
 		"managedResources": managed, "secretInputRef": input, "protectedSecrets": protected,
 		"deletionPolicy": string(spec.DeletionPolicy),
@@ -796,6 +826,14 @@ func canonicalRelease(release applicationv1.ReleaseSpec) map[string]any {
 		"releaseName": release.ReleaseName, "targetNamespace": release.TargetNamespace,
 		"createNamespace": release.CreateNamespace, "valuesContent": release.ValuesContent,
 	}
+}
+
+func canonicalReleaseV1Alpha4(release applicationv1.ReleaseSpec) map[string]any {
+	canonical := canonicalRelease(release)
+	if release.AuthSecret != nil {
+		canonical["authSecret"] = map[string]any{"name": release.AuthSecret.Name}
+	}
+	return canonical
 }
 
 func canonicalResources(resourceSpecs []applicationv1.ResourceSpec) []any {

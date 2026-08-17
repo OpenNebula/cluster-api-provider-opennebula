@@ -394,6 +394,9 @@ func desiredHelmChart(app *applicationv1.OneKSApplication) *unstructured.Unstruc
 	if app.Spec.Release.RepositoryURL != "" {
 		spec["repo"] = app.Spec.Release.RepositoryURL
 	}
+	if app.Spec.Release.AuthSecret != nil {
+		spec["authSecret"] = map[string]any{"name": app.Spec.Release.AuthSecret.Name}
+	}
 	object.Object["spec"] = spec
 	return object
 }
