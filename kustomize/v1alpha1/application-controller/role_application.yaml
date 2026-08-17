@@ -6,10 +6,10 @@ metadata:
 rules:
 - apiGroups: ["oneks.opennebula.io"]
   resources: ["oneksapplications"]
-  # Create materializes shared Dependency applications, update persists
+  # Create materializes shared Dependency applications, patch persists
   # application finalizers, and delete garbage-collects unreferenced shared
   # Dependency applications. CRD CEL validation keeps the spec immutable.
-  verbs: ["get", "list", "watch", "create", "update", "delete"]
+  verbs: ["get", "list", "watch", "create", "patch", "delete"]
 - apiGroups: ["oneks.opennebula.io"]
   resources: ["oneksapplications/status"]
   verbs: ["get", "patch", "update"]

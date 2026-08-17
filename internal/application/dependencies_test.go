@@ -558,7 +558,19 @@ func TestLegacyDependencyGetsFinalizerBeforeLastConsumerDeletion(t *testing.T) {
 	root := deletingRootForTest(t, "root", plan)
 	dependency := existingDependencyForTest(root, plan)
 	dependency.Finalizers = nil
+	dependency.Spec.Dependencies = []applicationv1.DependencyReference{}
+	dependency.Spec.DependencyPlans = []applicationv1.DependencyPlan{}
+	refreshDigest(t, dependency)
+	wantSpec := dependency.DeepCopy().Spec
+	wantSpecJSON, err := json.Marshal(wantSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
 	reconciler, _ := testReconciler(t, root, dependency)
+	recorder := &applicationFinalizerMutationClient{
+		Client: reconciler.Client, key: client.ObjectKeyFromObject(dependency),
+	}
+	reconciler.Client = recorder
 
 	result := reconcileOnce(t, ctx, reconciler, root)
 	if result.RequeueAfter == 0 && !result.Requeue {
@@ -575,6 +587,8 @@ func TestLegacyDependencyGetsFinalizerBeforeLastConsumerDeletion(t *testing.T) {
 	if !containsString(storedRoot.Finalizers, applicationv1.ApplicationFinalizer) {
 		t.Fatalf("consumer finalizer was removed before dependency deletion retry: %#v", storedRoot.Finalizers)
 	}
+	assertApplicationSpecJSONUnchanged(t, wantSpecJSON, storedDependency.Spec)
+	assertMetadataOnlyApplicationPatches(t, recorder, 1)
 
 	reconcileOnce(t, ctx, reconciler, root)
 	assertDependencyTerminating(t, ctx, reconciler.Client, plan.Name)

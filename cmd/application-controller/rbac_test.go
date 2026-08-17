@@ -18,6 +18,8 @@ package main
 
 import (
 	"os"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -34,9 +36,8 @@ func TestApplicationRoleHasOnlyRequiredApplicationWrites(t *testing.T) {
 	if err := yaml.Unmarshal(payload, &role); err != nil {
 		t.Fatalf("decode application Role: %v", err)
 	}
-	foundRootUpdate := false
-	foundDependencyCreate := false
-	foundDependencyDelete := false
+	applicationRules := 0
+	applicationVerbs := []string{}
 	for _, rule := range role.Rules {
 		for _, resource := range rule.Resources {
 			if resource == "*" || resource == "secrets" || resource == "namespaces" {
@@ -48,30 +49,19 @@ func TestApplicationRoleHasOnlyRequiredApplicationWrites(t *testing.T) {
 			if resource != "oneksapplications" {
 				continue
 			}
+			applicationRules++
 			for _, verb := range rule.Verbs {
 				if verb == "*" {
 					t.Fatal("wildcard verb is forbidden")
 				}
-				if verb == "update" {
-					foundRootUpdate = true
-				}
-				if verb == "create" {
-					foundDependencyCreate = true
-				}
-				if verb == "delete" {
-					foundDependencyDelete = true
-				}
+				applicationVerbs = append(applicationVerbs, verb)
 			}
 		}
 	}
-	if !foundRootUpdate {
-		t.Fatal("root OneKSApplication update is required for Client.Update finalizers")
-	}
-	if !foundDependencyCreate {
-		t.Fatal("OneKSApplication create is required for dependency materialization")
-	}
-	if !foundDependencyDelete {
-		t.Fatal("OneKSApplication delete is required for shared dependency garbage collection")
+	wantApplicationVerbs := []string{"create", "delete", "get", "list", "patch", "watch"}
+	sort.Strings(applicationVerbs)
+	if applicationRules != 1 || !reflect.DeepEqual(applicationVerbs, wantApplicationVerbs) {
+		t.Fatalf("OneKSApplication verbs = %#v across %d rules, want exactly %#v", applicationVerbs, applicationRules, wantApplicationVerbs)
 	}
 
 	helmRBAC, err := os.ReadFile("../../helm/v1alpha1/oneks-application-controller/templates/rbac.yaml")
@@ -82,8 +72,8 @@ func TestApplicationRoleHasOnlyRequiredApplicationWrites(t *testing.T) {
 	if strings.Contains(text, "oneksapplications/finalizers") || strings.Contains(text, "resources: [\"*\"]") {
 		t.Fatalf("Helm RBAC contains a forbidden permission")
 	}
-	if !strings.Contains(text, `verbs: ["get", "list", "watch", "create", "update", "delete"]`) {
-		t.Fatal("Helm RBAC lacks required OneKSApplication create/update/delete permissions")
+	if !strings.Contains(text, `verbs: ["get", "list", "watch", "create", "patch", "delete"]`) {
+		t.Fatal("Helm RBAC lacks the exact required OneKSApplication verbs")
 	}
 }
 

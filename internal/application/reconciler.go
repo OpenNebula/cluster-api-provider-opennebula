@@ -157,9 +157,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 	}
 
 	if !containsString(app.Finalizers, applicationv1.ApplicationFinalizer) {
-		updated := app.DeepCopy()
-		updated.Finalizers = append(updated.Finalizers, applicationv1.ApplicationFinalizer)
-		if err := r.Update(ctx, updated); err != nil {
+		finalizers := append([]string(nil), app.Finalizers...)
+		updated, err := r.patchApplicationFinalizers(
+			ctx, app, append(finalizers, applicationv1.ApplicationFinalizer),
+		)
+		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("add application finalizer: %w", err)
 		}
 		r.event(updated, corev1.EventTypeNormal, "FinalizerAdded", "Application cleanup finalizer added")
@@ -766,9 +768,10 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 }
 
 func (r *Reconciler) removeApplicationFinalizer(ctx context.Context, app *applicationv1.OneKSApplication) error {
-	updated := app.DeepCopy()
-	updated.Finalizers = removeString(updated.Finalizers, applicationv1.ApplicationFinalizer)
-	if err := r.Update(ctx, updated); err != nil {
+	_, err := r.patchApplicationFinalizers(
+		ctx, app, removeString(app.Finalizers, applicationv1.ApplicationFinalizer),
+	)
+	if err != nil {
 		current := &applicationv1.OneKSApplication{}
 		getErr := r.authoritativeReader().Get(ctx, client.ObjectKeyFromObject(app), current)
 		if apierrors.IsNotFound(getErr) {
@@ -783,6 +786,22 @@ func (r *Reconciler) removeApplicationFinalizer(ctx context.Context, app *applic
 		return fmt.Errorf("remove application finalizer: %w", err)
 	}
 	return nil
+}
+
+func (r *Reconciler) patchApplicationFinalizers(
+	ctx context.Context,
+	app *applicationv1.OneKSApplication,
+	finalizers []string,
+) (*applicationv1.OneKSApplication, error) {
+	updated := app.DeepCopy()
+	updated.Finalizers = append([]string(nil), finalizers...)
+	patch := client.MergeFromWithOptions(
+		app, client.MergeFromWithOptimisticLock{},
+	)
+	if err := r.Patch(ctx, updated, patch); err != nil {
+		return nil, err
+	}
+	return updated, nil
 }
 
 func (r *Reconciler) recordTerminal(ctx context.Context, app *applicationv1.OneKSApplication, reason, message string, ownershipConflict bool) (ctrl.Result, error) {

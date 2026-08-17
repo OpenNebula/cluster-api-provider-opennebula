@@ -330,9 +330,12 @@ func (r *Reconciler) releaseDependency(ctx context.Context, consumer *applicatio
 		return false, nil
 	}
 	if !containsString(dependency.Finalizers, applicationv1.ApplicationFinalizer) {
-		updated := dependency.DeepCopy()
-		updated.Finalizers = append(updated.Finalizers, applicationv1.ApplicationFinalizer)
-		if err := r.Update(ctx, updated); err != nil {
+		finalizers := append([]string(nil), dependency.Finalizers...)
+		_, err := r.patchApplicationFinalizers(
+			ctx, dependency,
+			append(finalizers, applicationv1.ApplicationFinalizer),
+		)
+		if err != nil {
 			return false, fmt.Errorf("add dependency cleanup finalizer to %s/%s: %w", dependency.Namespace, dependency.Name, err)
 		}
 		r.event(consumer, corev1.EventTypeNormal, "DependencyFinalizerAdded", fmt.Sprintf("Dependency application %s/%s cleanup finalizer added", dependency.Namespace, dependency.Name))
