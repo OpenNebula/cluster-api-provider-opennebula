@@ -239,6 +239,60 @@ spec:
                         type: object
                       maxItems: 16
                       type: array
+                    uninstall:
+                      properties:
+                        preActions:
+                          items:
+                            properties:
+                              patchJSON:
+                                maxLength: 16384
+                                minLength: 1
+                                type: string
+                              patchType:
+                                enum:
+                                - merge
+                                type: string
+                              resource:
+                                properties:
+                                  apiVersion:
+                                    maxLength: 253
+                                    minLength: 1
+                                    type: string
+                                  kind:
+                                    maxLength: 63
+                                    minLength: 1
+                                    pattern: ^[A-Z][A-Za-z0-9]*$
+                                    type: string
+                                  name:
+                                    maxLength: 253
+                                    minLength: 1
+                                    pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
+                                    type: string
+                                  namespace:
+                                    maxLength: 63
+                                    pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                    type: string
+                                required:
+                                - apiVersion
+                                - kind
+                                - name
+                                type: object
+                              type:
+                                enum:
+                                - kubernetesPatch
+                                type: string
+                            required:
+                            - patchJSON
+                            - patchType
+                            - resource
+                            - type
+                            type: object
+                          maxItems: 8
+                          minItems: 1
+                          type: array
+                      required:
+                      - preActions
+                      type: object
                   required:
                   - catalogueChartID
                   - deletionPolicy
@@ -656,6 +710,60 @@ spec:
                 - namespace
                 - uid
                 type: object
+              uninstall:
+                properties:
+                  preActions:
+                    items:
+                      properties:
+                        patchJSON:
+                          maxLength: 16384
+                          minLength: 1
+                          type: string
+                        patchType:
+                          enum:
+                          - merge
+                          type: string
+                        resource:
+                          properties:
+                            apiVersion:
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                            kind:
+                              maxLength: 63
+                              minLength: 1
+                              pattern: ^[A-Z][A-Za-z0-9]*$
+                              type: string
+                            name:
+                              maxLength: 253
+                              minLength: 1
+                              pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
+                              type: string
+                            namespace:
+                              maxLength: 63
+                              pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                              type: string
+                          required:
+                          - apiVersion
+                          - kind
+                          - name
+                          type: object
+                        type:
+                          enum:
+                          - kubernetesPatch
+                          type: string
+                      required:
+                      - patchJSON
+                      - patchType
+                      - resource
+                      - type
+                      type: object
+                    maxItems: 8
+                    minItems: 1
+                    type: array
+                required:
+                - preActions
+                type: object
             required:
             - catalogueChartID
             - clusterID
@@ -799,6 +907,10 @@ spec:
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || !has(self.managedResources)
                 || !has(self.protectedSecrets) || self.protectedSecrets.all(p, self.managedResources.filter(m,
                 m.id == p.id).size() == 0)
+            - message: top-level uninstall is permitted only for plan-v1alpha2 Dependency
+                applications
+              rule: '!has(self.uninstall) || (self.planVersion == ''oneks.opennebula.io/plan-v1alpha2''
+                && has(self.role) && self.role == ''Dependency'')'
           status:
             properties:
               conditions:

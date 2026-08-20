@@ -47,6 +47,8 @@ const (
 	maxDependencyPlans     = 16
 	maxManagedResources    = 16
 	maxProtectedSecrets    = 16
+	maxUninstallPreActions = 8
+	maxMergePatchBytes     = 16384
 	WorkloadNamespace      = "oneks-poc-workloads"
 )
 
@@ -55,6 +57,7 @@ var (
 	sensitiveKeyPattern = regexp.MustCompile(`(?i)(password|secret|token|credential|api.?key|private.?key)`)
 	planDigestPattern   = regexp.MustCompile(`^sha256-[A-Za-z0-9_-]{43}$`)
 	ociChartPattern     = regexp.MustCompile(`^oci://[^[:space:]]+$`)
+	kindPattern         = regexp.MustCompile(`^[A-Z][A-Za-z0-9]{0,62}$`)
 )
 
 type ValidationConfig struct {
@@ -132,6 +135,10 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 		}
 	default:
 		return invalid("UnsupportedPlanVersion", "unsupported planVersion %q", app.Spec.PlanVersion)
+	}
+	if app.Spec.Uninstall != nil &&
+		(app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha2 || app.Spec.Role != applicationv1.ApplicationRoleDependency) {
+		return invalid("InvalidUninstall", "top-level uninstall is permitted only for plan-v1alpha2 Dependency applications")
 	}
 	if app.Spec.ExecutionMode != applicationv1.ExecutionModeObserve && app.Spec.ExecutionMode != applicationv1.ExecutionModeExecute {
 		return invalid("InvalidExecutionMode", "executionMode must be Observe or Execute")
@@ -249,6 +256,11 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 
 	if app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha1 {
 		if err := validateDependencyContract(app); err != nil {
+			return err
+		}
+	}
+	if app.Spec.Uninstall != nil {
+		if err := validateUninstall(*app.Spec.Uninstall, "uninstall"); err != nil {
 			return err
 		}
 	}
@@ -431,7 +443,7 @@ func dependencyPlanChildSpec(clusterID string, plan applicationv1.DependencyPlan
 		ExecutionMode: applicationv1.ExecutionModeExecute,
 		Release:       plan.Release, Resources: plan.Resources,
 		Role: applicationv1.ApplicationRoleDependency, Dependencies: plan.Dependencies,
-		DependencyPlans: nil, DeletionPolicy: plan.DeletionPolicy,
+		DependencyPlans: nil, Uninstall: plan.Uninstall, DeletionPolicy: plan.DeletionPolicy,
 	}
 }
 
@@ -482,6 +494,11 @@ func validateDependencyPlan(plan applicationv1.DependencyPlan, path string) *Pla
 	if !validDeletionPolicy(plan.DeletionPolicy) {
 		return invalid("InvalidDeletionPolicy", "%s.deletionPolicy must be Delete or Retain", path)
 	}
+	if plan.Uninstall != nil {
+		if err := validateUninstall(*plan.Uninstall, path+".uninstall"); err != nil {
+			return err
+		}
+	}
 	if len(plan.Resources) > maxResources {
 		return invalid("TooManyResources", "%s.resources exceeds %d entries", path, maxResources)
 	}
@@ -528,6 +545,47 @@ func validateReleaseAuthSecret(spec applicationv1.OneKSApplicationSpec) *PlanErr
 	}
 	if matches != 1 {
 		return invalid("InvalidAuthSecretProtectedSecret", "release.authSecret must match exactly one protected basicAuthSecret in kube-system")
+	}
+	return nil
+}
+
+func validateUninstall(uninstall applicationv1.UninstallSpec, path string) *PlanError {
+	if len(uninstall.PreActions) == 0 || len(uninstall.PreActions) > maxUninstallPreActions {
+		return invalid("InvalidUninstallActions", "%s.preActions must contain between 1 and %d entries", path, maxUninstallPreActions)
+	}
+	for index, action := range uninstall.PreActions {
+		actionPath := fmt.Sprintf("%s.preActions[%d]", path, index)
+		if action.Type != applicationv1.UninstallPreActionKubernetesPatch {
+			return invalid("UnsupportedUninstallAction", "%s.type must be kubernetesPatch", actionPath)
+		}
+		if action.PatchType != applicationv1.KubernetesPatchTypeMerge {
+			return invalid("UnsupportedUninstallPatchType", "%s.patchType must be merge", actionPath)
+		}
+		resource := action.Resource
+		parts := strings.Split(resource.APIVersion, "/")
+		validAPIVersion := len(parts) == 1 && len(validation.IsDNS1123Label(parts[0])) == 0 ||
+			len(parts) == 2 && len(validation.IsDNS1123Subdomain(parts[0])) == 0 && len(validation.IsDNS1123Label(parts[1])) == 0
+		if !validAPIVersion || !kindPattern.MatchString(resource.Kind) {
+			return invalid("InvalidUninstallResourceIdentity", "%s.resource must contain a valid apiVersion and kind", actionPath)
+		}
+		if resource.Namespace != "" && len(validation.IsDNS1123Label(resource.Namespace)) != 0 {
+			return invalid("InvalidUninstallResourceIdentity", "%s.resource.namespace must be a DNS-1123 label", actionPath)
+		}
+		if len(validation.IsDNS1123Subdomain(resource.Name)) != 0 {
+			return invalid("InvalidUninstallResourceIdentity", "%s.resource.name must be a DNS-1123 subdomain", actionPath)
+		}
+		if placeholderPattern.MatchString(resource.APIVersion) || placeholderPattern.MatchString(resource.Kind) ||
+			placeholderPattern.MatchString(resource.Namespace) || placeholderPattern.MatchString(resource.Name) ||
+			placeholderPattern.MatchString(action.PatchJSON) {
+			return invalid("UnresolvedPlaceholder", "%s contains an unresolved placeholder", actionPath)
+		}
+		if !utf8.ValidString(action.PatchJSON) || len([]byte(action.PatchJSON)) == 0 || len([]byte(action.PatchJSON)) > maxMergePatchBytes {
+			return invalid("InvalidUninstallPatch", "%s.patchJSON must be valid UTF-8 between 1 and %d bytes", actionPath, maxMergePatchBytes)
+		}
+		patch := map[string]any{}
+		if err := json.Unmarshal([]byte(action.PatchJSON), &patch); err != nil || patch == nil || len(patch) == 0 {
+			return invalid("InvalidUninstallPatch", "%s.patchJSON must be a non-empty JSON object", actionPath)
+		}
 	}
 	return nil
 }
@@ -791,6 +849,9 @@ func canonicalPlanV1Alpha2(spec applicationv1.OneKSApplicationSpec) ([]byte, err
 		"role": string(spec.Role), "dependencies": dependencies,
 		"dependencyPlans": dependencyPlans, "deletionPolicy": string(spec.DeletionPolicy),
 	}
+	if spec.Uninstall != nil {
+		plan["uninstall"] = canonicalUninstall(*spec.Uninstall)
+	}
 
 	var output bytes.Buffer
 	if err := writeCanonicalJSON(&output, plan); err != nil {
@@ -804,12 +865,35 @@ func canonicalDependencyPlan(plan applicationv1.DependencyPlan) map[string]any {
 	for index, dependency := range plan.Dependencies {
 		dependencies[index] = canonicalDependencyReference(dependency)
 	}
-	return map[string]any{
+	canonical := map[string]any{
 		"name": plan.Name, "catalogueChartID": plan.CatalogueChartID,
 		"planDigest": plan.PlanDigest, "release": canonicalRelease(plan.Release),
 		"resources": canonicalResources(plan.Resources), "dependencies": dependencies,
 		"deletionPolicy": string(plan.DeletionPolicy),
 	}
+	if plan.Uninstall != nil {
+		canonical["uninstall"] = canonicalUninstall(*plan.Uninstall)
+	}
+	return canonical
+}
+
+func canonicalUninstall(uninstall applicationv1.UninstallSpec) map[string]any {
+	actions := make([]any, len(uninstall.PreActions))
+	for index, action := range uninstall.PreActions {
+		resource := map[string]any{
+			"apiVersion": action.Resource.APIVersion,
+			"kind":       action.Resource.Kind,
+			"name":       action.Resource.Name,
+		}
+		if action.Resource.Namespace != "" {
+			resource["namespace"] = action.Resource.Namespace
+		}
+		actions[index] = map[string]any{
+			"type": string(action.Type), "resource": resource,
+			"patchType": string(action.PatchType), "patchJSON": action.PatchJSON,
+		}
+	}
+	return map[string]any{"preActions": actions}
 }
 
 func canonicalDependencyReference(reference applicationv1.DependencyReference) map[string]any {

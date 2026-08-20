@@ -101,11 +101,28 @@ func TestNamespacePermissionSupportsManagedClusterResources(t *testing.T) {
 			t.Fatalf("read %s: %v", path, err)
 		}
 		text := string(payload)
-		if !strings.Contains(text, `resources: ["namespaces", "configmaps"]`) || !strings.Contains(text, `verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]`) {
+		if !strings.Contains(text, "- apiGroups: [\"\"]\n  resources: [\"namespaces\", \"configmaps\"]\n  verbs: [\"get\", \"list\", \"watch\", \"create\", \"patch\", \"update\", \"delete\"]") {
 			t.Fatalf("%s lacks bounded managed Namespace permissions", path)
 		}
-		if strings.Contains(text, "resourceNames:") || strings.Contains(text, `resources: ["*"]`) {
-			t.Fatalf("%s restricts managed namespace names or grants wildcard resources", path)
+		if strings.Contains(text, `resources: ["*"]`) {
+			t.Fatalf("%s grants wildcard resources", path)
+		}
+	}
+}
+
+func TestManagedResourceBindingUsesUpgradeSafeIdentity(t *testing.T) {
+	want := "kind: ClusterRoleBinding\nmetadata:\n  name: oneks-application-controller-managed-resources\nroleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRole\n  name: oneks-application-controller-managed-resources"
+	for _, path := range []string{
+		"../../kustomize/v1alpha1/application-controller/role_binding_configmap.yaml",
+		"../../helm/v1alpha1/oneks-application-controller/templates/rbac.yaml",
+	} {
+		payload, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := string(payload)
+		if strings.Count(text, "kind: ClusterRoleBinding") != 1 || !strings.Contains(text, want) {
+			t.Fatalf("%s does not define only the upgrade-safe managed-resource binding", path)
 		}
 	}
 }

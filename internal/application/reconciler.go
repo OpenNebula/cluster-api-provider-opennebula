@@ -685,6 +685,9 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 			conflict := (&OwnershipConflictError{Kind: "HelmChart", Namespace: helm.GetNamespace(), Name: helm.GetName()}).Error()
 			return r.recordTerminal(ctx, app, "OwnershipConflict", conflict, true)
 		}
+		if err := r.executePreUninstallActions(ctx, app); err != nil {
+			return ctrl.Result{}, err
+		}
 		if err := r.Delete(ctx, helm, deletePreconditions(helm)...); err != nil && !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, fmt.Errorf("delete HelmChart %s/%s: %w", helm.GetNamespace(), helm.GetName(), err)
 		}
@@ -768,6 +771,27 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *Reconciler) executePreUninstallActions(ctx context.Context, app *applicationv1.OneKSApplication) error {
+	if app.Spec.Role != applicationv1.ApplicationRoleDependency || app.Spec.Uninstall == nil {
+		return nil
+	}
+	for index, action := range app.Spec.Uninstall.PreActions {
+		target := &unstructured.Unstructured{}
+		target.SetAPIVersion(action.Resource.APIVersion)
+		target.SetKind(action.Resource.Kind)
+		target.SetNamespace(action.Resource.Namespace)
+		target.SetName(action.Resource.Name)
+		if err := r.authoritativeReader().Get(ctx, client.ObjectKeyFromObject(target), target); err != nil {
+			return fmt.Errorf("get pre-uninstall action %d target %s %s/%s: %w", index, action.Resource.Kind, action.Resource.Namespace, action.Resource.Name, err)
+		}
+		patch := client.RawPatch(types.MergePatchType, []byte(action.PatchJSON))
+		if err := r.Patch(ctx, target, patch); err != nil {
+			return fmt.Errorf("patch pre-uninstall action %d target %s %s/%s: %w", index, action.Resource.Kind, action.Resource.Namespace, action.Resource.Name, err)
+		}
+	}
+	return nil
 }
 
 func (r *Reconciler) removeApplicationFinalizer(ctx context.Context, app *applicationv1.OneKSApplication) error {

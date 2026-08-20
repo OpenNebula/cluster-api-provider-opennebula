@@ -86,7 +86,7 @@ func TestManagedResourceRBACIsKindAndVerbBounded(t *testing.T) {
 	if err := yaml.Unmarshal(payload, &role); err != nil {
 		t.Fatalf("decode managed-resource ClusterRole: %v", err)
 	}
-	if role.Kind != "ClusterRole" || len(role.Rules) != 7 {
+	if role.Kind != "ClusterRole" || len(role.Rules) != 8 {
 		t.Fatalf("managed-resource permissions are not cluster-scoped and bounded: %#v", role)
 	}
 	managedVerbs := []string{"get", "list", "watch", "create", "patch", "update", "delete"}
@@ -96,6 +96,7 @@ func TestManagedResourceRBACIsKindAndVerbBounded(t *testing.T) {
 		"cert-manager.io":       {"clusterissuers": managedVerbs, "certificates": managedVerbs},
 		"trust.cert-manager.io": {"bundles": managedVerbs},
 		"networking.k8s.io":     {"ingressclasses": {"get"}},
+		"longhorn.io":           {"settings": {"get", "patch"}},
 	}
 	seen := make(map[string]map[string][]string)
 	for _, rule := range role.Rules {
@@ -109,6 +110,10 @@ func TestManagedResourceRBACIsKindAndVerbBounded(t *testing.T) {
 		for _, resource := range rule.Resources {
 			if resource == "*" || containsValue(rule.Verbs, "*") {
 				t.Fatalf("wildcard managed-resource permission: %#v", rule)
+			}
+			if group == "longhorn.io" && resource == "settings" &&
+				!reflect.DeepEqual(rule.ResourceNames, []string{"deleting-confirmation-flag"}) {
+				t.Fatalf("Longhorn Setting permission is not identity-bounded: %#v", rule)
 			}
 			seen[group][resource] = append([]string(nil), rule.Verbs...)
 		}
@@ -138,6 +143,8 @@ func TestManagedResourceRBACIsKindAndVerbBounded(t *testing.T) {
 		"- apiGroups: [\"\"]\n  resources: [\"services\"]\n  verbs: [\"get\"]",
 		"- apiGroups: [\"\"]\n  resources: [\"secrets\"]\n  # Get reads readiness metadata and immutable input/target Secrets. Create,\n  # update, and delete implement protected Secret lifecycle without patching.\n  verbs: [\"get\", \"create\", \"update\", \"delete\"]",
 		"- apiGroups: [\"networking.k8s.io\"]\n  resources: [\"ingressclasses\"]\n  verbs: [\"get\"]",
+		"- apiGroups: [\"longhorn.io\"]\n  resources: [\"settings\"]\n  resourceNames: [\"deleting-confirmation-flag\"]\n  verbs: [\"get\", \"patch\"]",
+		"kind: ClusterRoleBinding\nmetadata:\n  name: oneks-application-controller-managed-resources\nroleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRole\n  name: oneks-application-controller-managed-resources",
 	} {
 		if !strings.Contains(string(helmPayload), required) {
 			t.Fatalf("Helm RBAC is missing %q", required)
@@ -155,7 +162,12 @@ func TestManagedResourceRBACIsKindAndVerbBounded(t *testing.T) {
 	if err := yaml.Unmarshal(bindingPayload, &binding); err != nil {
 		t.Fatalf("decode managed-resource ClusterRoleBinding: %v", err)
 	}
-	if binding.Kind != "ClusterRoleBinding" || binding.RoleRef.Kind != "ClusterRole" || binding.RoleRef.Name != role.Name {
+	if binding.Kind != "ClusterRoleBinding" || binding.Name != "oneks-application-controller-managed-resources" ||
+		binding.RoleRef.Kind != "ClusterRole" || binding.RoleRef.Name != "oneks-application-controller-managed-resources" {
 		t.Fatalf("managed-resource ClusterRole binding mismatch: %#v", binding)
+	}
+	if len(binding.Subjects) != 1 || binding.Subjects[0].Kind != "ServiceAccount" ||
+		binding.Subjects[0].Name != "oneks-application-controller" || binding.Subjects[0].Namespace != "oneks-system" {
+		t.Fatalf("managed-resource ClusterRole binding subject mismatch: %#v", binding.Subjects)
 	}
 }

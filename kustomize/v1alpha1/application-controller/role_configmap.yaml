@@ -26,3 +26,7 @@ rules:
 - apiGroups: ["networking.k8s.io"]
   resources: ["ingressclasses"]
   verbs: ["get"]
+- apiGroups: ["longhorn.io"]
+  resources: ["settings"]
+  resourceNames: ["deleting-confirmation-flag"]
+  verbs: ["get", "patch"]

@@ -96,6 +96,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.protectedSecrets) || self.protectedSecrets.all(p, self.protectedSecrets.filter(x, x.id == p.id).size() == 1)",message="protected Secret IDs must be unique"
 // +kubebuilder:validation:XValidation:rule="!has(self.protectedSecrets) || self.protectedSecrets.all(p, self.protectedSecrets.filter(x, x.__namespace__ == p.__namespace__ && x.name == p.name).size() == 1)",message="protected Secret target identities must be unique"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || !has(self.managedResources) || !has(self.protectedSecrets) || self.protectedSecrets.all(p, self.managedResources.filter(m, m.id == p.id).size() == 0)",message="protected Secret IDs must not collide with managed resource IDs"
+// +kubebuilder:validation:XValidation:rule="!has(self.uninstall) || (self.planVersion == 'oneks.opennebula.io/plan-v1alpha2' && has(self.role) && self.role == 'Dependency')",message="top-level uninstall is permitted only for plan-v1alpha2 Dependency applications"
 type OneKSApplicationSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
@@ -127,8 +128,51 @@ type OneKSApplicationSpec struct {
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=16
 	ProtectedSecrets []ProtectedSecretSpec `json:"protectedSecrets,omitempty"`
+	Uninstall        *UninstallSpec        `json:"uninstall,omitempty"`
 	// +kubebuilder:validation:Enum=Delete;Retain
 	DeletionPolicy DeletionPolicy `json:"deletionPolicy"`
+}
+
+type UninstallSpec struct {
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=8
+	PreActions []UninstallPreAction `json:"preActions"`
+}
+
+type UninstallPreActionType string
+
+const UninstallPreActionKubernetesPatch UninstallPreActionType = "kubernetesPatch"
+
+type KubernetesPatchType string
+
+const KubernetesPatchTypeMerge KubernetesPatchType = "merge"
+
+type KubernetesPatchResource struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	APIVersion string `json:"apiVersion"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[A-Z][A-Za-z0-9]*$`
+	Kind string `json:"kind"`
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Namespace string `json:"namespace,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
+	Name string `json:"name"`
+}
+
+type UninstallPreAction struct {
+	// +kubebuilder:validation:Enum=kubernetesPatch
+	Type     UninstallPreActionType  `json:"type"`
+	Resource KubernetesPatchResource `json:"resource"`
+	// +kubebuilder:validation:Enum=merge
+	PatchType KubernetesPatchType `json:"patchType"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=16384
+	PatchJSON string `json:"patchJSON"`
 }
 
 type SecretInputReference struct {
@@ -391,6 +435,7 @@ type DependencyPlan struct {
 	Resources []ResourceSpec `json:"resources"`
 	// +kubebuilder:validation:MaxItems=16
 	Dependencies []DependencyReference `json:"dependencies"`
+	Uninstall    *UninstallSpec        `json:"uninstall,omitempty"`
 	// +kubebuilder:validation:Enum=Delete;Retain
 	DeletionPolicy DeletionPolicy `json:"deletionPolicy"`
 }
