@@ -119,6 +119,38 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 		}
 	}
 
+	externalMode := ""
+	externalSelectionToPersist := ""
+	if !deleting && app.Spec.ExecutionMode == applicationv1.ExecutionModeExecute && usesExternalDetection(app) {
+		var selectionErr error
+		externalMode, selectionErr = externalSelection(app)
+		if selectionErr != nil {
+			result, statusErr := r.recordTerminal(ctx, app, "ExternalSelectionInvalid", selectionErr.Error(), false)
+			if statusErr == nil {
+				result.RequeueAfter = r.requeueDuration()
+			}
+			return result, statusErr
+		}
+		if externalMode == "" {
+			detection, detectionErr := r.detectExternalDependency(ctx, app)
+			if detectionErr != nil {
+				return ctrl.Result{}, detectionErr
+			}
+			switch detection.state {
+			case externalDetectionUsable:
+				externalSelectionToPersist = ExternalSelectionExternal
+			case externalDetectionAbsent:
+				externalSelectionToPersist = ExternalSelectionManaged
+			case externalDetectionUnusable:
+				result, statusErr := r.recordTerminal(ctx, app, "ExternalDependencyUnusable", detection.message, false)
+				if statusErr == nil {
+					result.RequeueAfter = r.requeueDuration()
+				}
+				return result, statusErr
+			}
+		}
+	}
+
 	if deleting {
 		if (app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4) && app.Spec.ExecutionMode == applicationv1.ExecutionModeObserve {
 			return ctrl.Result{}, nil
@@ -148,12 +180,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 		return r.reconcileStatus(ctx, app, true, dependencies)
 	}
 
-	if err := r.preflightOwnership(ctx, app, false); err != nil {
-		var conflict *OwnershipConflictError
-		if errors.As(err, &conflict) {
-			return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
+	if externalMode != ExternalSelectionExternal && externalSelectionToPersist != ExternalSelectionExternal {
+		if err := r.preflightOwnership(ctx, app, false); err != nil {
+			var conflict *OwnershipConflictError
+			if errors.As(err, &conflict) {
+				return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
+			}
+			return ctrl.Result{}, err
 		}
-		return ctrl.Result{}, err
 	}
 
 	if !containsString(app.Finalizers, applicationv1.ApplicationFinalizer) {
@@ -165,6 +199,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 			return ctrl.Result{}, fmt.Errorf("add application finalizer: %w", err)
 		}
 		r.event(updated, corev1.EventTypeNormal, "FinalizerAdded", "Application cleanup finalizer added")
+		return ctrl.Result{Requeue: true}, nil
+	}
+	if externalSelectionToPersist != "" {
+		updated, err := r.patchExternalSelection(ctx, app, externalSelectionToPersist)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("persist external dependency selection: %w", err)
+		}
+		r.event(updated, corev1.EventTypeNormal, "ExternalDependencySelected", fmt.Sprintf("Dependency selected %s lifecycle", externalSelectionToPersist))
 		return ctrl.Result{Requeue: true}, nil
 	}
 
@@ -202,6 +244,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 		return ctrl.Result{}, err
 	}
 	if !dependencies.ready {
+		return r.reconcileStatus(ctx, app, false, dependencies)
+	}
+	if externalMode == ExternalSelectionExternal {
 		return r.reconcileStatus(ctx, app, false, dependencies)
 	}
 
@@ -292,6 +337,17 @@ func (r *Reconciler) preflightOwnership(ctx context.Context, app *applicationv1.
 
 	if deleting && app.Spec.DeletionPolicy == applicationv1.DeletionPolicyRetain {
 		return nil
+	}
+	if usesExternalDetection(app) {
+		selection, err := externalSelection(app)
+		if err != nil {
+			return err
+		}
+		if selection == ExternalSelectionExternal ||
+			(app.Spec.ExecutionMode == applicationv1.ExecutionModeObserve && selection != ExternalSelectionManaged) ||
+			(deleting && selection != ExternalSelectionManaged) {
+			return nil
+		}
 	}
 	helm := helmChartObject(app.Spec.Release.ReleaseName)
 	err := reader.Get(ctx, client.ObjectKeyFromObject(helm), helm)
@@ -494,7 +550,13 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 	if observed.helmReady {
 		helmCondition = metav1.ConditionTrue
 	}
-	setCondition(&status, app.Generation, ConditionHelmReleaseReady, helmCondition, conditionReason(helmCondition, "HelmReleaseReady", observed.helmReason), conditionMessage(helmCondition, "Helm release is ready", observed.helmMessage))
+	helmReason := conditionReason(helmCondition, "HelmReleaseReady", observed.helmReason)
+	helmMessage := conditionMessage(helmCondition, "Helm release is ready", observed.helmMessage)
+	if observed.helmReady && observed.helmReason == "ExternalDependencyReady" {
+		helmReason = observed.helmReason
+		helmMessage = observed.helmMessage
+	}
+	setCondition(&status, app.Generation, ConditionHelmReleaseReady, helmCondition, helmReason, helmMessage)
 	setCondition(&status, app.Generation, ConditionOwnershipConflict, metav1.ConditionFalse, "NoConflict", "Managed children have exact OneKS ownership")
 
 	ready := dependencies.ready && observed.allResources && observed.helmReady
@@ -510,6 +572,9 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 	} else if observed.protectedSecretsFailed {
 		readyReason = observed.protectedSecretsReason
 		readyMessage = observed.protectedSecretsMessage
+	} else if observed.helmFailed {
+		readyReason = observed.helmReason
+		readyMessage = observed.helmMessage
 	} else if dependencies.enabled && !dependencies.ready {
 		readyReason = dependencies.reason
 		readyMessage = dependencies.message
@@ -602,6 +667,34 @@ func (r *Reconciler) observe(ctx context.Context, app *applicationv1.OneKSApplic
 }
 
 func (r *Reconciler) observeHelm(ctx context.Context, app *applicationv1.OneKSApplication, result observation) (observation, error) {
+	if usesExternalDetection(app) {
+		selection, err := externalSelection(app)
+		if err != nil {
+			return result, err
+		}
+		if selection != ExternalSelectionManaged {
+			detection, detectionErr := r.detectExternalDependency(ctx, app)
+			if detectionErr != nil {
+				return result, detectionErr
+			}
+			if detection.state == externalDetectionUsable {
+				result.helmReady = true
+				result.completed++
+				result.helmReason = "ExternalDependencyReady"
+				result.helmMessage = detection.message
+				return result, nil
+			}
+			result.helmFailed = true
+			if selection == ExternalSelectionExternal {
+				result.helmReason = "ExternalDependencyLost"
+				result.helmMessage = "Previously selected external prerequisite is no longer usable: " + detection.message
+			} else {
+				result.helmReason = "ExternalDependencyUnusable"
+				result.helmMessage = detection.message
+			}
+			return result, nil
+		}
+	}
 	helm := helmChartObject(app.Spec.Release.ReleaseName)
 	if err := r.Get(ctx, client.ObjectKeyFromObject(helm), helm); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -678,9 +771,13 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 		return ctrl.Result{}, err
 	}
 
-	helm := helmChartObject(app.Spec.Release.ReleaseName)
-	err := r.authoritativeReader().Get(ctx, client.ObjectKeyFromObject(helm), helm)
-	if err == nil && app.Spec.DeletionPolicy == applicationv1.DeletionPolicyDelete {
+	var helm *unstructured.Unstructured
+	var err error
+	if ownsHelmLifecycle(app) {
+		helm = helmChartObject(app.Spec.Release.ReleaseName)
+		err = r.authoritativeReader().Get(ctx, client.ObjectKeyFromObject(helm), helm)
+	}
+	if helm != nil && err == nil && app.Spec.DeletionPolicy == applicationv1.DeletionPolicyDelete {
 		if !ownershipMatches(app, helm) {
 			conflict := (&OwnershipConflictError{Kind: "HelmChart", Namespace: helm.GetNamespace(), Name: helm.GetName()}).Error()
 			return r.recordTerminal(ctx, app, "OwnershipConflict", conflict, true)
@@ -837,7 +934,8 @@ func (r *Reconciler) recordTerminal(ctx context.Context, app *applicationv1.OneK
 	status.Progress = applicationv1.ApplicationProgress{Total: applicationProgressTotal(app)}
 	setLastError(&status, reason, message)
 	planCondition := metav1.ConditionTrue
-	if !ownershipConflict && reason != "TargetNamespaceMissing" && reason != "InputSecretInvalid" {
+	if !ownershipConflict && reason != "TargetNamespaceMissing" && reason != "InputSecretInvalid" &&
+		reason != "ExternalDependencyUnusable" && reason != "ExternalSelectionInvalid" {
 		planCondition = metav1.ConditionFalse
 	}
 	setCondition(&status, app.Generation, ConditionPlanValid, planCondition, reason, message)

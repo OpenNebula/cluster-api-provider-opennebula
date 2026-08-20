@@ -86,12 +86,14 @@ func TestManagedResourceRBACIsKindAndVerbBounded(t *testing.T) {
 	if err := yaml.Unmarshal(payload, &role); err != nil {
 		t.Fatalf("decode managed-resource ClusterRole: %v", err)
 	}
-	if role.Kind != "ClusterRole" || len(role.Rules) != 8 {
+	if role.Kind != "ClusterRole" || len(role.Rules) != 12 {
 		t.Fatalf("managed-resource permissions are not cluster-scoped and bounded: %#v", role)
 	}
 	managedVerbs := []string{"get", "list", "watch", "create", "patch", "update", "delete"}
 	want := map[string]map[string][]string{
-		"":                      {"namespaces": managedVerbs, "configmaps": managedVerbs, "services": {"get"}, "secrets": {"get", "create", "update", "delete"}},
+		"":                      {"namespaces": managedVerbs, "configmaps": managedVerbs, "services": {"get"}, "secrets": {"get", "create", "update", "delete"}, "pods": {"list"}, "endpoints": {"get"}},
+		"apps":                  {"deployments": {"list"}},
+		"apiextensions.k8s.io":  {"customresourcedefinitions": {"get"}},
 		"helm.cattle.io":        {"helmchartconfigs": managedVerbs},
 		"cert-manager.io":       {"clusterissuers": managedVerbs, "certificates": managedVerbs},
 		"trust.cert-manager.io": {"bundles": managedVerbs},
@@ -114,6 +116,17 @@ func TestManagedResourceRBACIsKindAndVerbBounded(t *testing.T) {
 			if group == "longhorn.io" && resource == "settings" &&
 				!reflect.DeepEqual(rule.ResourceNames, []string{"deleting-confirmation-flag"}) {
 				t.Fatalf("Longhorn Setting permission is not identity-bounded: %#v", rule)
+			}
+			if group == "apiextensions.k8s.io" && resource == "customresourcedefinitions" &&
+				!reflect.DeepEqual(rule.ResourceNames, []string{
+					"certificates.cert-manager.io", "certificaterequests.cert-manager.io",
+					"issuers.cert-manager.io", "clusterissuers.cert-manager.io",
+				}) {
+				t.Fatalf("cert-manager CRD reads are not identity-bounded: %#v", rule)
+			}
+			if group == "" && resource == "endpoints" &&
+				!reflect.DeepEqual(rule.ResourceNames, []string{"cert-manager-webhook"}) {
+				t.Fatalf("cert-manager Endpoints read is not identity-bounded: %#v", rule)
 			}
 			seen[group][resource] = append([]string(nil), rule.Verbs...)
 		}
@@ -144,6 +157,10 @@ func TestManagedResourceRBACIsKindAndVerbBounded(t *testing.T) {
 		"- apiGroups: [\"\"]\n  resources: [\"secrets\"]\n  # Get reads readiness metadata and immutable input/target Secrets. Create,\n  # update, and delete implement protected Secret lifecycle without patching.\n  verbs: [\"get\", \"create\", \"update\", \"delete\"]",
 		"- apiGroups: [\"networking.k8s.io\"]\n  resources: [\"ingressclasses\"]\n  verbs: [\"get\"]",
 		"- apiGroups: [\"longhorn.io\"]\n  resources: [\"settings\"]\n  resourceNames: [\"deleting-confirmation-flag\"]\n  verbs: [\"get\", \"patch\"]",
+		"- apiGroups: [\"apiextensions.k8s.io\"]\n  resources: [\"customresourcedefinitions\"]\n  resourceNames:\n  - certificates.cert-manager.io\n  - certificaterequests.cert-manager.io\n  - issuers.cert-manager.io\n  - clusterissuers.cert-manager.io\n  verbs: [\"get\"]",
+		"- apiGroups: [\"apps\"]\n  resources: [\"deployments\"]\n  verbs: [\"list\"]",
+		"- apiGroups: [\"\"]\n  resources: [\"pods\"]\n  verbs: [\"list\"]",
+		"- apiGroups: [\"\"]\n  resources: [\"endpoints\"]\n  resourceNames: [\"cert-manager-webhook\"]\n  verbs: [\"get\"]",
 		"kind: ClusterRoleBinding\nmetadata:\n  name: oneks-application-controller-managed-resources\nroleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRole\n  name: oneks-application-controller-managed-resources",
 	} {
 		if !strings.Contains(string(helmPayload), required) {

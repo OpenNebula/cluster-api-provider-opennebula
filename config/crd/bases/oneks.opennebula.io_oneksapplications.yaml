@@ -130,6 +130,15 @@ spec:
                         type: object
                       maxItems: 16
                       type: array
+                    externalDetection:
+                      properties:
+                        detector:
+                          enum:
+                          - cert-manager
+                          type: string
+                      required:
+                      - detector
+                      type: object
                     name:
                       maxLength: 63
                       minLength: 1
@@ -330,6 +339,15 @@ spec:
                 - Observe
                 - Execute
                 type: string
+              externalDetection:
+                properties:
+                  detector:
+                    enum:
+                    - cert-manager
+                    type: string
+                required:
+                - detector
+                type: object
               managedResources:
                 items:
                   properties:
@@ -778,13 +796,13 @@ spec:
             - message: spec is immutable
               rule: self == oldSelf
             - message: plan-v1alpha1 does not permit role, dependency, managedResources,
-                or protected Secret fields and requires the fixed workload namespace
-                without namespace creation
+                protected Secret, or external detection fields and requires the fixed
+                workload namespace without namespace creation
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha1' || (!has(self.role)
                 && !has(self.dependencies) && !has(self.dependencyPlans) && !has(self.managedResources)
-                && !has(self.secretInputRef) && !has(self.protectedSecrets) && self.release.targetNamespace
-                == 'oneks-poc-workloads' && !self.release.createNamespace && self.resources.all(r,
-                r.__namespace__ == 'oneks-poc-workloads'))
+                && !has(self.secretInputRef) && !has(self.protectedSecrets) && !has(self.externalDetection)
+                && self.release.targetNamespace == 'oneks-poc-workloads' && !self.release.createNamespace
+                && self.resources.all(r, r.__namespace__ == 'oneks-poc-workloads'))
             - message: plan-v1alpha1 requires a non-empty HTTPS repositoryURL
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha1' || (size(self.release.repositoryURL)
                 >= 1 && self.release.repositoryURL.matches('^https://[^[:space:]]+$'))
@@ -910,6 +928,10 @@ spec:
             - message: top-level uninstall is permitted only for plan-v1alpha2 Dependency
                 applications
               rule: '!has(self.uninstall) || (self.planVersion == ''oneks.opennebula.io/plan-v1alpha2''
+                && has(self.role) && self.role == ''Dependency'')'
+            - message: top-level externalDetection is permitted only for plan-v1alpha2
+                Dependency applications
+              rule: '!has(self.externalDetection) || (self.planVersion == ''oneks.opennebula.io/plan-v1alpha2''
                 && has(self.role) && self.role == ''Dependency'')'
           status:
             properties:

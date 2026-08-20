@@ -106,7 +106,7 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 	}
 	switch app.Spec.PlanVersion {
 	case applicationv1.PlanVersionV1Alpha1:
-		if app.Spec.Role != "" || app.Spec.Dependencies != nil || app.Spec.DependencyPlans != nil || app.Spec.ManagedResources != nil || app.Spec.SecretInputRef != nil || app.Spec.ProtectedSecrets != nil || app.Spec.Release.AuthSecret != nil {
+		if app.Spec.Role != "" || app.Spec.Dependencies != nil || app.Spec.DependencyPlans != nil || app.Spec.ManagedResources != nil || app.Spec.SecretInputRef != nil || app.Spec.ProtectedSecrets != nil || app.Spec.Release.AuthSecret != nil || app.Spec.ExternalDetection != nil {
 			return invalid("InvalidPlanV1Alpha1Fields", "plan-v1alpha1 does not permit role or dependency fields")
 		}
 	case applicationv1.PlanVersionV1Alpha2:
@@ -139,6 +139,15 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 	if app.Spec.Uninstall != nil &&
 		(app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha2 || app.Spec.Role != applicationv1.ApplicationRoleDependency) {
 		return invalid("InvalidUninstall", "top-level uninstall is permitted only for plan-v1alpha2 Dependency applications")
+	}
+	if app.Spec.ExternalDetection != nil &&
+		(app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha2 || app.Spec.Role != applicationv1.ApplicationRoleDependency) {
+		return invalid("InvalidExternalDetection", "top-level externalDetection is permitted only for plan-v1alpha2 Dependency applications")
+	}
+	if app.Spec.ExternalDetection != nil {
+		if err := validateExternalDetection(*app.Spec.ExternalDetection, "externalDetection"); err != nil {
+			return err
+		}
 	}
 	if app.Spec.ExecutionMode != applicationv1.ExecutionModeObserve && app.Spec.ExecutionMode != applicationv1.ExecutionModeExecute {
 		return invalid("InvalidExecutionMode", "executionMode must be Observe or Execute")
@@ -443,7 +452,8 @@ func dependencyPlanChildSpec(clusterID string, plan applicationv1.DependencyPlan
 		ExecutionMode: applicationv1.ExecutionModeExecute,
 		Release:       plan.Release, Resources: plan.Resources,
 		Role: applicationv1.ApplicationRoleDependency, Dependencies: plan.Dependencies,
-		DependencyPlans: nil, Uninstall: plan.Uninstall, DeletionPolicy: plan.DeletionPolicy,
+		DependencyPlans: nil, Uninstall: plan.Uninstall, ExternalDetection: plan.ExternalDetection,
+		DeletionPolicy: plan.DeletionPolicy,
 	}
 }
 
@@ -499,6 +509,11 @@ func validateDependencyPlan(plan applicationv1.DependencyPlan, path string) *Pla
 			return err
 		}
 	}
+	if plan.ExternalDetection != nil {
+		if err := validateExternalDetection(*plan.ExternalDetection, path+".externalDetection"); err != nil {
+			return err
+		}
+	}
 	if len(plan.Resources) > maxResources {
 		return invalid("TooManyResources", "%s.resources exceeds %d entries", path, maxResources)
 	}
@@ -521,6 +536,13 @@ func validateDependencyPlan(plan applicationv1.DependencyPlan, path string) *Pla
 			return invalid("DuplicateDependencyName", "%s dependency name %q is duplicated", path, dependency.Name)
 		}
 		names[dependency.Name] = struct{}{}
+	}
+	return nil
+}
+
+func validateExternalDetection(detection applicationv1.ExternalDetectionSpec, path string) *PlanError {
+	if detection.Detector != applicationv1.ExternalDetectorCertManager {
+		return invalid("InvalidExternalDetector", "%s.detector must be cert-manager", path)
 	}
 	return nil
 }
@@ -852,6 +874,9 @@ func canonicalPlanV1Alpha2(spec applicationv1.OneKSApplicationSpec) ([]byte, err
 	if spec.Uninstall != nil {
 		plan["uninstall"] = canonicalUninstall(*spec.Uninstall)
 	}
+	if spec.ExternalDetection != nil {
+		plan["externalDetection"] = canonicalExternalDetection(*spec.ExternalDetection)
+	}
 
 	var output bytes.Buffer
 	if err := writeCanonicalJSON(&output, plan); err != nil {
@@ -874,7 +899,14 @@ func canonicalDependencyPlan(plan applicationv1.DependencyPlan) map[string]any {
 	if plan.Uninstall != nil {
 		canonical["uninstall"] = canonicalUninstall(*plan.Uninstall)
 	}
+	if plan.ExternalDetection != nil {
+		canonical["externalDetection"] = canonicalExternalDetection(*plan.ExternalDetection)
+	}
 	return canonical
+}
+
+func canonicalExternalDetection(detection applicationv1.ExternalDetectionSpec) map[string]any {
+	return map[string]any{"detector": string(detection.Detector)}
 }
 
 func canonicalUninstall(uninstall applicationv1.UninstallSpec) map[string]any {

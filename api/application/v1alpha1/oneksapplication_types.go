@@ -64,7 +64,7 @@ const (
 
 // OneKSApplicationSpec is an immutable, compiled application plan.
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha1' || (!has(self.role) && !has(self.dependencies) && !has(self.dependencyPlans) && !has(self.managedResources) && !has(self.secretInputRef) && !has(self.protectedSecrets) && self.release.targetNamespace == 'oneks-poc-workloads' && !self.release.createNamespace && self.resources.all(r, r.__namespace__ == 'oneks-poc-workloads'))",message="plan-v1alpha1 does not permit role, dependency, managedResources, or protected Secret fields and requires the fixed workload namespace without namespace creation"
+// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha1' || (!has(self.role) && !has(self.dependencies) && !has(self.dependencyPlans) && !has(self.managedResources) && !has(self.secretInputRef) && !has(self.protectedSecrets) && !has(self.externalDetection) && self.release.targetNamespace == 'oneks-poc-workloads' && !self.release.createNamespace && self.resources.all(r, r.__namespace__ == 'oneks-poc-workloads'))",message="plan-v1alpha1 does not permit role, dependency, managedResources, protected Secret, or external detection fields and requires the fixed workload namespace without namespace creation"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha1' || (size(self.release.repositoryURL) >= 1 && self.release.repositoryURL.matches('^https://[^[:space:]]+$'))",message="plan-v1alpha1 requires a non-empty HTTPS repositoryURL"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || has(self.role)",message="plan-v1alpha2 requires role"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || ((size(self.release.repositoryURL) == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$') && !self.release.chart.startsWith('oci://')))",message="plan-v1alpha2 release must use either an HTTPS repositoryURL with a non-OCI chart or an empty repositoryURL with an OCI chart"
@@ -97,6 +97,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.protectedSecrets) || self.protectedSecrets.all(p, self.protectedSecrets.filter(x, x.__namespace__ == p.__namespace__ && x.name == p.name).size() == 1)",message="protected Secret target identities must be unique"
 // +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || !has(self.managedResources) || !has(self.protectedSecrets) || self.protectedSecrets.all(p, self.managedResources.filter(m, m.id == p.id).size() == 0)",message="protected Secret IDs must not collide with managed resource IDs"
 // +kubebuilder:validation:XValidation:rule="!has(self.uninstall) || (self.planVersion == 'oneks.opennebula.io/plan-v1alpha2' && has(self.role) && self.role == 'Dependency')",message="top-level uninstall is permitted only for plan-v1alpha2 Dependency applications"
+// +kubebuilder:validation:XValidation:rule="!has(self.externalDetection) || (self.planVersion == 'oneks.opennebula.io/plan-v1alpha2' && has(self.role) && self.role == 'Dependency')",message="top-level externalDetection is permitted only for plan-v1alpha2 Dependency applications"
 type OneKSApplicationSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
@@ -127,10 +128,20 @@ type OneKSApplicationSpec struct {
 	SecretInputRef   *SecretInputReference `json:"secretInputRef,omitempty"`
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=16
-	ProtectedSecrets []ProtectedSecretSpec `json:"protectedSecrets,omitempty"`
-	Uninstall        *UninstallSpec        `json:"uninstall,omitempty"`
+	ProtectedSecrets  []ProtectedSecretSpec  `json:"protectedSecrets,omitempty"`
+	Uninstall         *UninstallSpec         `json:"uninstall,omitempty"`
+	ExternalDetection *ExternalDetectionSpec `json:"externalDetection,omitempty"`
 	// +kubebuilder:validation:Enum=Delete;Retain
 	DeletionPolicy DeletionPolicy `json:"deletionPolicy"`
+}
+
+type ExternalDetector string
+
+const ExternalDetectorCertManager ExternalDetector = "cert-manager"
+
+type ExternalDetectionSpec struct {
+	// +kubebuilder:validation:Enum=cert-manager
+	Detector ExternalDetector `json:"detector"`
 }
 
 type UninstallSpec struct {
@@ -434,8 +445,9 @@ type DependencyPlan struct {
 	// +kubebuilder:validation:MaxItems=16
 	Resources []ResourceSpec `json:"resources"`
 	// +kubebuilder:validation:MaxItems=16
-	Dependencies []DependencyReference `json:"dependencies"`
-	Uninstall    *UninstallSpec        `json:"uninstall,omitempty"`
+	Dependencies      []DependencyReference  `json:"dependencies"`
+	Uninstall         *UninstallSpec         `json:"uninstall,omitempty"`
+	ExternalDetection *ExternalDetectionSpec `json:"externalDetection,omitempty"`
 	// +kubebuilder:validation:Enum=Delete;Retain
 	DeletionPolicy DeletionPolicy `json:"deletionPolicy"`
 }
