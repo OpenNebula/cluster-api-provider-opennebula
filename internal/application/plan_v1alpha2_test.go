@@ -551,10 +551,10 @@ func TestPlanV1Alpha2RejectsInvalidRoleNamespaceAndDependencyContracts(t *testin
 			reason: "InvalidApplicationRole",
 		},
 		{
-			name: "root namespace",
+			name: "invalid root namespace",
 			mutate: func(app *applicationv1.OneKSApplication) {
 				app.Spec.Role = applicationv1.ApplicationRoleRoot
-				app.Spec.Release.TargetNamespace = "monitoring"
+				app.Spec.Release.TargetNamespace = "Monitoring"
 				app.Spec.Release.CreateNamespace = false
 			},
 			reason: "InvalidTargetNamespace",

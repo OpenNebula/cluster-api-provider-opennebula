@@ -186,7 +186,7 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 	if !validUTF8Bytes(app.Spec.Release.TargetNamespace, 1, 63) || len(validation.IsDNS1123Label(app.Spec.Release.TargetNamespace)) > 0 {
 		return invalid("InvalidTargetNamespace", "targetNamespace is not a DNS-1123 label of at most 63 characters")
 	}
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha1 || app.Spec.Role == applicationv1.ApplicationRoleRoot {
+	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha1 {
 		if app.Spec.Release.TargetNamespace != WorkloadNamespace {
 			return invalid("InvalidTargetNamespace", "targetNamespace must be %q", WorkloadNamespace)
 		}

@@ -813,11 +813,6 @@ spec:
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || ((size(self.release.repositoryURL)
                 == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$')
                 && !self.release.chart.startsWith('oci://')))
-            - message: plan-v1alpha2 Root requires the fixed workload namespace without
-                namespace creation
-              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role
-                != 'Root' || (self.release.targetNamespace == 'oneks-poc-workloads'
-                && !self.release.createNamespace)
             - message: plan-v1alpha2 Dependency must not contain dependencyPlans
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role
                 != 'Dependency' || !has(self.dependencyPlans) || size(self.dependencyPlans)
@@ -840,11 +835,6 @@ spec:
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || ((size(self.release.repositoryURL)
                 == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$')
                 && !self.release.chart.startsWith('oci://')))
-            - message: plan-v1alpha3 Root requires the fixed workload namespace without
-                namespace creation
-              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || self.role
-                != 'Root' || (self.release.targetNamespace == 'oneks-poc-workloads'
-                && !self.release.createNamespace)
             - message: plan-v1alpha3 does not permit legacy resources
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || size(self.resources)
                 == 0
@@ -870,10 +860,6 @@ spec:
                 || (has(self.protectedSecrets) && self.protectedSecrets.filter(p,
                 p.builderType == 'basicAuthSecret' && p.__namespace__ == 'kube-system'
                 && p.name == self.release.authSecret.name).size() == 1)
-            - message: plan-v1alpha4 Root requires the fixed workload namespace without
-                namespace creation
-              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || (self.release.targetNamespace
-                == 'oneks-poc-workloads' && !self.release.createNamespace)
             - message: plan-v1alpha4 does not permit legacy resources
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || size(self.resources)
                 == 0
