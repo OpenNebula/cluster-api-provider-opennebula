@@ -808,6 +808,18 @@ func runAIPlanV1Alpha4(t *testing.T) *applicationv1.OneKSApplication {
 	app.Name = "runai-test-application"
 	app.Spec.Release.ReleaseName = "runai-test"
 	app.Spec.Release.AuthSecret = &applicationv1.HelmAuthSecretReference{Name: "runai-test-helm-repo-creds"}
+	app.Spec.Release.ValuesContent = `global:
+  imagePullSecrets:
+    - name: runai-backend-registry-creds
+tenantsManager:
+  config:
+    existingSecret: runai-backend-admin-credentials
+    secretKeys:
+      adminPasswordKey: ADMIN_PASSWORD
+keycloakx:
+  imagePullSecrets:
+    - name: runai-backend-registry-creds
+`
 	app.Spec.ManagedResources = nil
 	app.Spec.SecretInputRef = &applicationv1.SecretInputReference{
 		Namespace: applicationv1.ApplicationNamespace,
@@ -915,7 +927,7 @@ type protectedRaceReader struct {
 func (r *protectedRaceReader) Get(ctx context.Context, key client.ObjectKey, object client.Object, options ...client.GetOption) error {
 	if _, secret := object.(*corev1.Secret); secret && key == r.target {
 		r.gets++
-		if r.gets <= 3 {
+		if r.gets <= 4 {
 			return apierrors.NewNotFound(corev1.Resource("secrets"), key.Name)
 		}
 	}

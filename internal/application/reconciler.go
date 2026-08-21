@@ -155,7 +155,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 		if (app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4) && app.Spec.ExecutionMode == applicationv1.ExecutionModeObserve {
 			return ctrl.Result{}, nil
 		}
-		if err := r.preflightOwnership(ctx, app, true); err != nil {
+		if err := r.preflightOwnership(ctx, app, true, managedAPIsRequired); err != nil {
 			var conflict *OwnershipConflictError
 			if errors.As(err, &conflict) {
 				return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
@@ -170,7 +170,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		if err := r.preflightOwnership(ctx, app, false); err != nil {
+		if err := r.preflightOwnership(ctx, app, false, managedAPIsRequired); err != nil {
 			var conflict *OwnershipConflictError
 			if errors.As(err, &conflict) {
 				return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
@@ -181,7 +181,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 	}
 
 	if externalMode != ExternalSelectionExternal && externalSelectionToPersist != ExternalSelectionExternal {
-		if err := r.preflightOwnership(ctx, app, false); err != nil {
+		if err := r.preflightOwnership(ctx, app, false, managedAPIsMayBeUnavailable); err != nil {
 			var conflict *OwnershipConflictError
 			if errors.As(err, &conflict) {
 				return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
@@ -249,6 +249,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 	if externalMode == ExternalSelectionExternal {
 		return r.reconcileStatus(ctx, app, false, dependencies)
 	}
+	if usesManagedResources(app) {
+		if err := r.preflightOwnership(ctx, app, false, managedAPIsRequired); err != nil {
+			var conflict *OwnershipConflictError
+			if errors.As(err, &conflict) {
+				return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
+			}
+			return ctrl.Result{}, err
+		}
+	}
 
 	var resourcesReady bool
 	if usesManagedResources(app) {
@@ -306,10 +315,10 @@ func (r *Reconciler) authoritativeReader() client.Reader {
 	return r.Client
 }
 
-func (r *Reconciler) preflightOwnership(ctx context.Context, app *applicationv1.OneKSApplication, deleting bool) error {
+func (r *Reconciler) preflightOwnership(ctx context.Context, app *applicationv1.OneKSApplication, deleting bool, managedAPIs managedAPIPreflightMode) error {
 	reader := r.authoritativeReader()
 	if !deleting {
-		if err := r.preflightManagedOwnership(ctx, app, false); err != nil {
+		if err := r.preflightManagedOwnership(ctx, app, false, managedAPIs); err != nil {
 			return err
 		}
 		if err := r.preflightProtectedSecretOwnership(ctx, app, false); err != nil {
@@ -487,7 +496,8 @@ func ownedLabelsEqual(actual, expected map[string]string) bool {
 }
 
 func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.OneKSApplication, observeOnly bool, dependencies dependencyObservation) (ctrl.Result, error) {
-	observed, err := r.observe(ctx, app, dependencies.ready)
+	managedReadinessEnabled := dependencies.ready || observeOnly
+	observed, err := r.observe(ctx, app, managedReadinessEnabled)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -781,6 +791,9 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 		if !ownershipMatches(app, helm) {
 			conflict := (&OwnershipConflictError{Kind: "HelmChart", Namespace: helm.GetNamespace(), Name: helm.GetName()}).Error()
 			return r.recordTerminal(ctx, app, "OwnershipConflict", conflict, true)
+		}
+		if deletionTimestamp := helm.GetDeletionTimestamp(); deletionTimestamp != nil && !deletionTimestamp.IsZero() {
+			return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
 		}
 		if err := r.executePreUninstallActions(ctx, app); err != nil {
 			return ctrl.Result{}, err

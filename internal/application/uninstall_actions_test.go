@@ -26,6 +26,7 @@ import (
 	"time"
 
 	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -259,6 +260,83 @@ func TestDependencyPreUninstallPatchFailureKeepsHelmAndFinalizer(t *testing.T) {
 	}
 }
 
+func TestDependencyTerminatingHelmSkipsPreActionAndRepeatedDelete(t *testing.T) {
+	ctx := context.Background()
+	app, helm, _ := deletingLonghornDependency(t, applicationv1.DeletionPolicyDelete)
+	helm.SetFinalizers([]string{"helmcharts.helm.cattle.io/uninstall"})
+	now := metav1.Now()
+	helm.SetDeletionTimestamp(&now)
+	reconciler, recorder := testReconciler(t, app, helm)
+	writes := &uninstallWriteClient{Client: recorder.Client, getErr: errors.New("preAction API is unavailable")}
+	reconciler.Client = writes
+
+	result, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(app)})
+	if err != nil || result.RequeueAfter == 0 {
+		t.Fatalf("terminating Helm reconcile = %#v, %v", result, err)
+	}
+	if writes.preActionGets != 0 || writes.helmDeletes != 0 || len(writes.writes) != 0 {
+		t.Fatalf("terminating Helm retried preAction or Delete: gets=%d deletes=%d writes=%#v", writes.preActionGets, writes.helmDeletes, writes.writes)
+	}
+	stored := getApplication(t, ctx, reconciler.Client, app)
+	if !containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) {
+		t.Fatalf("terminating Helm allowed finalizer removal: %#v", stored.Finalizers)
+	}
+}
+
+func TestDependencyPreUninstallRunsOnceThenCleanupContinuesAfterHelmDisappears(t *testing.T) {
+	ctx := context.Background()
+	app, helm, setting := deletingLonghornDependency(t, applicationv1.DeletionPolicyDelete)
+	helm.SetFinalizers([]string{"helmcharts.helm.cattle.io/uninstall"})
+	reconciler, recorder := testReconciler(t, app, helm, setting)
+	writes := &uninstallWriteClient{Client: recorder.Client}
+	reconciler.Client = writes
+
+	result, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(app)})
+	if err != nil || result.RequeueAfter == 0 {
+		t.Fatalf("initial Helm deletion reconcile = %#v, %v", result, err)
+	}
+	if got := strings.Join(writes.writes, ","); got != "patch:Setting,delete:HelmChart" {
+		t.Fatalf("initial pre-uninstall write order = %s", got)
+	}
+	terminating := helmChartObject(helm.GetName())
+	if err := recorder.Client.Get(ctx, client.ObjectKeyFromObject(terminating), terminating); err != nil {
+		t.Fatalf("get terminating HelmChart: %v", err)
+	}
+	if timestamp := terminating.GetDeletionTimestamp(); timestamp == nil || timestamp.IsZero() {
+		t.Fatalf("initial Delete did not leave a terminating HelmChart: %#v", terminating.Object)
+	}
+
+	if err := recorder.Client.Delete(ctx, setting); err != nil {
+		t.Fatalf("remove preAction target: %v", err)
+	}
+	writes.getErr = errors.New("preAction API disappeared")
+	result, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(app)})
+	if err != nil || result.RequeueAfter == 0 {
+		t.Fatalf("terminating Helm retry = %#v, %v", result, err)
+	}
+	if writes.preActionGets != 1 || writes.helmDeletes != 1 || strings.Join(writes.writes, ",") != "patch:Setting,delete:HelmChart" {
+		t.Fatalf("terminating retry repeated lifecycle effects: gets=%d deletes=%d writes=%#v", writes.preActionGets, writes.helmDeletes, writes.writes)
+	}
+
+	terminating.SetFinalizers(nil)
+	if err := recorder.Client.Update(ctx, terminating); err != nil && !apierrors.IsNotFound(err) {
+		t.Fatalf("complete HelmChart finalization: %v", err)
+	}
+	remaining := helmChartObject(helm.GetName())
+	if err := recorder.Client.Get(ctx, client.ObjectKeyFromObject(remaining), remaining); err == nil {
+		if err := recorder.Client.Delete(ctx, remaining); err != nil && !apierrors.IsNotFound(err) {
+			t.Fatalf("remove finalized HelmChart: %v", err)
+		}
+	} else if !apierrors.IsNotFound(err) {
+		t.Fatalf("verify finalized HelmChart: %v", err)
+	}
+
+	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(app)}); err != nil {
+		t.Fatalf("continue cleanup after Helm disappearance: %v", err)
+	}
+	assertApplicationNotFound(t, ctx, reconciler.Client, app.Name)
+}
+
 func TestDependencyPreUninstallSkipsWhenHelmAbsentOrRetained(t *testing.T) {
 	ctx := context.Background()
 	t.Run("Helm absent", func(t *testing.T) {
@@ -337,8 +415,21 @@ func deletingLonghornDependency(t *testing.T, policy applicationv1.DeletionPolic
 
 type uninstallWriteClient struct {
 	client.Client
-	writes   []string
-	patchErr error
+	writes        []string
+	patchErr      error
+	getErr        error
+	preActionGets int
+	helmDeletes   int
+}
+
+func (c *uninstallWriteClient) Get(ctx context.Context, key client.ObjectKey, object client.Object, options ...client.GetOption) error {
+	if object.GetObjectKind().GroupVersionKind().Kind == "Setting" {
+		c.preActionGets++
+		if c.getErr != nil {
+			return c.getErr
+		}
+	}
+	return c.Client.Get(ctx, key, object, options...)
 }
 
 func (c *uninstallWriteClient) Patch(ctx context.Context, object client.Object, patch client.Patch, options ...client.PatchOption) error {
@@ -354,6 +445,7 @@ func (c *uninstallWriteClient) Patch(ctx context.Context, object client.Object, 
 func (c *uninstallWriteClient) Delete(ctx context.Context, object client.Object, options ...client.DeleteOption) error {
 	if object.GetObjectKind().GroupVersionKind().Kind == "HelmChart" {
 		c.writes = append(c.writes, "delete:HelmChart")
+		c.helmDeletes++
 	}
 	return c.Client.Delete(ctx, object, options...)
 }

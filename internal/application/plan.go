@@ -1135,32 +1135,86 @@ func validateNonSensitiveValues(content string) *PlanError {
 	if !ok {
 		return invalid("InvalidValuesContent", "valuesContent must be a YAML mapping")
 	}
-	if containsSensitiveValue(mapping, false) {
+	if containsSensitiveValue(mapping, valuesSensitivityNormal) {
 		return invalid("SensitiveValuesContent", "valuesContent contains a sensitive value")
 	}
 	return nil
 }
 
-func containsSensitiveValue(value any, sensitivePath bool) bool {
+type valuesSensitivity uint8
+
+const (
+	valuesSensitivityNormal valuesSensitivity = iota
+	valuesSensitivitySensitive
+	valuesSensitivityReference
+)
+
+func containsSensitiveValue(value any, sensitivity valuesSensitivity) bool {
 	switch typed := value.(type) {
 	case map[string]any:
 		for key, nested := range typed {
-			if containsSensitiveValue(nested, sensitivePath || sensitiveKeyPattern.MatchString(key)) {
+			nestedSensitivity := sensitivity
+			switch {
+			case sensitivity == valuesSensitivityReference:
+				nestedSensitivity = valuesSensitivityReference
+			case isValuesNeutralContainer(key):
+				nestedSensitivity = valuesSensitivityNormal
+			case isValuesReferenceContainer(key):
+				nestedSensitivity = valuesSensitivityReference
+			case isValuesReferenceLeaf(key) && isScalarValue(nested):
+				nestedSensitivity = valuesSensitivityReference
+			case sensitivity == valuesSensitivitySensitive || sensitiveKeyPattern.MatchString(key):
+				nestedSensitivity = valuesSensitivitySensitive
+			default:
+				nestedSensitivity = valuesSensitivityNormal
+			}
+			if containsSensitiveValue(nested, nestedSensitivity) {
 				return true
 			}
 		}
 	case []any:
 		for _, nested := range typed {
-			if containsSensitiveValue(nested, sensitivePath) {
+			if containsSensitiveValue(nested, sensitivity) {
 				return true
 			}
 		}
 	case nil:
 		return false
 	default:
-		return sensitivePath && fmt.Sprint(typed) != ""
+		return sensitivity == valuesSensitivitySensitive && fmt.Sprint(typed) != ""
 	}
 	return false
+}
+
+func isValuesReferenceLeaf(key string) bool {
+	switch strings.ToLower(key) {
+	case "authorizedsecretsall", "existingsecret", "existingsecretname", "secretname":
+		return true
+	default:
+		return false
+	}
+}
+
+func isValuesReferenceContainer(key string) bool {
+	switch strings.ToLower(key) {
+	case "authorizedsecrets", "imagepullsecrets", "secretkeys", "secretref", "secretkeyref":
+		return true
+	default:
+		return false
+	}
+}
+
+func isValuesNeutralContainer(key string) bool {
+	return strings.EqualFold(key, "secretTargets")
+}
+
+func isScalarValue(value any) bool {
+	switch value.(type) {
+	case map[string]any, []any:
+		return false
+	default:
+		return true
+	}
 }
 
 func validUTF8Bytes(value string, minimum, maximum int) bool {

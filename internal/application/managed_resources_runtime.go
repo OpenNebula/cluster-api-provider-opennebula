@@ -27,11 +27,19 @@ import (
 	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+)
+
+type managedAPIPreflightMode uint8
+
+const (
+	managedAPIsRequired managedAPIPreflightMode = iota
+	managedAPIsMayBeUnavailable
 )
 
 func usesManagedResources(app *applicationv1.OneKSApplication) bool {
@@ -78,7 +86,7 @@ func emptyManagedResource(resource applicationv1.ManagedResourceSpec) *unstructu
 	return object
 }
 
-func (r *Reconciler) preflightManagedOwnership(ctx context.Context, app *applicationv1.OneKSApplication, deleting bool) error {
+func (r *Reconciler) preflightManagedOwnership(ctx context.Context, app *applicationv1.OneKSApplication, deleting bool, managedAPIs managedAPIPreflightMode) error {
 	if !usesManagedResources(app) {
 		return nil
 	}
@@ -90,6 +98,9 @@ func (r *Reconciler) preflightManagedOwnership(ctx context.Context, app *applica
 		object := emptyManagedResource(resource)
 		err := reader.Get(ctx, client.ObjectKeyFromObject(object), object)
 		if apierrors.IsNotFound(err) {
+			continue
+		}
+		if managedAPIs == managedAPIsMayBeUnavailable && meta.IsNoMatchError(err) {
 			continue
 		}
 		if err != nil {
@@ -182,6 +193,19 @@ func managedResourceNeedsApply(current, desired *unstructured.Unstructured) bool
 
 func (r *Reconciler) observeManagedResources(ctx context.Context, app *applicationv1.OneKSApplication, readinessEnabled bool) (observation, error) {
 	result := observation{allResources: true, current: app.Spec.Release.ReleaseName}
+	if !readinessEnabled {
+		for _, resource := range app.Spec.ManagedResources {
+			result.resources = append(result.resources, applicationv1.ResourceStatus{
+				ID: resource.ID, Phase: "Pending", Reason: "DependenciesPending",
+				Message: "Managed resource readiness is gated by direct dependencies",
+			})
+			result.allResources = false
+			if result.current == app.Spec.Release.ReleaseName {
+				result.current = resource.ID
+			}
+		}
+		return result, nil
+	}
 	now := metav1.NewTime(r.now())
 	for _, resource := range app.Spec.ManagedResources {
 		previous := resourceStatusByID(app.Status.Resources, resource.ID)
@@ -223,17 +247,6 @@ func (r *Reconciler) observeManagedResources(ctx context.Context, app *applicati
 			status.Message = previous.Message
 			status.ReadinessStartedAt = copyTime(previous.ReadinessStartedAt)
 			result.markResourceFailed(resource.ID, status.Reason, status.Message)
-			result.resources = append(result.resources, status)
-			continue
-		}
-		if !readinessEnabled {
-			status.Phase = "Pending"
-			status.Reason = "DependenciesPending"
-			status.Message = "Managed resource readiness is gated by direct dependencies"
-			result.allResources = false
-			if result.current == app.Spec.Release.ReleaseName {
-				result.current = resource.ID
-			}
 			result.resources = append(result.resources, status)
 			continue
 		}
@@ -394,7 +407,7 @@ func copyTime(value *metav1.Time) *metav1.Time {
 }
 
 func (r *Reconciler) reconcileDeleteManagedResources(ctx context.Context, app *applicationv1.OneKSApplication) (bool, error) {
-	if err := r.preflightManagedOwnership(ctx, app, true); err != nil {
+	if err := r.preflightManagedOwnership(ctx, app, true, managedAPIsRequired); err != nil {
 		return false, err
 	}
 	order, validationError := managedResourceOrder(app.Spec.ManagedResources)
