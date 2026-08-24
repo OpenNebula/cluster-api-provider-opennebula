@@ -82,14 +82,12 @@ patches:
     - op: add
       path: /spec/template/spec/containers/0/imagePullPolicy
       value: '{{ .Values.image.pullPolicy }}'
-    - op: add
-      path: /spec/template/spec/containers/0/env
-      value:
-      - name: MONITOR_AUTH
-        valueFrom:
-          secretKeyRef:
-            name: '{{ required "monitor.authSecretName is required" .Values.monitor.authSecretName }}'
-            key: ONE_AUTH
+    - op: replace
+      path: /spec/template/spec/volumes/0/secret/secretName
+      value: '{{ required "monitor.authSecretName is required" .Values.monitor.authSecretName }}'
+    - op: replace
+      path: /spec/template/spec/volumes/0/secret/items/0/key
+      value: '{{ required "monitor.authSecretKey is required" .Values.monitor.authSecretKey }}'
 - target:
     kind: Role
     name: capone-cluster-monitor

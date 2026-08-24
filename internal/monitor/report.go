@@ -52,13 +52,21 @@ type encryptedEnvelope struct {
 
 type HTTPEncryptedSender struct {
 	endpoint string
-	auth     string
+	auth     AuthProvider
 	aead     cipher.AEAD
 	random   io.Reader
 	client   *http.Client
 }
 
 func NewHTTPEncryptedSender(config Config) (*HTTPEncryptedSender, error) {
+	auth, err := newFileAuthProvider(config.AuthFile)
+	if err != nil {
+		return nil, fmt.Errorf("configure monitor authentication: %w", err)
+	}
+	return newHTTPEncryptedSender(config, auth)
+}
+
+func newHTTPEncryptedSender(config Config, auth AuthProvider) (*HTTPEncryptedSender, error) {
 	block, err := aes.NewCipher(config.Key)
 	if err != nil {
 		return nil, fmt.Errorf("create AES cipher: %w", err)
@@ -70,7 +78,7 @@ func NewHTTPEncryptedSender(config Config) (*HTTPEncryptedSender, error) {
 	return &HTTPEncryptedSender{
 		endpoint: strings.TrimRight(config.Endpoint, "/") + "/clusters/" +
 			url.PathEscape(config.ClusterID) + "/status",
-		auth:   config.Auth,
+		auth:   auth,
 		aead:   aead,
 		random: rand.Reader,
 		client: &http.Client{
@@ -83,6 +91,14 @@ func NewHTTPEncryptedSender(config Config) (*HTTPEncryptedSender, error) {
 }
 
 func (s *HTTPEncryptedSender) Send(ctx context.Context, payload CallbackPayload) error {
+	credential, err := s.auth.Auth(ctx)
+	if err != nil {
+		return fmt.Errorf("resolve monitor authentication: %w", err)
+	}
+	user, password, ok := strings.Cut(credential, ":")
+	if !ok || user == "" || password == "" {
+		return fmt.Errorf("monitor authentication credential must have the form username:password-or-token")
+	}
 	plaintext, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("encode report: %w", err)
@@ -107,10 +123,6 @@ func (s *HTTPEncryptedSender) Send(ctx context.Context, payload CallbackPayload)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "capone-cluster-monitor")
-	user, password, ok := strings.Cut(s.auth, ":")
-	if !ok || user == "" || password == "" {
-		return fmt.Errorf("MONITOR_AUTH must have the form user:password")
-	}
 	req.SetBasicAuth(user, password)
 	resp, err := s.client.Do(req)
 	if err != nil {

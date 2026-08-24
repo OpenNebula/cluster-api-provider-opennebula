@@ -9,6 +9,7 @@ monitor:
   clusterID: ""
   key: ""
   authSecretName: ""
+  authSecretKey: ONE_AUTH
   chartNamespace: kube-system
   chartAnnotation: oneks.opennebula.io/chart-id
   httpTimeout: 10s

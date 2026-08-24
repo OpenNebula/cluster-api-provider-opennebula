@@ -28,7 +28,7 @@ type Config struct {
 	Endpoint             string
 	ClusterID            string
 	Key                  []byte
-	Auth                 string
+	AuthFile             string
 	ChartAnnotation      string
 	HTTPTimeout          time.Duration
 	HealthAddress        string
@@ -42,7 +42,7 @@ func ConfigFromEnv() (Config, error) {
 	c := Config{
 		Endpoint:        strings.TrimSpace(os.Getenv("MONITOR_ENDPOINT")),
 		ClusterID:       strings.TrimSpace(os.Getenv("MONITOR_CLUSTER_ID")),
-		Auth:            strings.TrimSpace(os.Getenv("MONITOR_AUTH")),
+		AuthFile:        strings.TrimSpace(os.Getenv("MONITOR_AUTH_FILE")),
 		ChartAnnotation: envOrDefault("MONITOR_CHART_ANNOTATION", defaultChartAnnotation),
 		HealthAddress:   envOrDefault("MONITOR_HEALTH_ADDRESS", ":8081"),
 		MetricsAddress:  strings.TrimSpace(os.Getenv("MONITOR_METRICS_ADDRESS")),
@@ -74,8 +74,8 @@ func ConfigFromEnv() (Config, error) {
 	if c.Key, err = base64.StdEncoding.Strict().DecodeString(encodedKey); err != nil || len(c.Key) != 32 {
 		return Config{}, fmt.Errorf("MONITOR_KEY must be Base64-encoded and decode to exactly 32 bytes")
 	}
-	if c.Auth == "" {
-		return Config{}, fmt.Errorf("MONITOR_AUTH is required")
+	if c.AuthFile == "" {
+		return Config{}, fmt.Errorf("MONITOR_AUTH_FILE is required")
 	}
 	if c.HTTPTimeout, err = durationEnv("MONITOR_HTTP_TIMEOUT", 10*time.Second); err != nil {
 		return Config{}, err

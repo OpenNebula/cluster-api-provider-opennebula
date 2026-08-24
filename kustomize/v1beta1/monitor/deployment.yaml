@@ -28,6 +28,13 @@ spec:
             name: capone-cluster-monitor
         - secretRef:
             name: capone-cluster-monitor
+        env:
+        - name: MONITOR_AUTH_FILE
+          value: /var/run/secrets/oneks-monitor/ONE_AUTH
+        volumeMounts:
+        - name: monitor-auth
+          mountPath: /var/run/secrets/oneks-monitor
+          readOnly: true
         ports:
         - name: health
           containerPort: 8081
@@ -55,4 +62,11 @@ spec:
           limits:
             cpu: 200m
             memory: 96Mi
+      volumes:
+      - name: monitor-auth
+        secret:
+          secretName: cloud-config
+          items:
+          - key: ONE_AUTH
+            path: ONE_AUTH
       terminationGracePeriodSeconds: 30

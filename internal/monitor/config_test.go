@@ -9,16 +9,23 @@ package monitor
 
 import (
 	"encoding/base64"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func setRequiredMonitorEnv(t *testing.T, endpoint, clusterID string) {
+func setRequiredMonitorEnv(t *testing.T, endpoint, clusterID string) string {
 	t.Helper()
+	authFile := filepath.Join(t.TempDir(), "ONE_AUTH")
+	if err := os.WriteFile(authFile, []byte("oneadmin:secret\n"), 0o600); err != nil {
+		t.Fatalf("write authentication file: %v", err)
+	}
 	t.Setenv("MONITOR_ENDPOINT", endpoint)
 	t.Setenv("MONITOR_CLUSTER_ID", clusterID)
 	t.Setenv("MONITOR_KEY", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))))
-	t.Setenv("MONITOR_AUTH", "oneadmin:secret")
+	t.Setenv("MONITOR_AUTH_FILE", authFile)
+	return authFile
 }
 
 func TestMetricsListenerIsDisabledByDefault(t *testing.T) {
@@ -139,11 +146,38 @@ func TestMonitorKeyMustDecodeTo32Bytes(t *testing.T) {
 	}
 }
 
-func TestMonitorAuthIsRequired(t *testing.T) {
+func TestMonitorAuthFileIsRequired(t *testing.T) {
 	setRequiredMonitorEnv(t, "http://oneks.example/api/v1", "42")
-	t.Setenv("MONITOR_AUTH", "")
+	t.Setenv("MONITOR_AUTH_FILE", "")
 
-	if _, err := ConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "MONITOR_AUTH is required") {
-		t.Fatalf("expected Basic Auth validation error, got %v", err)
+	if _, err := ConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "MONITOR_AUTH_FILE is required") {
+		t.Fatalf("expected authentication file validation error, got %v", err)
+	}
+}
+
+func TestMonitorAuthFileWhitespaceIsRejected(t *testing.T) {
+	setRequiredMonitorEnv(t, "http://oneks.example/api/v1", "42")
+	t.Setenv("MONITOR_AUTH_FILE", " \t\n")
+
+	if _, err := ConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "MONITOR_AUTH_FILE is required") {
+		t.Fatalf("expected authentication file validation error, got %v", err)
+	}
+}
+
+func TestMonitorAuthFilePathIsAcceptedWithoutLegacyFallback(t *testing.T) {
+	authFile := setRequiredMonitorEnv(t, "http://oneks.example/api/v1", "42")
+	t.Setenv("MONITOR_AUTH", "legacy:credential")
+
+	config, err := ConfigFromEnv()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if config.AuthFile != authFile {
+		t.Fatalf("unexpected authentication file path: %q", config.AuthFile)
+	}
+
+	t.Setenv("MONITOR_AUTH_FILE", "")
+	if _, err := ConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "MONITOR_AUTH_FILE is required") {
+		t.Fatalf("legacy authentication unexpectedly used as fallback: %v", err)
 	}
 }
