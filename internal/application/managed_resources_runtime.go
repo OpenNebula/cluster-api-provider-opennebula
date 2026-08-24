@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -128,6 +129,12 @@ func (r *Reconciler) reconcileManagedResources(ctx context.Context, app *applica
 		current := emptyManagedResource(resource)
 		err = reader.Get(ctx, client.ObjectKeyFromObject(current), current)
 		if apierrors.IsNotFound(err) {
+			ctrl.LoggerFrom(ctx).V(1).Info(
+				"applying managed resource",
+				"action", "create", "resourceID", resource.ID,
+				"apiVersion", resource.APIVersion, "kind", resource.Kind,
+				"resourceNamespace", resource.Namespace, "name", resource.Name,
+			)
 			if createErr := r.Create(ctx, desired, client.FieldOwner(applicationv1.FieldManager)); createErr != nil {
 				if apierrors.IsAlreadyExists(createErr) {
 					current = emptyManagedResource(resource)
@@ -142,14 +149,32 @@ func (r *Reconciler) reconcileManagedResources(ctx context.Context, app *applica
 					}
 					if managedResourceNeedsApply(current, desired) {
 						desired.SetResourceVersion(current.GetResourceVersion())
+						ctrl.LoggerFrom(ctx).V(1).Info(
+							"applying managed resource",
+							"action", "update", "resourceID", resource.ID,
+							"apiVersion", resource.APIVersion, "kind", resource.Kind,
+							"resourceNamespace", resource.Namespace, "name", resource.Name,
+						)
 						if patchErr := r.Patch(ctx, desired, client.Apply, client.FieldOwner(applicationv1.FieldManager)); patchErr != nil {
 							return false, fmt.Errorf("apply raced managed %s %s/%s: %w", resource.Kind, resource.Namespace, resource.Name, patchErr)
 						}
+						ctrl.LoggerFrom(ctx).Info(
+							"managed resource applied",
+							"resourceID", resource.ID,
+							"apiVersion", resource.APIVersion, "kind", resource.Kind,
+							"resourceNamespace", resource.Namespace, "name", resource.Name,
+						)
 					}
 					continue
 				}
 				return false, fmt.Errorf("create managed %s %s/%s: %w", resource.Kind, resource.Namespace, resource.Name, createErr)
 			}
+			ctrl.LoggerFrom(ctx).Info(
+				"managed resource created",
+				"resourceID", resource.ID,
+				"apiVersion", resource.APIVersion, "kind", resource.Kind,
+				"resourceNamespace", resource.Namespace, "name", resource.Name,
+			)
 			r.event(app, corev1.EventTypeNormal, "ResourceCreated", fmt.Sprintf("%s %s/%s created", resource.Kind, resource.Namespace, resource.Name))
 			continue
 		}
@@ -161,9 +186,21 @@ func (r *Reconciler) reconcileManagedResources(ctx context.Context, app *applica
 		}
 		if managedResourceNeedsApply(current, desired) {
 			desired.SetResourceVersion(current.GetResourceVersion())
+			ctrl.LoggerFrom(ctx).V(1).Info(
+				"applying managed resource",
+				"action", "update", "resourceID", resource.ID,
+				"apiVersion", resource.APIVersion, "kind", resource.Kind,
+				"resourceNamespace", resource.Namespace, "name", resource.Name,
+			)
 			if err := r.Patch(ctx, desired, client.Apply, client.FieldOwner(applicationv1.FieldManager)); err != nil {
 				return false, fmt.Errorf("apply managed %s %s/%s: %w", resource.Kind, resource.Namespace, resource.Name, err)
 			}
+			ctrl.LoggerFrom(ctx).Info(
+				"managed resource applied",
+				"resourceID", resource.ID,
+				"apiVersion", resource.APIVersion, "kind", resource.Kind,
+				"resourceNamespace", resource.Namespace, "name", resource.Name,
+			)
 			r.event(app, corev1.EventTypeNormal, "ResourceApplied", fmt.Sprintf("%s %s/%s applied", resource.Kind, resource.Namespace, resource.Name))
 		}
 	}
@@ -431,8 +468,23 @@ func (r *Reconciler) reconcileDeleteManagedResources(ctx context.Context, app *a
 		if !ownershipMatches(app, object) {
 			return false, &OwnershipConflictError{Kind: resource.Kind, Namespace: resource.Namespace, Name: resource.Name}
 		}
-		if err := r.Delete(ctx, object, deletePreconditions(object)...); err != nil && !apierrors.IsNotFound(err) {
-			return false, fmt.Errorf("delete managed %s %s/%s: %w", resource.Kind, resource.Namespace, resource.Name, err)
+		ctrl.LoggerFrom(ctx).V(1).Info(
+			"deleting managed resource",
+			"resourceID", resource.ID,
+			"apiVersion", resource.APIVersion, "kind", resource.Kind,
+			"resourceNamespace", resource.Namespace, "name", resource.Name,
+		)
+		deleteErr := r.Delete(ctx, object, deletePreconditions(object)...)
+		if deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
+			return false, fmt.Errorf("delete managed %s %s/%s: %w", resource.Kind, resource.Namespace, resource.Name, deleteErr)
+		}
+		if deleteErr == nil {
+			ctrl.LoggerFrom(ctx).Info(
+				"managed resource deletion requested",
+				"resourceID", resource.ID,
+				"apiVersion", resource.APIVersion, "kind", resource.Kind,
+				"resourceNamespace", resource.Namespace, "name", resource.Name,
+			)
 		}
 		r.event(app, corev1.EventTypeNormal, "ResourceDeleted", fmt.Sprintf("%s %s/%s deletion requested", resource.Kind, resource.Namespace, resource.Name))
 		return true, nil

@@ -30,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -271,6 +272,11 @@ func (r *Reconciler) reconcileProtectedSecrets(ctx context.Context, app *applica
 		current := &corev1.Secret{}
 		err = reader.Get(ctx, client.ObjectKeyFromObject(desired), current)
 		if apierrors.IsNotFound(err) {
+			ctrl.LoggerFrom(ctx).V(1).Info(
+				"reconciling protected Secret",
+				"action", "create", "resourceID", resource.ID,
+				"resourceNamespace", resource.Namespace, "name", resource.Name,
+			)
 			if createErr := r.Create(ctx, desired); createErr != nil {
 				if !apierrors.IsAlreadyExists(createErr) {
 					return false, &protectedSecretAPIError{operation: "create protected", namespace: resource.Namespace, name: resource.Name, cause: createErr}
@@ -290,6 +296,11 @@ func (r *Reconciler) reconcileProtectedSecrets(ctx context.Context, app *applica
 				}
 				continue
 			}
+			ctrl.LoggerFrom(ctx).Info(
+				"protected Secret created",
+				"resourceID", resource.ID,
+				"resourceNamespace", resource.Namespace, "name", resource.Name,
+			)
 			r.event(app, corev1.EventTypeNormal, "ProtectedSecretCreated", fmt.Sprintf("Protected Secret %s/%s created", resource.Namespace, resource.Name))
 			continue
 		}
@@ -365,9 +376,19 @@ func (r *Reconciler) updateProtectedSecret(ctx context.Context, current, desired
 		labels[key] = value
 	}
 	updated.Labels = labels
+	ctrl.LoggerFrom(ctx).V(1).Info(
+		"reconciling protected Secret",
+		"action", "update", "resourceID", resource.ID,
+		"resourceNamespace", resource.Namespace, "name", resource.Name,
+	)
 	if err := r.Update(ctx, updated); err != nil {
 		return &protectedSecretAPIError{operation: "update protected", namespace: resource.Namespace, name: resource.Name, cause: err}
 	}
+	ctrl.LoggerFrom(ctx).Info(
+		"protected Secret updated",
+		"resourceID", resource.ID,
+		"resourceNamespace", resource.Namespace, "name", resource.Name,
+	)
 	r.event(updated, corev1.EventTypeNormal, "ProtectedSecretRepaired", fmt.Sprintf("Protected Secret %s/%s repaired", resource.Namespace, resource.Name))
 	return nil
 }
@@ -544,8 +565,21 @@ func (r *Reconciler) reconcileDeleteProtectedSecrets(ctx context.Context, app *a
 		if !ownershipMatches(app, current) {
 			return false, &OwnershipConflictError{Kind: "Secret", Namespace: resource.Namespace, Name: resource.Name}
 		}
-		if err := r.Delete(ctx, current, deletePreconditions(current)...); err != nil && !apierrors.IsNotFound(err) {
-			return false, &protectedSecretAPIError{operation: "delete protected", namespace: resource.Namespace, name: resource.Name, cause: err}
+		ctrl.LoggerFrom(ctx).V(1).Info(
+			"deleting protected Secret",
+			"resourceID", resource.ID,
+			"resourceNamespace", resource.Namespace, "name", resource.Name,
+		)
+		deleteErr := r.Delete(ctx, current, deletePreconditions(current)...)
+		if deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
+			return false, &protectedSecretAPIError{operation: "delete protected", namespace: resource.Namespace, name: resource.Name, cause: deleteErr}
+		}
+		if deleteErr == nil {
+			ctrl.LoggerFrom(ctx).Info(
+				"protected Secret deletion requested",
+				"resourceID", resource.ID,
+				"resourceNamespace", resource.Namespace, "name", resource.Name,
+			)
 		}
 		r.event(app, corev1.EventTypeNormal, "ProtectedSecretDeleted", fmt.Sprintf("Protected Secret %s/%s deletion requested", resource.Namespace, resource.Name))
 	}
@@ -569,8 +603,19 @@ func (r *Reconciler) reconcileDeleteSecretInput(ctx context.Context, app *applic
 	if !current.DeletionTimestamp.IsZero() {
 		return true, nil
 	}
-	if err := r.Delete(ctx, current, deletePreconditions(current)...); err != nil && !apierrors.IsNotFound(err) {
-		return false, &protectedSecretAPIError{operation: "delete input", namespace: reference.Namespace, name: reference.Name, cause: err}
+	ctrl.LoggerFrom(ctx).V(1).Info(
+		"deleting input Secret",
+		"resourceNamespace", reference.Namespace, "name", reference.Name,
+	)
+	deleteErr := r.Delete(ctx, current, deletePreconditions(current)...)
+	if deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
+		return false, &protectedSecretAPIError{operation: "delete input", namespace: reference.Namespace, name: reference.Name, cause: deleteErr}
+	}
+	if deleteErr == nil {
+		ctrl.LoggerFrom(ctx).Info(
+			"input Secret deletion requested",
+			"resourceNamespace", reference.Namespace, "name", reference.Name,
+		)
 	}
 	r.event(app, corev1.EventTypeNormal, "InputSecretDeleted", "Input Secret deletion requested")
 	return true, nil

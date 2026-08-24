@@ -86,6 +86,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 	if err := r.Get(ctx, request.NamespacedName, app); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	ctx = contextWithApplicationLogger(ctx, app)
+	ctrl.LoggerFrom(ctx).V(1).Info(
+		"application reconciliation started",
+		"observedGeneration", app.Status.ObservedGeneration,
+		"phase", app.Status.Phase,
+	)
 
 	deleting := !app.DeletionTimestamp.IsZero()
 	hasCleanupFinalizer := containsString(app.Finalizers, applicationv1.ApplicationFinalizer)
@@ -198,6 +204,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("add application finalizer: %w", err)
 		}
+		ctrl.LoggerFrom(ctx).Info("application finalizer acquired")
 		r.event(updated, corev1.EventTypeNormal, "FinalizerAdded", "Application cleanup finalizer added")
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -206,6 +213,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("persist external dependency selection: %w", err)
 		}
+		ctrl.LoggerFrom(ctx).Info("external dependency lifecycle selected", "selection", externalSelectionToPersist)
 		r.event(updated, corev1.EventTypeNormal, "ExternalDependencySelected", fmt.Sprintf("Dependency selected %s lifecycle", externalSelectionToPersist))
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -378,12 +386,22 @@ func (r *Reconciler) reconcileConfigMaps(ctx context.Context, app *applicationv1
 		current := &corev1.ConfigMap{}
 		err := r.authoritativeReader().Get(ctx, client.ObjectKeyFromObject(desired), current)
 		if apierrors.IsNotFound(err) {
+			ctrl.LoggerFrom(ctx).V(1).Info(
+				"applying managed resource",
+				"action", "create", "apiVersion", "v1", "kind", "ConfigMap",
+				"resourceNamespace", desired.Namespace, "name", desired.Name,
+			)
 			if err := r.Create(ctx, desired, client.FieldOwner(applicationv1.FieldManager)); err != nil {
 				if apierrors.IsAlreadyExists(err) {
 					return false, &OwnershipConflictError{Kind: "ConfigMap", Namespace: desired.Namespace, Name: desired.Name}
 				}
 				return false, fmt.Errorf("create ConfigMap %s/%s: %w", desired.Namespace, desired.Name, err)
 			}
+			ctrl.LoggerFrom(ctx).Info(
+				"managed resource created",
+				"apiVersion", "v1", "kind", "ConfigMap",
+				"resourceNamespace", desired.Namespace, "name", desired.Name,
+			)
 			r.event(app, corev1.EventTypeNormal, "ResourceCreated", fmt.Sprintf("ConfigMap %s/%s created", desired.Namespace, desired.Name))
 			return false, nil
 		}
@@ -396,9 +414,19 @@ func (r *Reconciler) reconcileConfigMaps(ctx context.Context, app *applicationv1
 		if configMapNeedsApply(current, desired) {
 			// SSA honors resourceVersion as an optimistic precondition.
 			desired.ResourceVersion = current.ResourceVersion
+			ctrl.LoggerFrom(ctx).V(1).Info(
+				"applying managed resource",
+				"action", "update", "apiVersion", "v1", "kind", "ConfigMap",
+				"resourceNamespace", desired.Namespace, "name", desired.Name,
+			)
 			if err := r.Patch(ctx, desired, client.Apply, client.FieldOwner(applicationv1.FieldManager)); err != nil {
 				return false, fmt.Errorf("apply ConfigMap %s/%s: %w", desired.Namespace, desired.Name, err)
 			}
+			ctrl.LoggerFrom(ctx).Info(
+				"managed resource applied",
+				"apiVersion", "v1", "kind", "ConfigMap",
+				"resourceNamespace", desired.Namespace, "name", desired.Name,
+			)
 			r.event(app, corev1.EventTypeNormal, "ResourceApplied", fmt.Sprintf("ConfigMap %s/%s applied", desired.Namespace, desired.Name))
 		}
 	}
@@ -410,12 +438,22 @@ func (r *Reconciler) reconcileHelmChart(ctx context.Context, app *applicationv1.
 	current := helmChartObject(desired.GetName())
 	err := r.authoritativeReader().Get(ctx, client.ObjectKeyFromObject(desired), current)
 	if apierrors.IsNotFound(err) {
+		ctrl.LoggerFrom(ctx).V(1).Info(
+			"reconciling Helm release",
+			"action", "create", "release", app.Spec.Release.ReleaseName,
+			"releaseNamespace", app.Spec.Release.TargetNamespace,
+		)
 		if err := r.Create(ctx, desired, client.FieldOwner(applicationv1.FieldManager)); err != nil {
 			if apierrors.IsAlreadyExists(err) {
 				return &OwnershipConflictError{Kind: "HelmChart", Namespace: desired.GetNamespace(), Name: desired.GetName()}
 			}
 			return fmt.Errorf("create HelmChart %s/%s: %w", desired.GetNamespace(), desired.GetName(), err)
 		}
+		ctrl.LoggerFrom(ctx).Info(
+			"Helm release created",
+			"release", app.Spec.Release.ReleaseName,
+			"releaseNamespace", app.Spec.Release.TargetNamespace,
+		)
 		r.event(app, corev1.EventTypeNormal, "HelmChartCreated", fmt.Sprintf("HelmChart %s/%s created", desired.GetNamespace(), desired.GetName()))
 		return nil
 	}
@@ -428,9 +466,19 @@ func (r *Reconciler) reconcileHelmChart(ctx context.Context, app *applicationv1.
 	if helmChartNeedsApply(current, desired) {
 		// SSA honors resourceVersion as an optimistic precondition.
 		desired.SetResourceVersion(current.GetResourceVersion())
+		ctrl.LoggerFrom(ctx).V(1).Info(
+			"reconciling Helm release",
+			"action", "update", "release", app.Spec.Release.ReleaseName,
+			"releaseNamespace", app.Spec.Release.TargetNamespace,
+		)
 		if err := r.Patch(ctx, desired, client.Apply, client.FieldOwner(applicationv1.FieldManager)); err != nil {
 			return fmt.Errorf("apply HelmChart %s/%s: %w", desired.GetNamespace(), desired.GetName(), err)
 		}
+		ctrl.LoggerFrom(ctx).Info(
+			"Helm release applied",
+			"release", app.Spec.Release.ReleaseName,
+			"releaseNamespace", app.Spec.Release.TargetNamespace,
+		)
 		r.event(app, corev1.EventTypeNormal, "HelmChartApplied", fmt.Sprintf("HelmChart %s/%s applied", desired.GetNamespace(), desired.GetName()))
 	}
 	return nil
@@ -798,8 +846,21 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 		if err := r.executePreUninstallActions(ctx, app); err != nil {
 			return ctrl.Result{}, err
 		}
-		if err := r.Delete(ctx, helm, deletePreconditions(helm)...); err != nil && !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, fmt.Errorf("delete HelmChart %s/%s: %w", helm.GetNamespace(), helm.GetName(), err)
+		ctrl.LoggerFrom(ctx).V(1).Info(
+			"deleting Helm release",
+			"release", app.Spec.Release.ReleaseName,
+			"releaseNamespace", app.Spec.Release.TargetNamespace,
+		)
+		deleteErr := r.Delete(ctx, helm, deletePreconditions(helm)...)
+		if deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
+			return ctrl.Result{}, fmt.Errorf("delete HelmChart %s/%s: %w", helm.GetNamespace(), helm.GetName(), deleteErr)
+		}
+		if deleteErr == nil {
+			ctrl.LoggerFrom(ctx).Info(
+				"Helm release deletion requested",
+				"release", app.Spec.Release.ReleaseName,
+				"releaseNamespace", app.Spec.Release.TargetNamespace,
+			)
 		}
 		r.event(app, corev1.EventTypeNormal, "HelmChartDeleted", fmt.Sprintf("HelmChart %s/%s deletion requested", helm.GetNamespace(), helm.GetName()))
 		return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
@@ -859,8 +920,21 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 				conflict := (&OwnershipConflictError{Kind: "ConfigMap", Namespace: object.Namespace, Name: object.Name}).Error()
 				return r.recordTerminal(ctx, app, "OwnershipConflict", conflict, true)
 			}
-			if err := r.Delete(ctx, object, deletePreconditions(object)...); err != nil && !apierrors.IsNotFound(err) {
-				return ctrl.Result{}, fmt.Errorf("delete ConfigMap %s/%s: %w", resource.Namespace, resource.Name, err)
+			ctrl.LoggerFrom(ctx).V(1).Info(
+				"deleting managed resource",
+				"apiVersion", "v1", "kind", "ConfigMap",
+				"resourceNamespace", object.Namespace, "name", object.Name,
+			)
+			deleteErr := r.Delete(ctx, object, deletePreconditions(object)...)
+			if deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
+				return ctrl.Result{}, fmt.Errorf("delete ConfigMap %s/%s: %w", resource.Namespace, resource.Name, deleteErr)
+			}
+			if deleteErr == nil {
+				ctrl.LoggerFrom(ctx).Info(
+					"managed resource deletion requested",
+					"apiVersion", "v1", "kind", "ConfigMap",
+					"resourceNamespace", object.Namespace, "name", object.Name,
+				)
 			}
 			r.event(app, corev1.EventTypeNormal, "ResourceDeleted", fmt.Sprintf("ConfigMap %s/%s deletion requested", resource.Namespace, resource.Name))
 			return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
@@ -880,6 +954,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 	if err := r.removeApplicationFinalizer(ctx, app); err != nil {
 		return ctrl.Result{}, err
 	}
+	ctrl.LoggerFrom(ctx).Info("application finalization completed")
 	return ctrl.Result{}, nil
 }
 
@@ -897,9 +972,21 @@ func (r *Reconciler) executePreUninstallActions(ctx context.Context, app *applic
 			return fmt.Errorf("get pre-uninstall action %d target %s %s/%s: %w", index, action.Resource.Kind, action.Resource.Namespace, action.Resource.Name, err)
 		}
 		patch := client.RawPatch(types.MergePatchType, []byte(action.PatchJSON))
+		ctrl.LoggerFrom(ctx).V(1).Info(
+			"executing pre-uninstall action",
+			"action", index, "type", action.Type,
+			"apiVersion", action.Resource.APIVersion, "kind", action.Resource.Kind,
+			"resourceNamespace", action.Resource.Namespace, "name", action.Resource.Name,
+		)
 		if err := r.Patch(ctx, target, patch); err != nil {
 			return fmt.Errorf("patch pre-uninstall action %d target %s %s/%s: %w", index, action.Resource.Kind, action.Resource.Namespace, action.Resource.Name, err)
 		}
+		ctrl.LoggerFrom(ctx).Info(
+			"pre-uninstall action applied",
+			"action", index, "type", action.Type,
+			"apiVersion", action.Resource.APIVersion, "kind", action.Resource.Kind,
+			"resourceNamespace", action.Resource.Namespace, "name", action.Resource.Name,
+		)
 	}
 	return nil
 }
@@ -978,8 +1065,14 @@ func (r *Reconciler) recordTerminal(ctx context.Context, app *applicationv1.OneK
 func (r *Reconciler) updateStatus(ctx context.Context, app *applicationv1.OneKSApplication, status applicationv1.OneKSApplicationStatus) error {
 	normalizeStatus(&status)
 	if reflect.DeepEqual(app.Status, status) {
+		ctrl.LoggerFrom(ctx).V(1).Info(
+			"application status unchanged",
+			"phase", status.Phase,
+			"observedGeneration", status.ObservedGeneration,
+		)
 		return nil
 	}
+	previous := *app.Status.DeepCopy()
 	updated := app.DeepCopy()
 	updated.Status = status
 	if err := r.Status().Update(ctx, updated); err != nil {
@@ -987,6 +1080,7 @@ func (r *Reconciler) updateStatus(ctx context.Context, app *applicationv1.OneKSA
 	}
 	app.Status = status
 	app.ResourceVersion = updated.ResourceVersion
+	logStatusTransitions(ctx, app, previous, status)
 	return nil
 }
 

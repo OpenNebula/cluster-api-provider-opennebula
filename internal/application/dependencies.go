@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -130,12 +131,17 @@ func (r *Reconciler) materializeRootDependencies(ctx context.Context, root *appl
 	}
 
 	for _, expected := range missing {
+		ctrl.LoggerFrom(ctx).V(1).Info(
+			"reconciling dependency",
+			"action", "create", "dependency", expected.Name,
+		)
 		if createErr := r.Create(ctx, expected); createErr != nil {
 			if apierrors.IsAlreadyExists(createErr) {
 				return true, "", nil, nil
 			}
 			return false, "", nil, fmt.Errorf("create dependency application %s/%s: %w", expected.Namespace, expected.Name, createErr)
 		}
+		ctrl.LoggerFrom(ctx).Info("dependency created", "dependency", expected.Name)
 		r.event(root, corev1.EventTypeNormal, "DependencyCreated", fmt.Sprintf("Dependency application %s/%s created", expected.Namespace, expected.Name))
 	}
 	return false, "", nil, nil
@@ -326,6 +332,7 @@ func (r *Reconciler) releaseDependency(ctx context.Context, consumer *applicatio
 		return false, nil
 	}
 	if dependency.Spec.DeletionPolicy == applicationv1.DeletionPolicyRetain {
+		ctrl.LoggerFrom(ctx).V(1).Info("dependency retained by policy", "dependency", dependency.Name)
 		r.event(consumer, corev1.EventTypeNormal, "DependencyRetained", fmt.Sprintf("Dependency application %s/%s retained by policy", dependency.Namespace, dependency.Name))
 		return false, nil
 	}
@@ -338,11 +345,17 @@ func (r *Reconciler) releaseDependency(ctx context.Context, consumer *applicatio
 		if err != nil {
 			return false, fmt.Errorf("add dependency cleanup finalizer to %s/%s: %w", dependency.Namespace, dependency.Name, err)
 		}
+		ctrl.LoggerFrom(ctx).Info("dependency finalizer acquired", "dependency", dependency.Name)
 		r.event(consumer, corev1.EventTypeNormal, "DependencyFinalizerAdded", fmt.Sprintf("Dependency application %s/%s cleanup finalizer added", dependency.Namespace, dependency.Name))
 		return true, nil
 	}
-	if err := r.Delete(ctx, dependency, deletePreconditions(dependency)...); err != nil && !apierrors.IsNotFound(err) {
-		return false, fmt.Errorf("delete dependency application %s/%s: %w", dependency.Namespace, dependency.Name, err)
+	ctrl.LoggerFrom(ctx).V(1).Info("deleting dependency", "dependency", dependency.Name)
+	deleteErr := r.Delete(ctx, dependency, deletePreconditions(dependency)...)
+	if deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
+		return false, fmt.Errorf("delete dependency application %s/%s: %w", dependency.Namespace, dependency.Name, deleteErr)
+	}
+	if deleteErr == nil {
+		ctrl.LoggerFrom(ctx).Info("dependency deletion requested", "dependency", dependency.Name)
 	}
 	r.event(consumer, corev1.EventTypeNormal, "DependencyDeleted", fmt.Sprintf("Dependency application %s/%s deletion requested", dependency.Namespace, dependency.Name))
 	return false, nil
