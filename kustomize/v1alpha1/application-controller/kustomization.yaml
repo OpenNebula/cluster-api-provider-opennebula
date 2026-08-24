@@ -3,7 +3,6 @@ kind: Kustomization
 resources:
 - crd/oneks.opennebula.io_oneksapplications.yaml
 - namespace_application.yaml
-- namespace_workloads.yaml
 - service_account.yaml
 - configmap.yaml
 - role_application.yaml

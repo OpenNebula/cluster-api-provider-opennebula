@@ -75,19 +75,26 @@ func TestHelmAndKustomizeUseTheSameGeneratedCRD(t *testing.T) {
 	}
 }
 
-func TestHelmKeepsControllerNamespacesOnUninstall(t *testing.T) {
-	payload, err := os.ReadFile("../../helm/v1alpha1/oneks-application-controller/templates/namespaces.yaml")
-	if err != nil {
-		t.Fatalf("read Helm Namespace template: %v", err)
-	}
-	text := string(payload)
-	for _, namespace := range []string{"oneks-system", "oneks-poc-workloads"} {
-		if !strings.Contains(text, "name: "+namespace) {
-			t.Fatalf("Helm Namespace template is missing %s", namespace)
+func TestPackagesDoNotCreateSharedWorkloadNamespaces(t *testing.T) {
+	for _, path := range []string{
+		"../../helm/v1alpha1/oneks-application-controller/templates/namespaces.yaml",
+		"../../kustomize/v1alpha1/application-controller/namespace_workloads.yaml",
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("obsolete Namespace manifest %s still exists: %v", path, err)
 		}
 	}
-	if count := strings.Count(text, "helm.sh/resource-policy: keep"); count != 2 {
-		t.Fatalf("kept Helm Namespace count = %d, want 2", count)
+
+	payload, err := os.ReadFile("../../kustomize/v1alpha1/application-controller/kustomization.yaml")
+	if err != nil {
+		t.Fatalf("read application-controller kustomization: %v", err)
+	}
+	text := string(payload)
+	if !strings.Contains(text, "- namespace_application.yaml") {
+		t.Fatal("kustomize package no longer creates the controller namespace")
+	}
+	if strings.Contains(text, "namespace_workloads.yaml") {
+		t.Fatal("kustomize package still includes the obsolete workload namespace")
 	}
 }
 
