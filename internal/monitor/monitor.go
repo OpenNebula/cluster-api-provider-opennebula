@@ -14,12 +14,10 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -36,15 +34,12 @@ import (
 	"github.com/OpenNebula/cluster-api-provider-opennebula/internal/monitoring"
 )
 
-const (
-	chartOperationMarker         = "oneks-chart-reconcile"
-	readinessJobLabel            = "oneks.opennebula.io/readiness-job"
-	readinessReleaseAnnotation   = "oneks.opennebula.io/release-name"
-	MaxPendingCallbackIdentities = 8192
-)
+const MaxPendingCallbackIdentities = 8192
+
+const applicationSelector = "app.kubernetes.io/managed-by=oneks,applications.oneks.opennebula.io/producer=oneks-server"
 
 var (
-	helmChartGVR = schema.GroupVersionResource{Group: "helm.cattle.io", Version: "v1", Resource: "helmcharts"}
+	applicationGVR = schema.GroupVersionResource{Group: "oneks.opennebula.io", Version: "v1alpha1", Resource: "oneksapplications"}
 )
 
 type pendingReport struct {
@@ -57,18 +52,15 @@ type Monitor struct {
 	sender  Sender
 	metrics *Metrics
 
-	nodeFactory    informers.SharedInformerFactory
-	chartFactory   dynamicinformer.DynamicSharedInformerFactory
-	jobFactory     informers.SharedInformerFactory
-	profileFactory informers.SharedInformerFactory
-	nodes          cache.SharedIndexInformer
-	charts         cache.SharedIndexInformer
-	jobs           cache.SharedIndexInformer
-	operations     cache.SharedIndexInformer
-	profileConfigs cache.SharedIndexInformer
-	profiles       *monitoring.Store
-	evaluator      *monitoring.Evaluator
-	queue          workqueue.TypedRateLimitingInterface[string]
+	nodeFactory        informers.SharedInformerFactory
+	applicationFactory dynamicinformer.DynamicSharedInformerFactory
+	profileFactory     informers.SharedInformerFactory
+	nodes              cache.SharedIndexInformer
+	applications       cache.SharedIndexInformer
+	profileConfigs     cache.SharedIndexInformer
+	profiles           *monitoring.Store
+	evaluator          *monitoring.Evaluator
+	queue              workqueue.TypedRateLimitingInterface[string]
 
 	mu       sync.Mutex
 	pending  map[string]pendingReport
@@ -85,8 +77,10 @@ func New(config Config, client kubernetes.Interface, dynamicClient dynamic.Inter
 	// A zero resync period keeps reconciliation strictly event-driven. Watch
 	// reconnects still relist objects, and initial cache sync emits snapshots.
 	m.nodeFactory = informers.NewSharedInformerFactory(client, 0)
-	m.chartFactory = dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynamicClient, 0, config.KubeSystemNS, nil)
-	m.jobFactory = informers.NewSharedInformerFactoryWithOptions(client, 0, informers.WithNamespace(config.KubeSystemNS))
+	m.applicationFactory = dynamicinformer.NewFilteredDynamicSharedInformerFactory(
+		dynamicClient, 0, config.ApplicationNamespace,
+		func(options *metav1.ListOptions) { options.LabelSelector = applicationSelector },
+	)
 	m.profileFactory = informers.NewSharedInformerFactoryWithOptions(
 		client, 0,
 		informers.WithNamespace(config.ProfileNamespace),
@@ -95,9 +89,7 @@ func New(config Config, client kubernetes.Interface, dynamicClient dynamic.Inter
 		}),
 	)
 	m.nodes = m.nodeFactory.Core().V1().Nodes().Informer()
-	m.charts = m.chartFactory.ForResource(helmChartGVR).Informer()
-	m.jobs = m.jobFactory.Batch().V1().Jobs().Informer()
-	m.operations = m.jobFactory.Core().V1().ConfigMaps().Informer()
+	m.applications = m.applicationFactory.ForResource(applicationGVR).Informer()
 	m.profileConfigs = m.profileFactory.Core().V1().ConfigMaps().Informer()
 	m.profiles = monitoring.NewStore(config.PrometheusNamespaces)
 	m.evaluator = monitoring.NewEvaluator(
@@ -123,28 +115,12 @@ func New(config Config, client kubernetes.Interface, dynamicClient dynamic.Inter
 	}); err != nil {
 		return nil, fmt.Errorf("register node handler: %w", err)
 	}
-	if _, err := m.charts.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj any) { m.onChart(obj, "Added") },
-		UpdateFunc: func(_, obj any) { m.onChart(obj, "Updated") },
-		DeleteFunc: func(obj any) { m.onChartDeleted(obj) },
+	if _, err := m.applications.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    func(obj any) { m.onApplication(obj, "Added") },
+		UpdateFunc: func(_, obj any) { m.onApplication(obj, "Updated") },
+		DeleteFunc: m.onApplicationDeleted,
 	}); err != nil {
-		return nil, fmt.Errorf("register HelmChart handler: %w", err)
-	}
-	jobHandler := cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj any) { m.onJob(obj, "Added") },
-		UpdateFunc: func(_, obj any) { m.onJob(obj, "Updated") },
-		DeleteFunc: func(obj any) { m.onJob(obj, "Deleted") },
-	}
-	if _, err := m.jobs.AddEventHandler(jobHandler); err != nil {
-		return nil, fmt.Errorf("register Helm job handler: %w", err)
-	}
-	operationHandler := cache.ResourceEventHandlerFuncs{
-		AddFunc:    m.onChartOperation,
-		UpdateFunc: func(_, obj any) { m.onChartOperation(obj) },
-		DeleteFunc: m.onChartOperation,
-	}
-	if _, err := m.operations.AddEventHandler(operationHandler); err != nil {
-		return nil, fmt.Errorf("register chart operation handler: %w", err)
+		return nil, fmt.Errorf("register OneKSApplication handler: %w", err)
 	}
 	if _, err := m.profileConfigs.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    m.onMonitoringProfile,
@@ -160,20 +136,15 @@ func (m *Monitor) Run(ctx context.Context) error {
 	defer runtime.HandleCrash()
 	defer m.queue.ShutDown()
 	m.nodeFactory.Start(ctx.Done())
-	m.chartFactory.Start(ctx.Done())
-	m.jobFactory.Start(ctx.Done())
+	m.applicationFactory.Start(ctx.Done())
 	m.profileFactory.Start(ctx.Done())
 	if !cache.WaitForCacheSync(
-		ctx.Done(), m.nodes.HasSynced, m.charts.HasSynced,
-		m.jobs.HasSynced, m.operations.HasSynced,
-		m.profileConfigs.HasSynced,
+		ctx.Done(), m.nodes.HasSynced, m.applications.HasSynced, m.profileConfigs.HasSynced,
 	) {
 		return fmt.Errorf("initial informer cache sync failed")
 	}
 	m.enqueueNodeSnapshot()
-	m.enqueueReconcile(m.hasActiveChartOperation())
 	m.updateNodeMetrics()
-	m.updateChartMetrics()
 	go m.evaluator.Run(ctx)
 	m.ready.Store(true)
 	klog.InfoS("monitor caches synchronized")
@@ -301,26 +272,6 @@ func (m *Monitor) updateNodeMetrics() {
 	m.metrics.setNodes(nodes)
 }
 
-func (m *Monitor) enqueueReconcile(active bool) {
-	m.enqueue("Reconcile/charts", reconcileReport(active))
-}
-
-func (m *Monitor) hasActiveChartOperation() bool {
-	_, exists, err := m.operations.GetStore().GetByKey(
-		m.config.KubeSystemNS + "/" + chartOperationMarker,
-	)
-	return err == nil && exists
-}
-
-func (m *Monitor) onChartOperation(obj any) {
-	configMap, ok := deletedObject[*corev1.ConfigMap](obj)
-	if !ok || configMap.Name != chartOperationMarker {
-		return
-	}
-
-	m.enqueueReconcile(m.hasActiveChartOperation())
-}
-
 func (m *Monitor) onMonitoringProfile(obj any) {
 	configMap, ok := obj.(*corev1.ConfigMap)
 	if !ok {
@@ -351,118 +302,20 @@ func (m *Monitor) onMonitoringProfileDeleted(obj any) {
 	m.profiles.Delete(configMap.Namespace + "/" + configMap.Name)
 }
 
-func (m *Monitor) onChart(obj any, event string) {
-	chart, ok := obj.(*unstructured.Unstructured)
+func (m *Monitor) onApplication(obj any, event string) {
+	app, ok := obj.(*unstructured.Unstructured)
 	if !ok {
 		return
 	}
-	status, jobRV := m.chartStatus(chart)
-	report, watched := chartReport(m.config, chart, status, event)
-	if !watched {
-		return
-	}
-	report.RelatedResourceVersion = jobRV
-	m.enqueue("HelmChart/"+chart.GetNamespace()+"/"+chart.GetName(), report)
-	m.updateChartMetrics()
+	m.enqueue("OneKSApplication/"+app.GetNamespace()+"/"+app.GetName(), applicationReport(app, event))
 }
 
-func (m *Monitor) onChartDeleted(obj any) {
-	chart, ok := deletedObject[*unstructured.Unstructured](obj)
+func (m *Monitor) onApplicationDeleted(obj any) {
+	app, ok := deletedObject[*unstructured.Unstructured](obj)
 	if !ok {
 		return
 	}
-	report, watched := chartReport(m.config, chart, "unknown", "Deleted")
-	if !watched {
-		return
-	}
-	report.Status = map[string]any{"chartId": report.Status["chartId"], "deleted": true}
-	m.enqueue("HelmChart/"+chart.GetNamespace()+"/"+chart.GetName(), report)
-	m.updateChartMetrics()
-}
-
-func (m *Monitor) onJob(obj any, event string) {
-	job, ok := deletedObject[*batchv1.Job](obj)
-	if !ok {
-		return
-	}
-	if report, watched := readinessJobReport(m.config, job, event); watched {
-		m.enqueue("ReadinessJob/"+job.Namespace+"/"+job.Name, report)
-	}
-	for _, item := range m.charts.GetStore().List() {
-		chart, ok := item.(*unstructured.Unstructured)
-		if !ok {
-			continue
-		}
-		jobName, _, _ := unstructured.NestedString(chart.Object, "status", "jobName")
-		if chart.GetNamespace() != job.Namespace || jobName != job.Name {
-			continue
-		}
-		m.onChart(chart, "Updated")
-	}
-	m.updateChartMetrics()
-}
-
-func (m *Monitor) updateChartMetrics() {
-	states := make(map[string]int, len(chartMetricStates))
-	for _, item := range m.charts.GetStore().List() {
-		chart, ok := item.(*unstructured.Unstructured)
-		if !ok {
-			continue
-		}
-		if _, watched := m.config.watchesChart(chart.GetAnnotations()); !watched {
-			continue
-		}
-		status, _ := m.chartStatus(chart)
-		states[normalizedChartStatus(status)]++
-	}
-	m.metrics.setHelmCharts(states)
-}
-
-func (m *Monitor) chartStatus(chart *unstructured.Unstructured) (string, string) {
-	if chart.GetDeletionTimestamp() != nil {
-		return "uninstalling", ""
-	}
-	if chartConditionTrue(chart, "Failed") {
-		return "failed", ""
-	}
-	jobName, found, _ := unstructured.NestedString(chart.Object, "status", "jobName")
-	if !found || strings.TrimSpace(jobName) == "" {
-		return "pending", ""
-	}
-	item, exists, err := m.jobs.GetStore().GetByKey(chart.GetNamespace() + "/" + strings.TrimSpace(jobName))
-	if err != nil || !exists {
-		return "unknown", ""
-	}
-	job, ok := item.(*batchv1.Job)
-	if !ok {
-		return "unknown", ""
-	}
-	for _, condition := range job.Status.Conditions {
-		if condition.Status != corev1.ConditionTrue {
-			continue
-		}
-		switch condition.Type {
-		case batchv1.JobFailed:
-			return "failed", job.ResourceVersion
-		case batchv1.JobComplete:
-			return "deployed", job.ResourceVersion
-		}
-	}
-	return "pending", job.ResourceVersion
-}
-
-func chartConditionTrue(chart *unstructured.Unstructured, conditionType string) bool {
-	conditions, found, _ := unstructured.NestedSlice(chart.Object, "status", "conditions")
-	if !found {
-		return false
-	}
-	for _, item := range conditions {
-		condition, ok := item.(map[string]any)
-		if ok && condition["type"] == conditionType && condition["status"] == string(corev1.ConditionTrue) {
-			return true
-		}
-	}
-	return false
+	m.enqueue("OneKSApplication/"+app.GetNamespace()+"/"+app.GetName(), applicationReport(app, "Deleted"))
 }
 
 func deletedObject[T any](obj any) (T, bool) {

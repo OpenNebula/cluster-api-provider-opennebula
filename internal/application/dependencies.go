@@ -149,7 +149,7 @@ func (r *Reconciler) materializeRootDependencies(ctx context.Context, root *appl
 
 func (r *Reconciler) observeDependencies(ctx context.Context, app *applicationv1.OneKSApplication) (dependencyObservation, error) {
 	result := dependencyObservation{ready: true}
-	if app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha2 && app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha3 && app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha4 {
+	if app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha2 && app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha3 && app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha4 && app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha5 {
 		return result, nil
 	}
 	result.enabled = true

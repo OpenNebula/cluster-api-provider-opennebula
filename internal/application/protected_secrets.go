@@ -75,12 +75,12 @@ type protectedSecretsObservation struct {
 }
 
 func usesProtectedSecrets(app *applicationv1.OneKSApplication) bool {
-	return app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 && app.Spec.Role == applicationv1.ApplicationRoleRoot
+	return (app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5) && app.Spec.Role == applicationv1.ApplicationRoleRoot
 }
 
 func validateProtectedSecretContract(spec applicationv1.OneKSApplicationSpec) *PlanError {
 	if spec.SecretInputRef == nil {
-		return invalid("MissingSecretInputRef", "plan-v1alpha4 requires secretInputRef")
+		return invalid("MissingSecretInputRef", "%s requires secretInputRef", spec.PlanVersion)
 	}
 	input := spec.SecretInputRef
 	if input.Namespace != applicationv1.ApplicationNamespace {
@@ -89,8 +89,11 @@ func validateProtectedSecretContract(spec applicationv1.OneKSApplicationSpec) *P
 	if !validUTF8Bytes(input.Name, 1, 253) || len(validation.IsDNS1123Subdomain(input.Name)) != 0 {
 		return invalid("InvalidSecretInputName", "secretInputRef.name must be a DNS-1123 subdomain")
 	}
-	if !validUTF8Bytes(input.UID, 1, maxSecretInputUID) {
-		return invalid("InvalidSecretInputUID", "secretInputRef.uid must be valid UTF-8 between 1 and %d bytes", maxSecretInputUID)
+	if spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 && !validUTF8Bytes(input.UID, 1, maxSecretInputUID) {
+		return invalid("InvalidSecretInputUID", "plan-v1alpha4 secretInputRef.uid must be valid UTF-8 between 1 and %d bytes", maxSecretInputUID)
+	}
+	if spec.PlanVersion == applicationv1.PlanVersionV1Alpha5 && input.UID != "" {
+		return invalid("InvalidSecretInputUID", "plan-v1alpha5 binds the input Secret UID through status")
 	}
 	if len(spec.ProtectedSecrets) == 0 {
 		return invalid("MissingProtectedSecrets", "plan-v1alpha4 requires at least one protected Secret")
@@ -210,7 +213,22 @@ func (r *Reconciler) readSecretInput(ctx context.Context, app *applicationv1.One
 	if err != nil {
 		return nil, false, &protectedSecretAPIError{operation: "read input", namespace: reference.Namespace, name: reference.Name, cause: err}
 	}
-	if string(input.UID) != reference.UID {
+	expectedUID := reference.UID
+	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5 {
+		expectedUID = app.Status.SecretInputUID
+		labels := input.GetLabels()
+		expectedLabels := map[string]string{
+			LabelRootManagedBy: RootManagedByValue, LabelProducer: ProducerValue,
+			LabelClusterID: app.Spec.ClusterID, LabelCatalogueChartID: app.Spec.CatalogueChartID,
+			LabelPlanDigest: app.Spec.PlanDigest, LabelApplicationName: app.Name,
+		}
+		for key, expected := range expectedLabels {
+			if labels[key] != expected {
+				return nil, false, &InputSecretValidationError{Message: "input Secret labels do not match the compiled application"}
+			}
+		}
+	}
+	if expectedUID != "" && string(input.UID) != expectedUID {
 		return nil, false, &InputSecretValidationError{Message: "input Secret UID does not match the compiled reference"}
 	}
 	if input.Type != corev1.SecretTypeOpaque {
@@ -229,6 +247,29 @@ func (r *Reconciler) readSecretInput(ctx context.Context, app *applicationv1.One
 		}
 	}
 	return input, false, nil
+}
+
+func (r *Reconciler) bindV1Alpha5SecretInput(ctx context.Context, app *applicationv1.OneKSApplication) (bool, error) {
+	if app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha5 || app.Status.SecretInputUID != "" {
+		return false, nil
+	}
+	input, missing, err := r.readSecretInput(ctx, app)
+	if err != nil {
+		return false, err
+	}
+	if missing {
+		return true, nil
+	}
+	status := baseStatus(app, r.ControllerVersion)
+	status.SecretInputUID = string(input.UID)
+	if status.Phase == "" {
+		status.Phase = applicationv1.PhasePending
+	}
+	if err := r.updateStatus(ctx, app, status); err != nil {
+		return false, err
+	}
+	r.event(app, corev1.EventTypeNormal, "InputSecretBound", "Input Secret UID was bound before plan execution")
+	return true, nil
 }
 
 func (r *Reconciler) preflightProtectedSecretOwnership(ctx context.Context, app *applicationv1.OneKSApplication, deleting bool) error {
@@ -596,7 +637,11 @@ func (r *Reconciler) reconcileDeleteSecretInput(ctx context.Context, app *applic
 	if err != nil {
 		return false, &protectedSecretAPIError{operation: "read deleting input", namespace: reference.Namespace, name: reference.Name, cause: err}
 	}
-	if string(current.UID) != reference.UID {
+	expectedUID := reference.UID
+	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5 {
+		expectedUID = app.Status.SecretInputUID
+	}
+	if expectedUID == "" || string(current.UID) != expectedUID {
 		r.event(app, corev1.EventTypeWarning, "InputSecretReplaced", "Input Secret replacement is not owned by this application and will be retained")
 		return false, nil
 	}

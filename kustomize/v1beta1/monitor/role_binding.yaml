@@ -15,7 +15,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: capone-cluster-monitor
-  namespace: kube-system
+  namespace: oneks-system
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

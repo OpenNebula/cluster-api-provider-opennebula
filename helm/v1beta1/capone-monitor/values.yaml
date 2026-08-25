@@ -10,8 +10,7 @@ monitor:
   key: ""
   authSecretName: ""
   authSecretKey: ONE_AUTH
-  chartNamespace: kube-system
-  chartAnnotation: oneks.opennebula.io/chart-id
+  applicationNamespace: oneks-system
   httpTimeout: 10s
   prometheusNamespaces: []
 

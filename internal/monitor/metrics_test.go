@@ -28,7 +28,6 @@ func TestMetricsExposeStableLowCardinalityFamilies(t *testing.T) {
 			{Type: corev1.NodePIDPressure, Status: corev1.ConditionTrue},
 		}}},
 	})
-	metrics.setHelmCharts(map[string]int{"deployed": 2, "failed": 1})
 	metrics.SetActiveSignals(0, 2, 1)
 
 	families, err := registry.Gather()
@@ -42,7 +41,6 @@ func TestMetricsExposeStableLowCardinalityFamilies(t *testing.T) {
 		"capone_monitor_nodes_memory_pressure":                   false,
 		"capone_monitor_nodes_disk_pressure":                     false,
 		"capone_monitor_nodes_pid_pressure":                      false,
-		"capone_monitor_helmcharts":                              false,
 		"capone_monitor_callback_queue_depth":                    false,
 		"capone_monitor_callback_attempts_total":                 false,
 		"capone_monitor_callback_failures_total":                 false,
@@ -59,7 +57,7 @@ func TestMetricsExposeStableLowCardinalityFamilies(t *testing.T) {
 		}
 		for _, metric := range family.Metric {
 			for _, label := range metric.Label {
-				if label.GetName() != "state" && label.GetName() != "severity" {
+				if label.GetName() != "severity" {
 					t.Fatalf("metric %s has unexpected label %q", family.GetName(), label.GetName())
 				}
 			}

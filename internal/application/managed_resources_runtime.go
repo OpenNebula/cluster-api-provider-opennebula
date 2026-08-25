@@ -44,7 +44,7 @@ const (
 )
 
 func usesManagedResources(app *applicationv1.OneKSApplication) bool {
-	return (app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4) && app.Spec.Role == applicationv1.ApplicationRoleRoot
+	return (app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5) && app.Spec.Role == applicationv1.ApplicationRoleRoot
 }
 
 func managesTargetNamespace(app *applicationv1.OneKSApplication) bool {

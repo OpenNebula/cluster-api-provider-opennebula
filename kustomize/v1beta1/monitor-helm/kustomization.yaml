@@ -42,11 +42,8 @@ patches:
       path: /data/MONITOR_CLUSTER_ID
       value: '{{ required "monitor.clusterID is required" .Values.monitor.clusterID }}'
     - op: replace
-      path: /data/MONITOR_CHART_NAMESPACE
-      value: '{{ .Values.monitor.chartNamespace }}'
-    - op: replace
-      path: /data/MONITOR_CHART_ANNOTATION
-      value: '{{ .Values.monitor.chartAnnotation }}'
+      path: /data/MONITOR_APPLICATION_NAMESPACE
+      value: '{{ .Values.monitor.applicationNamespace }}'
     - op: replace
       path: /data/MONITOR_HTTP_TIMEOUT
       value: '{{ .Values.monitor.httpTimeout }}'
@@ -94,14 +91,14 @@ patches:
   patch: |-
     - op: replace
       path: /metadata/namespace
-      value: '{{ .Values.monitor.chartNamespace }}'
+      value: '{{ .Values.monitor.applicationNamespace }}'
 - target:
     kind: RoleBinding
     name: capone-cluster-monitor
   patch: |-
     - op: replace
       path: /metadata/namespace
-      value: '{{ .Values.monitor.chartNamespace }}'
+      value: '{{ .Values.monitor.applicationNamespace }}'
     - op: replace
       path: /subjects/0/namespace
       value: '{{ .Release.Namespace }}'

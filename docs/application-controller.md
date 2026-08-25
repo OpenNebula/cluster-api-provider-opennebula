@@ -32,6 +32,20 @@ remain, reinstall or roll back the chart with the same `clusterID`. The kept
 namespaces and CRD preserve the roots so the controller can resume
 ownership-checked reconciliation and finalizer cleanup.
 
+## Protected input handoff
+
+`oneks.opennebula.io/plan-v1alpha5` allows OneKS to submit an immutable Opaque
+Secret and its root `OneKSApplication` together. The plan references only the
+Secret namespace and random name; `secretInputRef.uid` is empty. Before it
+creates any child, the controller acquires its cleanup finalizer, validates the
+Secret type, immutability, exact input keys and correlation labels, and stores
+the observed UID in `status.secretInputUID`. Every later read and deletion is
+guarded by that UID, so a replacement Secret is never consumed or deleted.
+
+`plan-v1alpha4` remains readable for existing applications and continues to
+require the UID in `spec.secretInputRef.uid`. New protected plans should use
+v1alpha5.
+
 Repository targets:
 
 ```console

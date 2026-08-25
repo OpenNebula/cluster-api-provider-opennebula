@@ -49,6 +49,7 @@ func TestRootTargetNamespaceContractByPlanVersion(t *testing.T) {
 		applicationv1.PlanVersionV1Alpha2,
 		applicationv1.PlanVersionV1Alpha3,
 		applicationv1.PlanVersionV1Alpha4,
+		applicationv1.PlanVersionV1Alpha5,
 	} {
 		for _, createNamespace := range []bool{false, true} {
 			t.Run(version+"/create="+map[bool]string{false: "false", true: "true"}[createNamespace], func(t *testing.T) {
@@ -57,6 +58,7 @@ func TestRootTargetNamespaceContractByPlanVersion(t *testing.T) {
 					applicationv1.PlanVersionV1Alpha2: {false: "custom-v2", true: "custom-v2-created"},
 					applicationv1.PlanVersionV1Alpha3: {false: "custom-v3", true: "custom-v3-created"},
 					applicationv1.PlanVersionV1Alpha4: {false: "custom-v4", true: "runai-backend"},
+					applicationv1.PlanVersionV1Alpha5: {false: "custom-v5", true: "runai-v5"},
 				}[version][createNamespace]
 				app.Spec.Release.TargetNamespace = namespace
 				app.Spec.Release.CreateNamespace = createNamespace
@@ -97,6 +99,7 @@ func TestModernRootRejectsInvalidTargetNamespace(t *testing.T) {
 		applicationv1.PlanVersionV1Alpha2,
 		applicationv1.PlanVersionV1Alpha3,
 		applicationv1.PlanVersionV1Alpha4,
+		applicationv1.PlanVersionV1Alpha5,
 	} {
 		for _, namespace := range []string{"RunAI", strings.Repeat("a", 64)} {
 			t.Run(version+"/"+namespace, func(t *testing.T) {
@@ -116,6 +119,7 @@ func TestDesiredHelmChartPreservesModernNamespaceContract(t *testing.T) {
 		applicationv1.PlanVersionV1Alpha2,
 		applicationv1.PlanVersionV1Alpha3,
 		applicationv1.PlanVersionV1Alpha4,
+		applicationv1.PlanVersionV1Alpha5,
 	} {
 		t.Run(version, func(t *testing.T) {
 			app := modernRootForNamespaceTest(t, version)
@@ -148,6 +152,7 @@ func TestGeneratedCRDFixesOnlyPlanV1Alpha1RootNamespace(t *testing.T) {
 		"plan-v1alpha2 Root requires the fixed workload namespace",
 		"plan-v1alpha3 Root requires the fixed workload namespace",
 		"plan-v1alpha4 Root requires the fixed workload namespace",
+		"plan-v1alpha5 Root requires the fixed workload namespace",
 	} {
 		if strings.Contains(crd, forbidden) {
 			t.Fatalf("generated CRD retains modern fixed-namespace rule %q", forbidden)
@@ -164,6 +169,8 @@ func modernRootForNamespaceTest(t *testing.T, version string) *applicationv1.One
 		return validPlanV1Alpha3(t)
 	case applicationv1.PlanVersionV1Alpha4:
 		return validPlanV1Alpha4(t)
+	case applicationv1.PlanVersionV1Alpha5:
+		return validPlanV1Alpha5(t)
 	default:
 		t.Fatalf("unsupported test plan version %q", version)
 		return nil

@@ -22,33 +22,37 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
-const defaultChartAnnotation = "oneks.opennebula.io/chart-id"
+const (
+	defaultApplicationNamespace = "oneks-system"
+	defaultProfileNamespace     = "kube-system"
+)
 
 type Config struct {
 	Endpoint             string
 	ClusterID            string
 	Key                  []byte
 	AuthFile             string
-	ChartAnnotation      string
 	HTTPTimeout          time.Duration
 	HealthAddress        string
 	MetricsAddress       string
-	KubeSystemNS         string
+	ApplicationNamespace string
 	ProfileNamespace     string
 	PrometheusNamespaces []string
 }
 
 func ConfigFromEnv() (Config, error) {
 	c := Config{
-		Endpoint:        strings.TrimSpace(os.Getenv("MONITOR_ENDPOINT")),
-		ClusterID:       strings.TrimSpace(os.Getenv("MONITOR_CLUSTER_ID")),
-		AuthFile:        strings.TrimSpace(os.Getenv("MONITOR_AUTH_FILE")),
-		ChartAnnotation: envOrDefault("MONITOR_CHART_ANNOTATION", defaultChartAnnotation),
-		HealthAddress:   envOrDefault("MONITOR_HEALTH_ADDRESS", ":8081"),
-		MetricsAddress:  strings.TrimSpace(os.Getenv("MONITOR_METRICS_ADDRESS")),
-		KubeSystemNS:    envOrDefault("MONITOR_CHART_NAMESPACE", "kube-system"),
+		Endpoint:             strings.TrimSpace(os.Getenv("MONITOR_ENDPOINT")),
+		ClusterID:            strings.TrimSpace(os.Getenv("MONITOR_CLUSTER_ID")),
+		AuthFile:             strings.TrimSpace(os.Getenv("MONITOR_AUTH_FILE")),
+		HealthAddress:        envOrDefault("MONITOR_HEALTH_ADDRESS", ":8081"),
+		MetricsAddress:       strings.TrimSpace(os.Getenv("MONITOR_METRICS_ADDRESS")),
+		ApplicationNamespace: envOrDefault("MONITOR_APPLICATION_NAMESPACE", defaultApplicationNamespace),
 	}
-	c.ProfileNamespace = envOrDefault("MONITOR_PROFILE_NAMESPACE", c.KubeSystemNS)
+	c.ProfileNamespace = envOrDefault("MONITOR_PROFILE_NAMESPACE", defaultProfileNamespace)
+	if errors := validation.IsDNS1123Label(c.ApplicationNamespace); len(errors) != 0 {
+		return Config{}, fmt.Errorf("MONITOR_APPLICATION_NAMESPACE contains invalid namespace %q", c.ApplicationNamespace)
+	}
 	if errors := validation.IsDNS1123Label(c.ProfileNamespace); len(errors) != 0 {
 		return Config{}, fmt.Errorf("MONITOR_PROFILE_NAMESPACE contains invalid namespace %q", c.ProfileNamespace)
 	}
@@ -108,14 +112,6 @@ func namespaceListEnv(key string, maximum int) ([]string, error) {
 		}
 	}
 	return result, nil
-}
-
-func (c Config) watchesChart(annotations map[string]string) (string, bool) {
-	id, ok := annotations[c.ChartAnnotation]
-	if !ok || strings.TrimSpace(id) == "" {
-		return "", false
-	}
-	return id, true
 }
 
 func envOrDefault(key, value string) string {

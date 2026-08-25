@@ -17,8 +17,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-var chartMetricStates = []string{"pending", "deployed", "failed", "uninstalling", "unknown"}
-
 // Metrics owns the monitor's bounded, low-cardinality Prometheus metrics.
 type Metrics struct {
 	nodesTotal         prometheus.Gauge
@@ -27,7 +25,6 @@ type Metrics struct {
 	memoryPressure     prometheus.Gauge
 	diskPressure       prometheus.Gauge
 	pidPressure        prometheus.Gauge
-	helmCharts         *prometheus.GaugeVec
 	queueDepth         prometheus.Gauge
 	callbackAttempts   prometheus.Counter
 	callbackFailures   prometheus.Counter
@@ -59,9 +56,6 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 		pidPressure: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "capone_monitor_nodes_pid_pressure", Help: "Number of monitored Nodes with PIDPressure=True.",
 		}),
-		helmCharts: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "capone_monitor_helmcharts", Help: "Number of monitored HelmCharts by lifecycle state.",
-		}, []string{"state"}),
 		queueDepth: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "capone_monitor_callback_queue_depth", Help: "Number of callback identities awaiting delivery.",
 		}),
@@ -92,14 +86,11 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 	}
 	registerer.MustRegister(
 		m.nodesTotal, m.nodesReady, m.nodesNotReady, m.memoryPressure,
-		m.diskPressure, m.pidPressure, m.helmCharts, m.queueDepth,
+		m.diskPressure, m.pidPressure, m.queueDepth,
 		m.callbackAttempts, m.callbackFailures, m.callbackRetries,
 		m.callbackRejections, m.lastCallback, m.profileFailures, m.ruleFailures,
 		m.activeSignals,
 	)
-	for _, state := range chartMetricStates {
-		m.helmCharts.WithLabelValues(state).Set(0)
-	}
 	for _, severity := range []string{"info", "warning", "critical"} {
 		m.activeSignals.WithLabelValues(severity).Set(0)
 	}
@@ -135,15 +126,6 @@ func (m *Metrics) setNodes(nodes []*corev1.Node) {
 	m.memoryPressure.Set(float64(memory))
 	m.diskPressure.Set(float64(disk))
 	m.pidPressure.Set(float64(pid))
-}
-
-func (m *Metrics) setHelmCharts(states map[string]int) {
-	if m == nil {
-		return
-	}
-	for _, state := range chartMetricStates {
-		m.helmCharts.WithLabelValues(state).Set(float64(states[state]))
-	}
 }
 
 func (m *Metrics) setQueueDepth(depth int) {

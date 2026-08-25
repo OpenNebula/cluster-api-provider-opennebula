@@ -104,6 +104,31 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 	if validationError != nil {
 		return r.recordTerminal(ctx, app, validationError.Reason, validationError.Message, false)
 	}
+	if !deleting && app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5 &&
+		app.Spec.ExecutionMode == applicationv1.ExecutionModeExecute && !hasCleanupFinalizer {
+		updated, err := r.patchApplicationFinalizers(
+			ctx, app, append(append([]string(nil), app.Finalizers...), applicationv1.ApplicationFinalizer),
+		)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("add application finalizer: %w", err)
+		}
+		ctrl.LoggerFrom(ctx).Info("application finalizer acquired before input binding")
+		r.event(updated, corev1.EventTypeNormal, "FinalizerAdded", "Application cleanup finalizer added")
+		return ctrl.Result{Requeue: true}, nil
+	}
+	if !deleting {
+		bound, err := r.bindV1Alpha5SecretInput(ctx, app)
+		if err != nil {
+			var invalidInput *InputSecretValidationError
+			if errors.As(err, &invalidInput) {
+				return r.recordTerminal(ctx, app, "InputSecretInvalid", invalidInput.Error(), false)
+			}
+			return ctrl.Result{}, err
+		}
+		if bound {
+			return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
+		}
+	}
 
 	if !deleting && !app.Spec.Release.CreateNamespace {
 		if err := r.checkTargetNamespace(ctx, app.Spec.Release.TargetNamespace); err != nil {
@@ -158,7 +183,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 	}
 
 	if deleting {
-		if (app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4) && app.Spec.ExecutionMode == applicationv1.ExecutionModeObserve {
+		if (app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5) && app.Spec.ExecutionMode == applicationv1.ExecutionModeObserve {
 			return ctrl.Result{}, nil
 		}
 		if err := r.preflightOwnership(ctx, app, true, managedAPIsRequired); err != nil {
@@ -218,7 +243,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	if (app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4) && app.Spec.Role == applicationv1.ApplicationRoleRoot {
+	if (app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5) && app.Spec.Role == applicationv1.ApplicationRoleRoot {
 		raced, terminating, conflict, err := r.materializeRootDependencies(ctx, app)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -1039,7 +1064,7 @@ func (r *Reconciler) recordTerminal(ctx context.Context, app *applicationv1.OneK
 		planCondition = metav1.ConditionFalse
 	}
 	setCondition(&status, app.Generation, ConditionPlanValid, planCondition, reason, message)
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 {
+	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5 {
 		if len(app.Spec.Dependencies) == 0 {
 			setCondition(&status, app.Generation, ConditionDependenciesReady, metav1.ConditionTrue, "NoDependencies", "Application has no direct dependencies")
 		} else {

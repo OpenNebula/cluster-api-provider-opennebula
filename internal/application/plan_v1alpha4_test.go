@@ -88,7 +88,7 @@ func TestGeneratedCRDEnforcesPlanV1Alpha4Boundaries(t *testing.T) {
 		"dockerConfigJsonSecret requires registry, username, passwordInputKey,",
 		"protected Secret target identities must be unique",
 		"protected Secret IDs must not collide with managed resource",
-		"only plan-v1alpha4 permits release.authSecret",
+		"only plan-v1alpha4 and plan-v1alpha5 permit release.authSecret",
 		"plan-v1alpha4 release.authSecret requires an HTTPS repositoryURL",
 		"release.authSecret must match exactly one protected basicAuthSecret",
 		"enum:\n                    - oneks-system",
@@ -777,6 +777,85 @@ func TestPlanV1Alpha4UsesAuthoritativeInputReader(t *testing.T) {
 	}
 }
 
+func TestPlanV1Alpha5BindsInputUIDBeforeExecution(t *testing.T) {
+	app := validPlanV1Alpha5(t)
+	input := inputSecretFor(app, map[string][]byte{"adminPassword": []byte("secret")})
+	input.UID = "input-v5-uid"
+	input.Labels = map[string]string{
+		LabelRootManagedBy: RootManagedByValue, LabelProducer: ProducerValue,
+		LabelClusterID: app.Spec.ClusterID, LabelCatalogueChartID: app.Spec.CatalogueChartID,
+		LabelPlanDigest: app.Spec.PlanDigest, LabelApplicationName: app.Name,
+	}
+	reconciler, recorder := testReconciler(t, app, input)
+	ctx := context.Background()
+
+	reconcileOnce(t, ctx, reconciler, app)
+	stored := getApplication(t, ctx, reconciler.Client, app)
+	if !containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) {
+		t.Fatalf("v5 finalizer was not acquired before input binding")
+	}
+	if stored.Status.SecretInputUID != "" || len(recorder.childWrites) != 0 {
+		t.Fatalf("v5 executed before finalizer acquisition: status=%#v writes=%#v", stored.Status, recorder.childWrites)
+	}
+
+	reconcileOnce(t, ctx, reconciler, app)
+	stored = getApplication(t, ctx, reconciler.Client, app)
+	if len(recorder.childWrites) != 0 {
+		t.Fatalf("v5 executed while binding input UID: %#v", recorder.childWrites)
+	}
+	if stored.Status.SecretInputUID != "input-v5-uid" {
+		t.Fatalf("bound UID = %q", stored.Status.SecretInputUID)
+	}
+
+	replacement := input.DeepCopy()
+	replacement.UID = "replacement-uid"
+	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Scheme).WithObjects(replacement).Build()
+	if _, _, err := reconciler.readSecretInput(ctx, stored); err == nil || !strings.Contains(err.Error(), "UID") {
+		t.Fatalf("replacement input error = %v", err)
+	}
+}
+
+func TestPlanV1Alpha5RejectsPreboundUID(t *testing.T) {
+	app := validPlanV1Alpha5(t)
+	app.Spec.SecretInputRef.UID = "server-selected-uid"
+	refreshV4(t, app)
+	err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID})
+	if err == nil || err.Reason != "InvalidSecretInputUID" {
+		t.Fatalf("prebound v5 UID error = %#v", err)
+	}
+}
+
+func TestPlanV1Alpha5WaitsForInputSecretWithoutExecuting(t *testing.T) {
+	app := validPlanV1Alpha5(t)
+	reconciler, recorder := testReconciler(t, app)
+	ctx := context.Background()
+
+	reconcileOnce(t, ctx, reconciler, app) // acquire the finalizer
+	reconcileOnce(t, ctx, reconciler, app) // observe the missing input
+	stored := getApplication(t, ctx, reconciler.Client, app)
+	if stored.Status.SecretInputUID != "" || len(recorder.childWrites) != 0 {
+		t.Fatalf("missing v5 input allowed execution: status=%#v writes=%#v", stored.Status, recorder.childWrites)
+	}
+}
+
+func TestGeneratedCRDEnforcesPlanV1Alpha5InputBinding(t *testing.T) {
+	payload, err := os.ReadFile("../../config/crd/bases/oneks.opennebula.io_oneksapplications.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(payload)
+	for _, required := range []string{
+		"oneks.opennebula.io/plan-v1alpha5",
+		"plan-v1alpha4 requires a pre-bound secretInputRef.uid",
+		"plan-v1alpha5 binds secretInputRef.uid through status",
+		"secretInputUID:",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("generated CRD lacks v5 boundary %q", required)
+		}
+	}
+}
+
 func TestProtectedSecretAPIErrorsNeverExposeErrorPayloads(t *testing.T) {
 	sentinel := "SENTINEL_API_BODY_MUST_NOT_LEAK"
 	cause := errors.New(sentinel)
@@ -798,6 +877,15 @@ func validPlanV1Alpha4(t *testing.T) *applicationv1.OneKSApplication {
 	app.Spec.ProtectedSecrets = []applicationv1.ProtectedSecretSpec{
 		opaqueProtectedSecret("protected", WorkloadNamespace, "protected"),
 	}
+	refreshV4(t, app)
+	return app
+}
+
+func validPlanV1Alpha5(t *testing.T) *applicationv1.OneKSApplication {
+	t.Helper()
+	app := validPlanV1Alpha4(t)
+	app.Spec.PlanVersion = applicationv1.PlanVersionV1Alpha5
+	app.Spec.SecretInputRef.UID = ""
 	refreshV4(t, app)
 	return app
 }

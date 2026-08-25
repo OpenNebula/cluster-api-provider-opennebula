@@ -59,7 +59,7 @@ func TestMetricsListenerUsesSeparateConfiguredAddress(t *testing.T) {
 
 func TestMonitoringNamespacesAreExplicitAndNormalized(t *testing.T) {
 	setRequiredMonitorEnv(t, "http://oneks.example/api/v1", "42")
-	t.Setenv("MONITOR_CHART_NAMESPACE", "charts")
+	t.Setenv("MONITOR_APPLICATION_NAMESPACE", "oneks-custom")
 	t.Setenv("MONITOR_PROFILE_NAMESPACE", "monitor-system")
 	t.Setenv("MONITOR_PROMETHEUS_NAMESPACES", "monitoring, observability,monitoring")
 
@@ -69,6 +69,9 @@ func TestMonitoringNamespacesAreExplicitAndNormalized(t *testing.T) {
 	}
 	if config.ProfileNamespace != "monitor-system" {
 		t.Fatalf("unexpected profile namespace: %q", config.ProfileNamespace)
+	}
+	if config.ApplicationNamespace != "oneks-custom" {
+		t.Fatalf("unexpected application namespace: %q", config.ApplicationNamespace)
 	}
 	if len(config.PrometheusNamespaces) != 2 || config.PrometheusNamespaces[0] != "monitoring" || config.PrometheusNamespaces[1] != "observability" {
 		t.Fatalf("unexpected namespace allowlist: %#v", config.PrometheusNamespaces)

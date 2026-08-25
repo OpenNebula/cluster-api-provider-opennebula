@@ -11,7 +11,6 @@ You may obtain a copy of the License at
 package monitor
 
 import (
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -28,48 +27,6 @@ func nodeReport(config Config, node *corev1.Node, event string) Report {
 	}
 }
 
-func readinessJobReport(config Config, job *batchv1.Job, event string) (Report, bool) {
-	if job.GetLabels()[readinessJobLabel] != "true" {
-		return Report{}, false
-	}
-	chartID := job.GetAnnotations()[config.ChartAnnotation]
-	releaseName := job.GetAnnotations()[readinessReleaseAnnotation]
-	if chartID == "" || releaseName == "" {
-		return Report{}, false
-	}
-	status, message := readinessJobStatus(job)
-	if event == "Deleted" && status == "pending" {
-		status = "failed"
-		message = "readiness Job was deleted before completion"
-	}
-	result := Report{
-		Kind: "ReadinessJob", Namespace: job.Namespace, Name: job.Name,
-		UID: string(job.UID), ResourceVersion: job.ResourceVersion, Event: event,
-		Status: map[string]any{
-			"chartId": chartID, "releaseName": releaseName, "status": status,
-		},
-	}
-	if message != "" {
-		result.Status["message"] = message
-	}
-	return result, true
-}
-
-func readinessJobStatus(job *batchv1.Job) (string, string) {
-	for _, condition := range job.Status.Conditions {
-		if condition.Status != corev1.ConditionTrue {
-			continue
-		}
-		switch condition.Type {
-		case batchv1.JobFailed:
-			return "failed", condition.Message
-		case batchv1.JobComplete:
-			return "complete", condition.Message
-		}
-	}
-	return "pending", ""
-}
-
 func nodeReady(node *corev1.Node) bool {
 	for _, condition := range node.Status.Conditions {
 		if condition.Type == corev1.NodeReady && condition.Status == corev1.ConditionTrue {
@@ -79,34 +36,23 @@ func nodeReady(node *corev1.Node) bool {
 	return false
 }
 
-func chartReport(config Config, chart *unstructured.Unstructured, status, event string) (Report, bool) {
-	chartID, watched := config.watchesChart(chart.GetAnnotations())
-	if !watched {
-		return Report{}, false
+func applicationReport(app *unstructured.Unstructured, event string) Report {
+	status, _, _ := unstructured.NestedMap(app.Object, "status")
+	if status == nil {
+		status = map[string]any{}
 	}
+	clusterID, _, _ := unstructured.NestedString(app.Object, "spec", "clusterID")
+	chartID, _, _ := unstructured.NestedString(app.Object, "spec", "catalogueChartID")
+	planDigest, _, _ := unstructured.NestedString(app.Object, "spec", "planDigest")
+	releaseName, _, _ := unstructured.NestedString(app.Object, "spec", "release", "releaseName")
 	return Report{
-		Kind: "HelmChart", Namespace: chart.GetNamespace(), Name: chart.GetName(),
-		UID: string(chart.GetUID()), ResourceVersion: chart.GetResourceVersion(), Event: event,
-		Status: map[string]any{"chartId": chartID, "status": normalizedChartStatus(status)},
-	}, true
-}
-
-func normalizedChartStatus(status string) string {
-	switch status {
-	case "pending", "deployed", "failed", "uninstalling":
-		return status
-	default:
-		return "unknown"
-	}
-}
-
-func reconcileReport(active bool) Report {
-	return Report{
-		Kind:  "Reconcile",
-		Name:  "chart-reconciler",
-		Event: "Updated",
+		Kind: "OneKSApplication", Namespace: app.GetNamespace(), Name: app.GetName(),
+		UID: string(app.GetUID()), ResourceVersion: app.GetResourceVersion(), Event: event,
 		Status: map[string]any{
-			"activeOperation": active,
+			"clusterID": clusterID, "catalogueChartID": chartID,
+			"planDigest": planDigest, "releaseName": releaseName,
+			"generation": app.GetGeneration(), "deleting": app.GetDeletionTimestamp() != nil,
+			"application": status,
 		},
 	}
 }

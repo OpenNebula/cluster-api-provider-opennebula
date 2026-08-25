@@ -26,14 +26,13 @@ import (
 )
 
 type Report struct {
-	Kind                   string         `json:"kind"`
-	Namespace              string         `json:"namespace,omitempty"`
-	Name                   string         `json:"name"`
-	UID                    string         `json:"uid,omitempty"`
-	ResourceVersion        string         `json:"resourceVersion,omitempty"`
-	RelatedResourceVersion string         `json:"relatedResourceVersion,omitempty"`
-	Event                  string         `json:"event"`
-	Status                 map[string]any `json:"status,omitempty"`
+	Kind            string         `json:"kind"`
+	Namespace       string         `json:"namespace,omitempty"`
+	Name            string         `json:"name"`
+	UID             string         `json:"uid,omitempty"`
+	ResourceVersion string         `json:"resourceVersion,omitempty"`
+	Event           string         `json:"event"`
+	Status          map[string]any `json:"status,omitempty"`
 }
 
 func (Report) CallbackKind() string { return "resource-status" }

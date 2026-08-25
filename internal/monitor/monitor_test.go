@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"testing"
 
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
@@ -134,87 +133,6 @@ func TestPendingCallbackIdentitiesAreGloballyBounded(t *testing.T) {
 	}
 }
 
-func TestChartStatusFromCompletedJob(t *testing.T) {
-	jobs := jobInformer()
-	m := &Monitor{jobs: jobs}
-	addJob(t, jobs, batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: "helm-install-cni", Namespace: "kube-system", ResourceVersion: "20"},
-		Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{
-			Type: batchv1.JobComplete, Status: corev1.ConditionTrue,
-		}}},
-	})
-
-	status, resourceVersion := m.chartStatus(chartObject())
-	if status != "deployed" || resourceVersion != "20" {
-		t.Fatalf("expected deployed at rv 20, got %s at rv %s", status, resourceVersion)
-	}
-}
-
-func TestChartStatusFromActiveJob(t *testing.T) {
-	jobs := jobInformer()
-	m := &Monitor{jobs: jobs}
-	addJob(t, jobs, batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: "helm-install-cni", Namespace: "kube-system", ResourceVersion: "21"},
-		Status:     batchv1.JobStatus{Active: 1},
-	})
-
-	status, resourceVersion := m.chartStatus(chartObject())
-	if status != "pending" || resourceVersion != "21" {
-		t.Fatalf("expected pending at rv 21, got %s at rv %s", status, resourceVersion)
-	}
-}
-
-func TestChartStatusFromFailedJob(t *testing.T) {
-	jobs := jobInformer()
-	m := &Monitor{jobs: jobs}
-	addJob(t, jobs, batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: "helm-install-cni", Namespace: "kube-system", ResourceVersion: "22"},
-		Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{
-			Type: batchv1.JobFailed, Status: corev1.ConditionTrue,
-		}}},
-	})
-
-	status, resourceVersion := m.chartStatus(chartObject())
-	if status != "failed" || resourceVersion != "22" {
-		t.Fatalf("expected failed at rv 22, got %s at rv %s", status, resourceVersion)
-	}
-}
-
-func TestChartFailedConditionTakesPrecedence(t *testing.T) {
-	chart := chartObject()
-	chart.Object["status"] = map[string]any{
-		"jobName": "helm-install-cni",
-		"conditions": []any{map[string]any{
-			"type": "Failed", "status": "True",
-		}},
-	}
-	m := &Monitor{jobs: jobInformer()}
-
-	status, resourceVersion := m.chartStatus(chart)
-	if status != "failed" || resourceVersion != "" {
-		t.Fatalf("expected chart condition failure, got %s at rv %s", status, resourceVersion)
-	}
-}
-
-func TestChartStatusWithoutJob(t *testing.T) {
-	m := &Monitor{jobs: jobInformer()}
-	status, resourceVersion := m.chartStatus(chartObject())
-	if status != "unknown" || resourceVersion != "" {
-		t.Fatalf("expected unknown without the referenced job, got %s at rv %s", status, resourceVersion)
-	}
-}
-
-func TestChartStatusBeforeJobCreation(t *testing.T) {
-	chart := chartObject()
-	delete(chart.Object, "status")
-	m := &Monitor{jobs: jobInformer()}
-
-	status, resourceVersion := m.chartStatus(chart)
-	if status != "pending" || resourceVersion != "" {
-		t.Fatalf("expected pending before job creation, got %s at rv %s", status, resourceVersion)
-	}
-}
-
 func TestReadyProviderIDs(t *testing.T) {
 	nodes := cache.NewSharedIndexInformer(&cache.ListWatch{}, &corev1.Node{}, 0, cache.Indexers{})
 	m := &Monitor{nodes: nodes}
@@ -231,25 +149,6 @@ func TestReadyProviderIDs(t *testing.T) {
 	got := m.readyProviderIDs("one://2")
 	if len(got) != 1 || got[0] != "one://1" {
 		t.Fatalf("unexpected ready provider IDs: %#v", got)
-	}
-}
-
-func TestHasActiveChartOperation(t *testing.T) {
-	operations := cache.NewSharedIndexInformer(
-		&cache.ListWatch{}, &corev1.ConfigMap{}, 0, cache.Indexers{
-			cache.NamespaceIndex: cache.MetaNamespaceIndexFunc,
-		},
-	)
-	m := &Monitor{config: Config{KubeSystemNS: "kube-system"}, operations: operations}
-	if m.hasActiveChartOperation() {
-		t.Fatal("empty marker cache must not request startup reconciliation")
-	}
-	marker := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: chartOperationMarker, Namespace: "kube-system"}}
-	if err := operations.GetStore().Add(marker); err != nil {
-		t.Fatalf("add marker: %v", err)
-	}
-	if !m.hasActiveChartOperation() {
-		t.Fatal("chart operation marker must request startup reconciliation")
 	}
 }
 
@@ -278,56 +177,6 @@ func TestMonitoringProfileLifecycleRetainsLastValidUpdate(t *testing.T) {
 	m.onMonitoringProfileDeleted(cache.DeletedFinalStateUnknown{Key: "kube-system/cluster-health", Obj: configMap})
 	if profiles := store.List(); len(profiles) != 0 {
 		t.Fatalf("deleted profile remains loaded: %#v", profiles)
-	}
-}
-
-func TestReadinessJobReport(t *testing.T) {
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "oneks-readiness-runai", Namespace: "kube-system",
-			ResourceVersion: "31",
-			Labels:          map[string]string{readinessJobLabel: "true"},
-			Annotations: map[string]string{
-				defaultChartAnnotation:     "runai-chart",
-				readinessReleaseAnnotation: "runai-backend",
-			},
-		},
-		Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{
-			Type: batchv1.JobComplete, Status: corev1.ConditionTrue,
-		}}},
-	}
-	report, watched := readinessJobReport(
-		Config{ChartAnnotation: defaultChartAnnotation}, job, "Updated",
-	)
-	if !watched {
-		t.Fatal("labelled readiness Job was not watched")
-	}
-	if report.Kind != "ReadinessJob" || report.Status["status"] != "complete" {
-		t.Fatalf("unexpected readiness report: %#v", report)
-	}
-	if report.Status["chartId"] != "runai-chart" || report.Status["releaseName"] != "runai-backend" {
-		t.Fatalf("missing installation identity: %#v", report.Status)
-	}
-}
-
-func TestUnlabelledJobIsNotAReadinessJob(t *testing.T) {
-	_, watched := readinessJobReport(
-		Config{ChartAnnotation: defaultChartAnnotation},
-		&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "ordinary"}}, "Added",
-	)
-	if watched {
-		t.Fatal("ordinary Job must not emit a readiness report")
-	}
-}
-
-func jobInformer() cache.SharedIndexInformer {
-	return cache.NewSharedIndexInformer(&cache.ListWatch{}, &batchv1.Job{}, 0, cache.Indexers{})
-}
-
-func addJob(t *testing.T, informer cache.SharedIndexInformer, job batchv1.Job) {
-	t.Helper()
-	if err := informer.GetStore().Add(&job); err != nil {
-		t.Fatalf("add job: %v", err)
 	}
 }
 

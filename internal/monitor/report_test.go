@@ -45,24 +45,6 @@ func TestExistingNodeReportJSONIsStable(t *testing.T) {
 	}
 }
 
-func TestExistingHelmChartReportJSONIsStable(t *testing.T) {
-	report := Report{
-		Kind: "HelmChart", Namespace: "kube-system", Name: "prometheus",
-		UID: "chart-uid", ResourceVersion: "19",
-		RelatedResourceVersion: "20", Event: "Updated",
-		Status: map[string]any{"chartId": "catalogue-id", "status": "deployed"},
-	}
-
-	body, err := json.Marshal(report)
-	if err != nil {
-		t.Fatalf("marshal report: %v", err)
-	}
-	want := `{"kind":"HelmChart","namespace":"kube-system","name":"prometheus","uid":"chart-uid","resourceVersion":"19","relatedResourceVersion":"20","event":"Updated","status":{"chartId":"catalogue-id","status":"deployed"}}`
-	if string(body) != want {
-		t.Fatalf("HelmChart callback changed:\n got: %s\nwant: %s", body, want)
-	}
-}
-
 func TestHTTPEncryptedSender(t *testing.T) {
 	var authorization, monitorToken, endpoint, method, contentType, body string
 	transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {

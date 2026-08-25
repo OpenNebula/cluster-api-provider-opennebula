@@ -48,57 +48,45 @@ func TestNodeReportWarning(t *testing.T) {
 	}
 }
 
-func TestChartReportUsesHelmStatus(t *testing.T) {
-	report, watched := chartReport(testConfig(), chartObject(), "deployed", "Updated")
-	if !watched {
-		t.Fatal("expected annotated chart to be watched")
+func TestApplicationReportProjectsOnlyCorrelationAndStatus(t *testing.T) {
+	report := applicationReport(applicationObject(), "Updated")
+	if report.Kind != "OneKSApplication" || report.Namespace != "oneks-system" || report.Name != "runai" {
+		t.Fatalf("unexpected application identity: %#v", report)
 	}
-	if report.Status["status"] != "deployed" || report.Status["chartId"] != "cni" {
-		t.Fatalf("unexpected chart status: %#v", report.Status)
+	if report.Status["clusterID"] != "42" || report.Status["catalogueChartID"] != "runai-chart" ||
+		report.Status["planDigest"] != "sha256-plan" || report.Status["releaseName"] != "runai" {
+		t.Fatalf("missing application correlation: %#v", report.Status)
 	}
-}
-
-func TestUnknownChartStatus(t *testing.T) {
-	if status := normalizedChartStatus("superseded"); status != "unknown" {
-		t.Fatalf("expected unknown, got %q", status)
+	status, ok := report.Status["application"].(map[string]any)
+	if !ok || status["phase"] != "Ready" {
+		t.Fatalf("missing application status: %#v", report.Status)
 	}
-}
-
-func TestSupportedChartStatuses(t *testing.T) {
-	statuses := []string{
-		"pending", "deployed", "failed", "uninstalling", "unknown",
-	}
-	for _, expected := range statuses {
-		if actual := normalizedChartStatus(expected); actual != expected {
-			t.Fatalf("expected %q, got %q", expected, actual)
-		}
+	if _, leaked := report.Status["valuesContent"]; leaked {
+		t.Fatalf("application report leaked release values: %#v", report.Status)
 	}
 }
 
-func TestReconcileReport(t *testing.T) {
-	report := reconcileReport(true)
-	if report.Kind != "Reconcile" || report.Name != "chart-reconciler" {
-		t.Fatalf("unexpected reconcile report: %#v", report)
-	}
-	if report.Event != "Updated" {
-		t.Fatalf("unexpected reconcile event: %q", report.Event)
-	}
-	if report.Status["activeOperation"] != true {
-		t.Fatalf("expected active chart operation: %#v", report.Status)
+func TestApplicationReportUsesEmptyStatusBeforeFirstReconcile(t *testing.T) {
+	app := applicationObject()
+	delete(app.Object, "status")
+	report := applicationReport(app, "Added")
+	status, ok := report.Status["application"].(map[string]any)
+	if !ok || len(status) != 0 {
+		t.Fatalf("expected an empty application status object, got %#v", report.Status)
 	}
 }
 
-func chartObject() *unstructured.Unstructured {
+func applicationObject() *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "helm.cattle.io/v1", "kind": "HelmChart",
+		"apiVersion": "oneks.opennebula.io/v1alpha1", "kind": "OneKSApplication",
 		"metadata": map[string]any{
-			"name": "rke2-cni", "namespace": "kube-system",
-			"annotations": map[string]any{defaultChartAnnotation: "cni"},
+			"name": "runai", "namespace": "oneks-system", "uid": "app-uid",
+			"resourceVersion": "17", "generation": int64(1),
 		},
-		"status": map[string]any{"jobName": "helm-install-cni"},
+		"spec": map[string]any{
+			"clusterID": "42", "catalogueChartID": "runai-chart", "planDigest": "sha256-plan",
+			"release": map[string]any{"releaseName": "runai", "valuesContent": "sensitive"},
+		},
+		"status": map[string]any{"phase": "Ready", "observedGeneration": int64(1), "observedPlanDigest": "sha256-plan"},
 	}}
-}
-
-func testConfig() Config {
-	return Config{ChartAnnotation: defaultChartAnnotation}
 }

@@ -133,6 +133,13 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 		if len(app.Spec.Resources) != 0 {
 			return invalid("InvalidPlanV1Alpha4Resources", "plan-v1alpha4 does not permit legacy resources")
 		}
+	case applicationv1.PlanVersionV1Alpha5:
+		if app.Spec.Role != applicationv1.ApplicationRoleRoot {
+			return invalid("InvalidApplicationRole", "plan-v1alpha5 supports only Root applications")
+		}
+		if len(app.Spec.Resources) != 0 {
+			return invalid("InvalidPlanV1Alpha5Resources", "plan-v1alpha5 does not permit legacy resources")
+		}
 	default:
 		return invalid("UnsupportedPlanVersion", "unsupported planVersion %q", app.Spec.PlanVersion)
 	}
@@ -273,12 +280,12 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 			return err
 		}
 	}
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 {
+	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5 {
 		if err := validateManagedResources(app.Spec.ManagedResources); err != nil {
 			return err
 		}
 	}
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 {
+	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5 {
 		if err := validateProtectedSecretContract(app.Spec); err != nil {
 			return err
 		}
@@ -675,6 +682,8 @@ func CanonicalPlan(spec applicationv1.OneKSApplicationSpec) ([]byte, error) {
 	case applicationv1.PlanVersionV1Alpha3:
 		return canonicalPlanV1Alpha3(spec)
 	case applicationv1.PlanVersionV1Alpha4:
+		return canonicalPlanV1Alpha4(spec)
+	case applicationv1.PlanVersionV1Alpha5:
 		return canonicalPlanV1Alpha4(spec)
 	default:
 		return nil, fmt.Errorf("unsupported planVersion %q", spec.PlanVersion)

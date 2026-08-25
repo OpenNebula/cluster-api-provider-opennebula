@@ -508,6 +508,7 @@ spec:
                 - oneks.opennebula.io/plan-v1alpha2
                 - oneks.opennebula.io/plan-v1alpha3
                 - oneks.opennebula.io/plan-v1alpha4
+                - oneks.opennebula.io/plan-v1alpha5
                 type: string
               protectedSecrets:
                 items:
@@ -721,12 +722,10 @@ spec:
                     type: string
                   uid:
                     maxLength: 128
-                    minLength: 1
                     type: string
                 required:
                 - name
                 - namespace
-                - uid
                 type: object
               uninstall:
                 properties:
@@ -841,8 +840,9 @@ spec:
             - message: plan-v1alpha3 does not permit protected Secret fields
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || (!has(self.secretInputRef)
                 && !has(self.protectedSecrets))
-            - message: only plan-v1alpha4 permits release.authSecret
-              rule: self.planVersion == 'oneks.opennebula.io/plan-v1alpha4' || !has(self.release.authSecret)
+            - message: only plan-v1alpha4 and plan-v1alpha5 permit release.authSecret
+              rule: self.planVersion in ['oneks.opennebula.io/plan-v1alpha4', 'oneks.opennebula.io/plan-v1alpha5']
+                || !has(self.release.authSecret)
             - message: plan-v1alpha4 supports only Root applications
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || (has(self.role)
                 && self.role == 'Root')
@@ -866,9 +866,45 @@ spec:
             - message: plan-v1alpha4 requires secretInputRef and protectedSecrets
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || (has(self.secretInputRef)
                 && has(self.protectedSecrets) && size(self.protectedSecrets) > 0)
+            - message: plan-v1alpha4 requires a pre-bound secretInputRef.uid
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || (has(self.secretInputRef)
+                && has(self.secretInputRef.uid) && size(self.secretInputRef.uid) >
+                0)
             - message: plan-v1alpha4 permits at most 16 combined managedResources
                 and protectedSecrets
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || !has(self.managedResources)
+                || !has(self.protectedSecrets) || size(self.managedResources) + size(self.protectedSecrets)
+                <= 16
+            - message: plan-v1alpha5 supports only Root applications
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha5' || (has(self.role)
+                && self.role == 'Root')
+            - message: plan-v1alpha5 release must use either an HTTPS repositoryURL
+                with a non-OCI chart or an empty repositoryURL with an OCI chart
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha5' || ((size(self.release.repositoryURL)
+                == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$')
+                && !self.release.chart.startsWith('oci://')))
+            - message: plan-v1alpha5 release.authSecret requires an HTTPS repositoryURL
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha5' || !has(self.release.authSecret)
+                || self.release.repositoryURL.matches('^https://[^[:space:]]+$')
+            - message: release.authSecret must match exactly one protected basicAuthSecret
+                in kube-system
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha5' || !has(self.release.authSecret)
+                || (has(self.protectedSecrets) && self.protectedSecrets.filter(p,
+                p.builderType == 'basicAuthSecret' && p.__namespace__ == 'kube-system'
+                && p.name == self.release.authSecret.name).size() == 1)
+            - message: plan-v1alpha5 does not permit legacy resources
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha5' || size(self.resources)
+                == 0
+            - message: plan-v1alpha5 requires secretInputRef and protectedSecrets
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha5' || (has(self.secretInputRef)
+                && has(self.protectedSecrets) && size(self.protectedSecrets) > 0)
+            - message: plan-v1alpha5 binds secretInputRef.uid through status
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha5' || !has(self.secretInputRef)
+                || !has(self.secretInputRef.uid) || size(self.secretInputRef.uid)
+                == 0
+            - message: plan-v1alpha5 permits at most 16 combined managedResources
+                and protectedSecrets
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha5' || !has(self.managedResources)
                 || !has(self.protectedSecrets) || size(self.managedResources) + size(self.protectedSecrets)
                 <= 16
             - message: resources must use the release targetNamespace
@@ -899,6 +935,12 @@ spec:
                 || (has(self.dependencyPlans) && self.dependencies.all(d, self.dependencyPlans.filter(p,
                 p.name == d.name && p.catalogueChartID == d.catalogueChartID && p.planDigest
                 == d.planDigest).size() == 1))
+            - message: each direct Root dependency must resolve to exactly one matching
+                dependencyPlan
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha5' || !has(self.dependencies)
+                || (has(self.dependencyPlans) && self.dependencies.all(d, self.dependencyPlans.filter(p,
+                p.name == d.name && p.catalogueChartID == d.catalogueChartID && p.planDigest
+                == d.planDigest).size() == 1))
             - message: protected Secret IDs must be unique
               rule: '!has(self.protectedSecrets) || self.protectedSecrets.all(p, self.protectedSecrets.filter(x,
                 x.id == p.id).size() == 1)'
@@ -909,6 +951,11 @@ spec:
             - message: protected Secret IDs must not collide with managed resource
                 IDs
               rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || !has(self.managedResources)
+                || !has(self.protectedSecrets) || self.protectedSecrets.all(p, self.managedResources.filter(m,
+                m.id == p.id).size() == 0)
+            - message: protected Secret IDs must not collide with managed resource
+                IDs
+              rule: self.planVersion != 'oneks.opennebula.io/plan-v1alpha5' || !has(self.managedResources)
                 || !has(self.protectedSecrets) || self.protectedSecrets.all(p, self.managedResources.filter(m,
                 m.id == p.id).size() == 0)
             - message: top-level uninstall is permitted only for plan-v1alpha2 Dependency
@@ -1084,6 +1131,11 @@ spec:
                   type: object
                 maxItems: 16
                 type: array
+              secretInputUID:
+                description: SecretInputUID is bound by the controller before plan
+                  execution.
+                maxLength: 128
+                type: string
               supportedPlanVersions:
                 items:
                   maxLength: 128

@@ -11,14 +11,8 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: capone-cluster-monitor
-  namespace: kube-system
+  namespace: oneks-system
 rules:
-- apiGroups: ["helm.cattle.io"]
-  resources: ["helmcharts"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["batch"]
-  resources: ["jobs"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""]
-  resources: ["configmaps"]
+- apiGroups: ["oneks.opennebula.io"]
+  resources: ["oneksapplications"]
   verbs: ["get", "list", "watch"]

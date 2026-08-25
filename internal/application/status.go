@@ -49,6 +49,7 @@ func baseStatus(app *applicationv1.OneKSApplication, controllerVersion string) a
 		applicationv1.PlanVersionV1Alpha2,
 		applicationv1.PlanVersionV1Alpha3,
 		applicationv1.PlanVersionV1Alpha4,
+		applicationv1.PlanVersionV1Alpha5,
 	}
 	status.LastError = nil
 	return *status
@@ -56,13 +57,13 @@ func baseStatus(app *applicationv1.OneKSApplication, controllerVersion string) a
 
 func applicationProgressTotal(app *applicationv1.OneKSApplication) int32 {
 	total := len(app.Spec.Resources) + 1
-	if (app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4) && app.Spec.Role == applicationv1.ApplicationRoleRoot {
+	if (app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5) && app.Spec.Role == applicationv1.ApplicationRoleRoot {
 		total = len(app.Spec.ManagedResources) + 1
 	}
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 {
+	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5 {
 		total += len(app.Spec.ProtectedSecrets)
 	}
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 {
+	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5 {
 		total += len(app.Spec.Dependencies)
 	}
 	return int32(total)
@@ -84,6 +85,7 @@ func setLastError(status *applicationv1.OneKSApplicationStatus, reason, message 
 func normalizeStatus(status *applicationv1.OneKSApplicationStatus) {
 	status.ObservedPlanDigest = truncate(status.ObservedPlanDigest, 50)
 	status.ControllerVersion = truncate(status.ControllerVersion, 128)
+	status.SecretInputUID = truncate(status.SecretInputUID, 128)
 	status.Progress.Current = truncate(status.Progress.Current, 128)
 	if len(status.SupportedPlanVersions) > 8 {
 		status.SupportedPlanVersions = status.SupportedPlanVersions[:8]
