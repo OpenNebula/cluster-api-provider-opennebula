@@ -45,11 +45,7 @@ func baseStatus(app *applicationv1.OneKSApplication, controllerVersion string) a
 	status.ObservedPlanDigest = app.Spec.PlanDigest
 	status.ControllerVersion = controllerVersion
 	status.SupportedPlanVersions = []string{
-		applicationv1.PlanVersionV1Alpha1,
-		applicationv1.PlanVersionV1Alpha2,
-		applicationv1.PlanVersionV1Alpha3,
-		applicationv1.PlanVersionV1Alpha4,
-		applicationv1.PlanVersionV1Alpha5,
+		applicationv1.PlanVersion,
 	}
 	status.LastError = nil
 	return *status
@@ -57,13 +53,13 @@ func baseStatus(app *applicationv1.OneKSApplication, controllerVersion string) a
 
 func applicationProgressTotal(app *applicationv1.OneKSApplication) int32 {
 	total := len(app.Spec.Resources) + 1
-	if (app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5) && app.Spec.Role == applicationv1.ApplicationRoleRoot {
+	if app.Spec.PlanVersion == applicationv1.PlanVersion && app.Spec.Role == applicationv1.ApplicationRoleRoot {
 		total = len(app.Spec.ManagedResources) + 1
 	}
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5 {
+	if app.Spec.PlanVersion == applicationv1.PlanVersion {
 		total += len(app.Spec.ProtectedSecrets)
 	}
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5 {
+	if app.Spec.PlanVersion == applicationv1.PlanVersion {
 		total += len(app.Spec.Dependencies)
 	}
 	return int32(total)

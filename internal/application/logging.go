@@ -58,6 +58,11 @@ func applicationLogger(ctx context.Context, app *applicationv1.OneKSApplication)
 		"application", app.Name,
 		"namespace", app.Namespace,
 		"generation", app.Generation,
+		"planVersion", app.Spec.PlanVersion,
+		"role", app.Spec.Role,
+		"releaseName", app.Spec.Release.ReleaseName,
+		"targetNamespace", app.Spec.Release.TargetNamespace,
+		"createNamespace", app.Spec.Release.CreateNamespace,
 	)
 }
 

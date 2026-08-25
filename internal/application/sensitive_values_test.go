@@ -117,10 +117,10 @@ func TestValidateNonSensitiveValuesRejectsActualSecretMaterial(t *testing.T) {
 }
 
 func TestSecretReferenceValuesValidationAppliesToRootAndDependencies(t *testing.T) {
-	t.Run("v4 Root", func(t *testing.T) {
-		app := runAIPlanV1Alpha4(t)
+	t.Run("protected Root", func(t *testing.T) {
+		app := runAIProtectedPlan(t)
 		if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
-			t.Fatalf("v4 Root with safe Secret references rejected: %v", err)
+			t.Fatalf("protected Root with safe Secret references rejected: %v", err)
 		}
 	})
 
@@ -128,7 +128,7 @@ func TestSecretReferenceValuesValidationAppliesToRootAndDependencies(t *testing.
 		plan := validDependencyPlan()
 		plan.Release.ValuesContent = "credentials:\n  existingSecretName: dependency-creds\n  secretKeys:\n    password: PASSWORD\n"
 		refreshDependencyPlanDigestForTest("42", &plan)
-		app := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
+		app := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 		if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
 			t.Fatalf("dependency with safe Secret references rejected: %v", err)
 		}
@@ -138,7 +138,7 @@ func TestSecretReferenceValuesValidationAppliesToRootAndDependencies(t *testing.
 		plan := validDependencyPlan()
 		plan.Release.ValuesContent = "auth:\n  apiKey: fake-value\n"
 		refreshDependencyPlanDigestForTest("42", &plan)
-		app := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
+		app := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 		err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID})
 		if err == nil || err.Reason != "SensitiveValuesContent" {
 			t.Fatalf("dependency sensitive values error = %#v, want SensitiveValuesContent", err)
@@ -157,18 +157,9 @@ app:
     namespace: cert-manager
 `
 		refreshDependencyPlanDigestForTest("42", &plan)
-		app := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
+		app := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 		if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
 			t.Fatalf("trust-manager dependency metadata rejected: %v", err)
 		}
 	})
-}
-
-func TestConfigMapSensitiveKeyValidationRemainsFailClosed(t *testing.T) {
-	app := goldenApplication(t)
-	app.Spec.Resources[0].Data["apiToken"] = "fake-value"
-	err := ValidatePlan(app, validationConfig())
-	if err == nil || err.Reason != "SensitiveConfigMapData" {
-		t.Fatalf("ConfigMap sensitive key error = %#v, want SensitiveConfigMapData", err)
-	}
 }

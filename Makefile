@@ -312,7 +312,9 @@ application-controller-package-check: $(HELM) $(KUSTOMIZE)
 	test "$$($(HELM) template oneks-application-controller \
 		helm/v1alpha1/oneks-application-controller \
 		--set-string clusterID=packaging-check \
-		| grep -c 'helm.sh/resource-policy: keep')" -eq 2
+		| grep -c '^kind: Namespace$$')" -eq 0
+	test "$$($(KUSTOMIZE) build kustomize/v1alpha1/application-controller \
+		| grep -c '^kind: Namespace$$')" -eq 1
 	$(KUSTOMIZE) build kustomize/v1alpha1/application-controller >/dev/null
 
 # Deployment

@@ -19,12 +19,7 @@ package v1alpha1
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 const (
-	PlanVersionV1Alpha1  = "oneks.opennebula.io/plan-v1alpha1"
-	PlanVersionV1Alpha2  = "oneks.opennebula.io/plan-v1alpha2"
-	PlanVersionV1Alpha3  = "oneks.opennebula.io/plan-v1alpha3"
-	PlanVersionV1Alpha4  = "oneks.opennebula.io/plan-v1alpha4"
-	PlanVersionV1Alpha5  = "oneks.opennebula.io/plan-v1alpha5"
-	PlanVersion          = PlanVersionV1Alpha1
+	PlanVersion          = "oneks.opennebula.io/plan-v1alpha5"
 	ApplicationNamespace = "oneks-system"
 	ApplicationFinalizer = "applications.oneks.opennebula.io/finalizer"
 	FieldManager         = "oneks-application-controller"
@@ -65,48 +60,24 @@ const (
 
 // OneKSApplicationSpec is an immutable, compiled application plan.
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha1' || (!has(self.role) && !has(self.dependencies) && !has(self.dependencyPlans) && !has(self.managedResources) && !has(self.secretInputRef) && !has(self.protectedSecrets) && !has(self.externalDetection) && self.release.targetNamespace == 'oneks-poc-workloads' && !self.release.createNamespace && self.resources.all(r, r.__namespace__ == 'oneks-poc-workloads'))",message="plan-v1alpha1 does not permit role, dependency, managedResources, protected Secret, or external detection fields and requires the fixed workload namespace without namespace creation"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha1' || (size(self.release.repositoryURL) >= 1 && self.release.repositoryURL.matches('^https://[^[:space:]]+$'))",message="plan-v1alpha1 requires a non-empty HTTPS repositoryURL"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || has(self.role)",message="plan-v1alpha2 requires role"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || ((size(self.release.repositoryURL) == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$') && !self.release.chart.startsWith('oci://')))",message="plan-v1alpha2 release must use either an HTTPS repositoryURL with a non-OCI chart or an empty repositoryURL with an OCI chart"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role != 'Dependency' || !has(self.dependencyPlans) || size(self.dependencyPlans) == 0",message="plan-v1alpha2 Dependency must not contain dependencyPlans"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role != 'Dependency' || !self.release.createNamespace || size(self.resources) == 0",message="plan-v1alpha2 Dependency with createNamespace must not contain resources"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || !has(self.managedResources)",message="plan-v1alpha2 does not permit managedResources"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || (!has(self.secretInputRef) && !has(self.protectedSecrets))",message="plan-v1alpha2 does not permit protected Secret fields"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || (has(self.role) && self.role == 'Root')",message="plan-v1alpha3 supports only Root applications"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || ((size(self.release.repositoryURL) == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$') && !self.release.chart.startsWith('oci://')))",message="plan-v1alpha3 release must use either an HTTPS repositoryURL with a non-OCI chart or an empty repositoryURL with an OCI chart"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || size(self.resources) == 0",message="plan-v1alpha3 does not permit legacy resources"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || (!has(self.secretInputRef) && !has(self.protectedSecrets))",message="plan-v1alpha3 does not permit protected Secret fields"
-// +kubebuilder:validation:XValidation:rule="self.planVersion in ['oneks.opennebula.io/plan-v1alpha4', 'oneks.opennebula.io/plan-v1alpha5'] || !has(self.release.authSecret)",message="only plan-v1alpha4 and plan-v1alpha5 permit release.authSecret"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || (has(self.role) && self.role == 'Root')",message="plan-v1alpha4 supports only Root applications"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || ((size(self.release.repositoryURL) == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$') && !self.release.chart.startsWith('oci://')))",message="plan-v1alpha4 release must use either an HTTPS repositoryURL with a non-OCI chart or an empty repositoryURL with an OCI chart"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || !has(self.release.authSecret) || self.release.repositoryURL.matches('^https://[^[:space:]]+$')",message="plan-v1alpha4 release.authSecret requires an HTTPS repositoryURL"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || !has(self.release.authSecret) || (has(self.protectedSecrets) && self.protectedSecrets.filter(p, p.builderType == 'basicAuthSecret' && p.__namespace__ == 'kube-system' && p.name == self.release.authSecret.name).size() == 1)",message="release.authSecret must match exactly one protected basicAuthSecret in kube-system"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || size(self.resources) == 0",message="plan-v1alpha4 does not permit legacy resources"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || (has(self.secretInputRef) && has(self.protectedSecrets) && size(self.protectedSecrets) > 0)",message="plan-v1alpha4 requires secretInputRef and protectedSecrets"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || (has(self.secretInputRef) && has(self.secretInputRef.uid) && size(self.secretInputRef.uid) > 0)",message="plan-v1alpha4 requires a pre-bound secretInputRef.uid"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || !has(self.managedResources) || !has(self.protectedSecrets) || size(self.managedResources) + size(self.protectedSecrets) <= 16",message="plan-v1alpha4 permits at most 16 combined managedResources and protectedSecrets"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha5' || (has(self.role) && self.role == 'Root')",message="plan-v1alpha5 supports only Root applications"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha5' || ((size(self.release.repositoryURL) == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$') && !self.release.chart.startsWith('oci://')))",message="plan-v1alpha5 release must use either an HTTPS repositoryURL with a non-OCI chart or an empty repositoryURL with an OCI chart"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha5' || !has(self.release.authSecret) || self.release.repositoryURL.matches('^https://[^[:space:]]+$')",message="plan-v1alpha5 release.authSecret requires an HTTPS repositoryURL"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha5' || !has(self.release.authSecret) || (has(self.protectedSecrets) && self.protectedSecrets.filter(p, p.builderType == 'basicAuthSecret' && p.__namespace__ == 'kube-system' && p.name == self.release.authSecret.name).size() == 1)",message="release.authSecret must match exactly one protected basicAuthSecret in kube-system"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha5' || size(self.resources) == 0",message="plan-v1alpha5 does not permit legacy resources"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha5' || (has(self.secretInputRef) && has(self.protectedSecrets) && size(self.protectedSecrets) > 0)",message="plan-v1alpha5 requires secretInputRef and protectedSecrets"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha5' || !has(self.secretInputRef) || !has(self.secretInputRef.uid) || size(self.secretInputRef.uid) == 0",message="plan-v1alpha5 binds secretInputRef.uid through status"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha5' || !has(self.managedResources) || !has(self.protectedSecrets) || size(self.managedResources) + size(self.protectedSecrets) <= 16",message="plan-v1alpha5 permits at most 16 combined managedResources and protectedSecrets"
+// +kubebuilder:validation:XValidation:rule="has(self.role)",message="plan-v1alpha5 requires role"
+// +kubebuilder:validation:XValidation:rule="self.role != 'Dependency' || ((!has(self.dependencyPlans) || size(self.dependencyPlans) == 0) && (!has(self.managedResources) || size(self.managedResources) == 0) && !has(self.secretInputRef) && (!has(self.protectedSecrets) || size(self.protectedSecrets) == 0) && !has(self.release.authSecret))",message="Dependency must not contain Root-only dependencyPlans, managed resources, or protected Secret fields"
+// +kubebuilder:validation:XValidation:rule="((size(self.release.repositoryURL) == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$') && !self.release.chart.startsWith('oci://')))",message="release must use either an HTTPS repositoryURL with a non-OCI chart or an empty repositoryURL with an OCI chart"
+// +kubebuilder:validation:XValidation:rule="!has(self.release.authSecret) || self.release.repositoryURL.matches('^https://[^[:space:]]+$')",message="release.authSecret requires an HTTPS repositoryURL"
+// +kubebuilder:validation:XValidation:rule="!has(self.release.authSecret) || (has(self.protectedSecrets) && self.protectedSecrets.filter(p, p.builderType == 'basicAuthSecret' && p.__namespace__ == 'kube-system' && p.name == self.release.authSecret.name).size() == 1)",message="release.authSecret must match exactly one protected basicAuthSecret in kube-system"
+// +kubebuilder:validation:XValidation:rule="size(self.resources) == 0",message="plan-v1alpha5 does not permit legacy resources"
+// +kubebuilder:validation:XValidation:rule="((!has(self.protectedSecrets) || size(self.protectedSecrets) == 0) ? !has(self.secretInputRef) : has(self.secretInputRef))",message="plan-v1alpha5 requires secretInputRef exactly when protectedSecrets are present"
+// +kubebuilder:validation:XValidation:rule="!has(self.secretInputRef) || !has(self.secretInputRef.uid) || size(self.secretInputRef.uid) == 0",message="plan-v1alpha5 binds secretInputRef.uid through status"
+// +kubebuilder:validation:XValidation:rule="!has(self.managedResources) || !has(self.protectedSecrets) || size(self.managedResources) + size(self.protectedSecrets) <= 16",message="plan-v1alpha5 permits at most 16 combined managedResources and protectedSecrets"
 // +kubebuilder:validation:XValidation:rule="self.resources.all(r, r.__namespace__ == self.release.targetNamespace)",message="resources must use the release targetNamespace"
 // +kubebuilder:validation:XValidation:rule="!has(self.dependencies) || self.dependencies.all(d, self.dependencies.filter(x, x.name == d.name).size() == 1)",message="dependency names must be unique"
 // +kubebuilder:validation:XValidation:rule="!has(self.dependencyPlans) || self.dependencyPlans.all(p, self.dependencyPlans.filter(x, x.name == p.name).size() == 1)",message="dependency plan names must be unique"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.role != 'Root' || !has(self.dependencies) || (has(self.dependencyPlans) && self.dependencies.all(d, self.dependencyPlans.filter(p, p.name == d.name && p.catalogueChartID == d.catalogueChartID && p.planDigest == d.planDigest).size() == 1))",message="each direct Root dependency must resolve to exactly one matching dependencyPlan"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha3' || self.role != 'Root' || !has(self.dependencies) || (has(self.dependencyPlans) && self.dependencies.all(d, self.dependencyPlans.filter(p, p.name == d.name && p.catalogueChartID == d.catalogueChartID && p.planDigest == d.planDigest).size() == 1))",message="each direct Root dependency must resolve to exactly one matching dependencyPlan"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || !has(self.dependencies) || (has(self.dependencyPlans) && self.dependencies.all(d, self.dependencyPlans.filter(p, p.name == d.name && p.catalogueChartID == d.catalogueChartID && p.planDigest == d.planDigest).size() == 1))",message="each direct Root dependency must resolve to exactly one matching dependencyPlan"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha5' || !has(self.dependencies) || (has(self.dependencyPlans) && self.dependencies.all(d, self.dependencyPlans.filter(p, p.name == d.name && p.catalogueChartID == d.catalogueChartID && p.planDigest == d.planDigest).size() == 1))",message="each direct Root dependency must resolve to exactly one matching dependencyPlan"
+// +kubebuilder:validation:XValidation:rule="self.role != 'Root' || !has(self.dependencies) || (has(self.dependencyPlans) && self.dependencies.all(d, self.dependencyPlans.filter(p, p.name == d.name && p.catalogueChartID == d.catalogueChartID && p.planDigest == d.planDigest).size() == 1))",message="each direct Root dependency must resolve to exactly one matching dependencyPlan"
 // +kubebuilder:validation:XValidation:rule="!has(self.protectedSecrets) || self.protectedSecrets.all(p, self.protectedSecrets.filter(x, x.id == p.id).size() == 1)",message="protected Secret IDs must be unique"
 // +kubebuilder:validation:XValidation:rule="!has(self.protectedSecrets) || self.protectedSecrets.all(p, self.protectedSecrets.filter(x, x.__namespace__ == p.__namespace__ && x.name == p.name).size() == 1)",message="protected Secret target identities must be unique"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha4' || !has(self.managedResources) || !has(self.protectedSecrets) || self.protectedSecrets.all(p, self.managedResources.filter(m, m.id == p.id).size() == 0)",message="protected Secret IDs must not collide with managed resource IDs"
-// +kubebuilder:validation:XValidation:rule="self.planVersion != 'oneks.opennebula.io/plan-v1alpha5' || !has(self.managedResources) || !has(self.protectedSecrets) || self.protectedSecrets.all(p, self.managedResources.filter(m, m.id == p.id).size() == 0)",message="protected Secret IDs must not collide with managed resource IDs"
-// +kubebuilder:validation:XValidation:rule="!has(self.uninstall) || (self.planVersion == 'oneks.opennebula.io/plan-v1alpha2' && has(self.role) && self.role == 'Dependency')",message="top-level uninstall is permitted only for plan-v1alpha2 Dependency applications"
-// +kubebuilder:validation:XValidation:rule="!has(self.externalDetection) || (self.planVersion == 'oneks.opennebula.io/plan-v1alpha2' && has(self.role) && self.role == 'Dependency')",message="top-level externalDetection is permitted only for plan-v1alpha2 Dependency applications"
+// +kubebuilder:validation:XValidation:rule="!has(self.managedResources) || !has(self.protectedSecrets) || self.protectedSecrets.all(p, self.managedResources.filter(m, m.id == p.id).size() == 0)",message="protected Secret IDs must not collide with managed resource IDs"
+// +kubebuilder:validation:XValidation:rule="!has(self.uninstall) || (has(self.role) && self.role == 'Dependency')",message="top-level uninstall is permitted only for Dependency applications"
+// +kubebuilder:validation:XValidation:rule="!has(self.externalDetection) || (has(self.role) && self.role == 'Dependency')",message="top-level externalDetection is permitted only for Dependency applications"
 type OneKSApplicationSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
@@ -116,7 +87,7 @@ type OneKSApplicationSpec struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$`
 	CatalogueChartID string `json:"catalogueChartID"`
-	// +kubebuilder:validation:Enum=oneks.opennebula.io/plan-v1alpha1;oneks.opennebula.io/plan-v1alpha2;oneks.opennebula.io/plan-v1alpha3;oneks.opennebula.io/plan-v1alpha4;oneks.opennebula.io/plan-v1alpha5
+	// +kubebuilder:validation:Enum=oneks.opennebula.io/plan-v1alpha5
 	PlanVersion string `json:"planVersion"`
 	// +kubebuilder:validation:MaxLength=50
 	// +kubebuilder:validation:Pattern=`^sha256-[A-Za-z0-9_-]{43}$`
@@ -533,7 +504,7 @@ type OneKSApplicationStatus struct {
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Chart",type=string,JSONPath=`.spec.release.chart`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
-// +kubebuilder:validation:XValidation:rule="self.spec.planVersion != 'oneks.opennebula.io/plan-v1alpha2' || self.spec.role != 'Dependency' || !has(self.spec.dependencies) || self.spec.dependencies.all(d, d.name != self.metadata.name)",message="a Dependency application must not directly reference itself"
+// +kubebuilder:validation:XValidation:rule="self.spec.role != 'Dependency' || !has(self.spec.dependencies) || self.spec.dependencies.all(d, d.name != self.metadata.name)",message="a Dependency application must not directly reference itself"
 type OneKSApplication struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

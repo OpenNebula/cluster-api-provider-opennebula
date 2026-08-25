@@ -24,6 +24,7 @@ import (
 	"time"
 
 	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha1"
+	"github.com/go-logr/logr/funcr"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -35,19 +36,24 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-func TestExecuteCreatesConfigMapBeforeHelmChartAndBecomesReady(t *testing.T) {
-	ctx := context.Background()
+func TestExecuteCreatesManagedResourceBeforeHelmChartAndBecomesReady(t *testing.T) {
+	var logs strings.Builder
+	logger := funcr.New(func(prefix, args string) {
+		logs.WriteString(prefix)
+		logs.WriteByte(' ')
+		logs.WriteString(args)
+		logs.WriteByte('\n')
+	}, funcr.Options{})
+	ctx := ctrllog.IntoContext(context.Background(), logger)
 	app := goldenApplication(t)
 	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	reconciler, recorder := testReconciler(t, app)
 
 	reconcileOnce(t, ctx, reconciler, app)
-	assertExists(t, ctx, reconciler.Client, &corev1.ConfigMap{}, WorkloadNamespace, app.Spec.Resources[0].Name)
-	assertNotFound(t, ctx, reconciler.Client, helmChartObject(app.Spec.Release.ReleaseName))
-
-	reconcileOnce(t, ctx, reconciler, app)
+	assertExists(t, ctx, reconciler.Client, &corev1.ConfigMap{}, "catalogue-workloads", app.Spec.ManagedResources[0].Name)
 	helm := helmChartObject(app.Spec.Release.ReleaseName)
 	assertExists(t, ctx, reconciler.Client, helm, HelmChartNamespace, app.Spec.Release.ReleaseName)
 	if got := strings.Join(recorder.childWrites, ","); got != "create:ConfigMap,create:HelmChart" {
@@ -77,6 +83,24 @@ func TestExecuteCreatesConfigMapBeforeHelmChartAndBecomesReady(t *testing.T) {
 	if len(stored.Status.Resources) != 1 || stored.Status.Resources[0].Phase != "Ready" {
 		t.Fatalf("unexpected resource status: %#v", stored.Status.Resources)
 	}
+	for _, stage := range []string{
+		"application reconciliation started",
+		"managed resource created",
+		"Helm release created",
+		"application ready",
+		"application reconciliation completed",
+		`"releaseName"="oneks-prometheus"`,
+		`"targetNamespace"="catalogue-workloads"`,
+	} {
+		if !strings.Contains(logs.String(), stage) {
+			t.Fatalf("successful reconciliation logs omit %q:\n%s", stage, logs.String())
+		}
+	}
+	for _, sensitive := range []string{"password", "kubeconfig", "authorization"} {
+		if strings.Contains(strings.ToLower(logs.String()), sensitive) {
+			t.Fatalf("successful reconciliation logs contain sensitive term %q", sensitive)
+		}
+	}
 }
 
 func TestExecuteAddsFinalizerBeforeCreatingChildren(t *testing.T) {
@@ -94,144 +118,15 @@ func TestExecuteAddsFinalizerBeforeCreatingChildren(t *testing.T) {
 	}
 }
 
-func TestObserveReportsWithoutFinalizerOrChildMutation(t *testing.T) {
-	ctx := context.Background()
-	app := goldenApplication(t)
-	app.Spec.ExecutionMode = applicationv1.ExecutionModeObserve
-	refreshDigest(t, app)
-	configMap := desiredConfigMap(app, app.Spec.Resources[0])
-	helm := desiredHelmChart(app)
-	helm.Object["status"] = map[string]any{"jobName": "helm-install-oneks-prometheus"}
-	reconciler, recorder := testReconciler(t, app, configMap, helm, completedJob("helm-install-oneks-prometheus"))
-
-	reconcileOnce(t, ctx, reconciler, app)
-	stored := getApplication(t, ctx, reconciler.Client, app)
-	if stored.Status.Phase != applicationv1.PhaseObserving {
-		t.Fatalf("expected Observing, got %s", stored.Status.Phase)
-	}
-	if len(stored.Finalizers) != 0 {
-		t.Fatalf("Observe added a finalizer: %#v", stored.Finalizers)
-	}
-	if len(recorder.childWrites) != 0 {
-		t.Fatalf("Observe mutated children: %#v", recorder.childWrites)
-	}
-}
-
-func TestObserveReportsConfigMapDataDriftWithoutMutation(t *testing.T) {
-	ctx := context.Background()
-	app := goldenApplication(t)
-	app.Spec.ExecutionMode = applicationv1.ExecutionModeObserve
-	refreshDigest(t, app)
-	configMap := desiredConfigMap(app, app.Spec.Resources[0])
-	configMap.Data = map[string]string{"owner": "drifted"}
-	helm := desiredHelmChart(app)
-	helm.Object["status"] = map[string]any{"jobName": "helm-install-oneks-prometheus"}
-	reconciler, recorder := testReconciler(t, app, configMap, helm, completedJob("helm-install-oneks-prometheus"))
-
-	reconcileOnce(t, ctx, reconciler, app)
-	stored := getApplication(t, ctx, reconciler.Client, app)
-	if stored.Status.Phase != applicationv1.PhaseObserving {
-		t.Fatalf("expected Observing, got %s", stored.Status.Phase)
-	}
-	if len(stored.Status.Resources) != 1 || stored.Status.Resources[0].Phase != "Pending" || stored.Status.Resources[0].Reason != "DataDrift" {
-		t.Fatalf("ConfigMap drift was not reported: %#v", stored.Status.Resources)
-	}
-	if len(recorder.childWrites) != 0 {
-		t.Fatalf("Observe mutated drifted ConfigMap: %#v", recorder.childWrites)
-	}
-	observed := &corev1.ConfigMap{}
-	assertExists(t, ctx, reconciler.Client, observed, WorkloadNamespace, configMap.Name)
-	if observed.Data["owner"] != "drifted" {
-		t.Fatalf("Observe repaired ConfigMap data: %#v", observed.Data)
-	}
-}
-
-func TestOwnershipConflictHasNoChildOrNamespaceSideEffect(t *testing.T) {
-	ctx := context.Background()
-	app := goldenApplication(t)
-	conflict := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
-		Namespace: WorkloadNamespace, Name: app.Spec.Resources[0].Name,
-	}}
-	reconciler, recorder := testReconciler(t, app, conflict)
-
-	reconcileOnce(t, ctx, reconciler, app)
-	stored := getApplication(t, ctx, reconciler.Client, app)
-	if stored.Status.Phase != applicationv1.PhaseFailed || stored.Status.LastError == nil || stored.Status.LastError.Reason != "OwnershipConflict" {
-		t.Fatalf("ownership conflict was not terminal: %#v", stored.Status)
-	}
-	if len(stored.Finalizers) != 0 {
-		t.Fatalf("conflict added a finalizer: %#v", stored.Finalizers)
-	}
-	if len(recorder.childWrites) != 0 {
-		t.Fatalf("conflict caused a child or namespace side effect: %#v", recorder.childWrites)
-	}
-}
-
-func TestOwnershipPreflightChecksEveryChildBeforeCreatingAny(t *testing.T) {
-	ctx := context.Background()
-	app := goldenApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
-	second := app.Spec.Resources[0].DeepCopy()
-	second.ID = "second-config"
-	second.Name = "second-config"
-	app.Spec.Resources = append(app.Spec.Resources, *second)
-	refreshDigest(t, app)
-	conflict := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
-		Namespace: WorkloadNamespace, Name: second.Name,
-	}}
-	reconciler, recorder := testReconciler(t, app, conflict)
-
-	reconcileOnce(t, ctx, reconciler, app)
-	assertNotFound(t, ctx, reconciler.Client, &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Namespace: WorkloadNamespace, Name: app.Spec.Resources[0].Name},
-	})
-	if len(recorder.childWrites) != 0 {
-		t.Fatalf("preflight conflict allowed an earlier child write: %#v", recorder.childWrites)
-	}
-}
-
-func TestMissingTargetNamespacePollsAndProgressesWhenRestored(t *testing.T) {
-	ctx := context.Background()
-	app := goldenApplication(t)
-	reconciler, recorder := testReconciler(t, app)
-	availableClient := reconciler.Client
-	reconciler.Client = &namespaceErrorClient{
-		Client: reconciler.Client,
-		err: apierrors.NewNotFound(
-			schema.GroupResource{Resource: "namespaces"}, WorkloadNamespace,
-		),
-	}
-
-	result := reconcileOnce(t, ctx, reconciler, app)
-	if result.RequeueAfter != reconciler.RequeueAfter {
-		t.Fatalf("missing namespace requeue = %s, want %s", result.RequeueAfter, reconciler.RequeueAfter)
-	}
-	stored := getApplication(t, ctx, reconciler.Client, app)
-	if stored.Status.LastError == nil || stored.Status.LastError.Reason != "TargetNamespaceMissing" {
-		t.Fatalf("missing namespace status mismatch: %#v", stored.Status)
-	}
-	if len(recorder.childWrites) != 0 {
-		t.Fatalf("missing namespace caused a side effect: %#v", recorder.childWrites)
-	}
-
-	reconciler.Client = availableClient
-	reconcileOnce(t, ctx, reconciler, app)
-	stored = getApplication(t, ctx, reconciler.Client, app)
-	if !containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) {
-		t.Fatalf("restored namespace did not resume finalizer progression: %#v", stored.Finalizers)
-	}
-	reconcileOnce(t, ctx, reconciler, app)
-	assertExists(t, ctx, reconciler.Client, &corev1.ConfigMap{}, WorkloadNamespace, app.Spec.Resources[0].Name)
-}
-
 func TestTargetNamespaceAPIErrorIsRetriedWithoutSideEffects(t *testing.T) {
 	ctx := context.Background()
 	app := goldenApplication(t)
+	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	reconciler, recorder := testReconciler(t, app)
 	reconciler.Client = &namespaceErrorClient{
 		Client: reconciler.Client,
 		err: apierrors.NewForbidden(
-			schema.GroupResource{Resource: "namespaces"}, WorkloadNamespace,
+			schema.GroupResource{Resource: "namespaces"}, "catalogue-workloads",
 			fmt.Errorf("fake authorization failure"),
 		),
 	}
@@ -246,270 +141,6 @@ func TestTargetNamespaceAPIErrorIsRetriedWithoutSideEffects(t *testing.T) {
 	}
 	if len(recorder.childWrites) != 0 {
 		t.Fatalf("namespace API error caused a side effect: %#v", recorder.childWrites)
-	}
-}
-
-func TestRestartReconcilesExistingChildrenIdempotently(t *testing.T) {
-	ctx := context.Background()
-	app := goldenApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
-	configMap := desiredConfigMap(app, app.Spec.Resources[0])
-	helm := desiredHelmChart(app)
-	helm.Object["status"] = map[string]any{"jobName": "helm-install-oneks-prometheus"}
-	reconciler, recorder := testReconciler(t, app, configMap, helm, completedJob("helm-install-oneks-prometheus"))
-
-	reconcileOnce(t, ctx, reconciler, app)
-	stored := getApplication(t, ctx, reconciler.Client, app)
-	if stored.Status.Phase != applicationv1.PhaseReady {
-		t.Fatalf("restart did not recover Ready: %#v", stored.Status)
-	}
-	if len(recorder.childWrites) != 0 {
-		t.Fatalf("idempotent restart rewrote children: %#v", recorder.childWrites)
-	}
-}
-
-func TestExactOwnedConfigMapDriftIsRepairedWithServerSideApply(t *testing.T) {
-	ctx := context.Background()
-	app := goldenApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
-	configMap := desiredConfigMap(app, app.Spec.Resources[0])
-	configMap.Data = map[string]string{"owner": "drifted"}
-	helm := desiredHelmChart(app)
-	reconciler, recorder := testReconciler(t, app, configMap, helm)
-
-	reconcileOnce(t, ctx, reconciler, app)
-	if len(recorder.childWrites) != 1 || recorder.childWrites[0] != "patch:ConfigMap" {
-		t.Fatalf("expected ConfigMap SSA repair, got %#v", recorder.childWrites)
-	}
-	if len(recorder.patchForces) != 1 || recorder.patchForces[0] {
-		t.Fatalf("SSA repair forced field ownership: %#v", recorder.patchForces)
-	}
-	if len(recorder.patchResourceVersions) != 1 || recorder.patchResourceVersions[0] == "" {
-		t.Fatalf("SSA repair lacked a resourceVersion precondition: %#v", recorder.patchResourceVersions)
-	}
-	stored := &corev1.ConfigMap{}
-	assertExists(t, ctx, reconciler.Client, stored, WorkloadNamespace, configMap.Name)
-	if fmt.Sprint(stored.Data) != fmt.Sprint(app.Spec.Resources[0].Data) {
-		t.Fatalf("ConfigMap data was not repaired: %#v", stored.Data)
-	}
-}
-
-func TestServerSideApplyConflictIsRetryableAndDoesNotForceOwnership(t *testing.T) {
-	ctx := context.Background()
-	app := goldenApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
-	configMap := desiredConfigMap(app, app.Spec.Resources[0])
-	configMap.Data = map[string]string{"owner": "other-manager"}
-	helm := desiredHelmChart(app)
-	reconciler, recorder := testReconciler(t, app, configMap, helm)
-	recorder.patchError = apierrors.NewConflict(
-		schema.GroupResource{Resource: "configmaps"}, configMap.Name,
-		fmt.Errorf("fake field manager conflict"),
-	)
-
-	_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(app)})
-	if !apierrors.IsConflict(err) && (err == nil || !strings.Contains(err.Error(), "field manager conflict")) {
-		t.Fatalf("expected retryable apply conflict, got %v", err)
-	}
-	if len(recorder.patchForces) != 1 || recorder.patchForces[0] {
-		t.Fatalf("conflicting apply forced ownership: %#v", recorder.patchForces)
-	}
-	stored := &corev1.ConfigMap{}
-	assertExists(t, ctx, reconciler.Client, stored, WorkloadNamespace, configMap.Name)
-	if stored.Data["owner"] != "other-manager" {
-		t.Fatalf("apply conflict overwrote data: %#v", stored.Data)
-	}
-}
-
-func TestHelmChartFailurePrecedesCompletedJob(t *testing.T) {
-	ctx := context.Background()
-	app := goldenApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
-	configMap := desiredConfigMap(app, app.Spec.Resources[0])
-	helm := desiredHelmChart(app)
-	helm.Object["status"] = map[string]any{
-		"jobName": "helm-install-oneks-prometheus",
-		"conditions": []any{map[string]any{
-			"type": "Failed", "status": "True", "reason": "ChartError", "message": "fake chart failure",
-		}},
-	}
-	reconciler, _ := testReconciler(t, app, configMap, helm, completedJob("helm-install-oneks-prometheus"))
-
-	reconcileOnce(t, ctx, reconciler, app)
-	stored := getApplication(t, ctx, reconciler.Client, app)
-	if stored.Status.Phase != applicationv1.PhaseFailed || stored.Status.LastError == nil || stored.Status.LastError.Reason != "HelmChartFailed" {
-		t.Fatalf("HelmChart failure did not win: %#v", stored.Status)
-	}
-}
-
-func TestInstallerJobFailurePrecedenceIsOrderIndependent(t *testing.T) {
-	complete := batchv1.JobCondition{
-		Type: batchv1.JobComplete, Status: corev1.ConditionTrue,
-		Reason: "Complete", Message: "fake completion",
-	}
-	failed := batchv1.JobCondition{
-		Type: batchv1.JobFailed, Status: corev1.ConditionTrue,
-		Reason: "BackoffLimitExceeded", Message: "fake failure",
-	}
-	for _, test := range []struct {
-		name       string
-		conditions []batchv1.JobCondition
-	}{
-		{name: "complete before failed", conditions: []batchv1.JobCondition{complete, failed}},
-		{name: "failed before complete", conditions: []batchv1.JobCondition{failed, complete}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			ctx := context.Background()
-			app := goldenApplication(t)
-			app.Finalizers = []string{applicationv1.ApplicationFinalizer}
-			configMap := desiredConfigMap(app, app.Spec.Resources[0])
-			helm := desiredHelmChart(app)
-			helm.Object["status"] = map[string]any{"jobName": "helm-install-oneks-prometheus"}
-			job := completedJob("helm-install-oneks-prometheus")
-			job.Status.Conditions = test.conditions
-			reconciler, _ := testReconciler(t, app, configMap, helm, job)
-
-			reconcileOnce(t, ctx, reconciler, app)
-			stored := getApplication(t, ctx, reconciler.Client, app)
-			if stored.Status.Phase != applicationv1.PhaseFailed || stored.Status.LastError == nil || stored.Status.LastError.Reason != "InstallerJobFailed" {
-				t.Fatalf("Job failure did not win for %s: %#v", test.name, stored.Status)
-			}
-		})
-	}
-}
-
-func TestPreviouslyReadyReleaseDoesNotRegressWhenInstallerJobDisappears(t *testing.T) {
-	ctx := context.Background()
-	app := goldenApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
-	app.Status.Phase = applicationv1.PhaseReady
-	configMap := desiredConfigMap(app, app.Spec.Resources[0])
-	helm := desiredHelmChart(app)
-	helm.Object["status"] = map[string]any{"jobName": "removed-installer-job"}
-	reconciler, _ := testReconciler(t, app, configMap, helm)
-
-	reconcileOnce(t, ctx, reconciler, app)
-	stored := getApplication(t, ctx, reconciler.Client, app)
-	if stored.Status.Phase != applicationv1.PhaseReady {
-		t.Fatalf("ready release regressed: %#v", stored.Status)
-	}
-}
-
-func TestDeletionRemovesHelmFirstThenDeletePolicyResources(t *testing.T) {
-	ctx := context.Background()
-	app := goldenApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
-	now := metav1.NewTime(time.Now())
-	app.DeletionTimestamp = &now
-	retained := app.Spec.Resources[0].DeepCopy()
-	retained.ID = "retained-config"
-	retained.Name = "retained-config"
-	retained.DeletionPolicy = applicationv1.DeletionPolicyRetain
-	app.Spec.Resources = append(app.Spec.Resources, *retained)
-	refreshDigest(t, app)
-	deletedConfig := desiredConfigMap(app, app.Spec.Resources[0])
-	retainedConfig := desiredConfigMap(app, app.Spec.Resources[1])
-	helm := desiredHelmChart(app)
-	reconciler, recorder := testReconciler(t, app, deletedConfig, retainedConfig, helm)
-
-	reconcileOnce(t, ctx, reconciler, app)
-	if got := strings.Join(recorder.childWrites, ","); got != "delete:HelmChart" {
-		t.Fatalf("HelmChart was not deleted first: %s", got)
-	}
-	reconcileOnce(t, ctx, reconciler, app)
-	if got := strings.Join(recorder.childWrites, ","); got != "delete:HelmChart,delete:ConfigMap" {
-		t.Fatalf("ConfigMap cleanup order mismatch: %s", got)
-	}
-	reconcileOnce(t, ctx, reconciler, app)
-
-	assertNotFound(t, ctx, reconciler.Client, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: WorkloadNamespace, Name: deletedConfig.Name}})
-	assertExists(t, ctx, reconciler.Client, &corev1.ConfigMap{}, WorkloadNamespace, retainedConfig.Name)
-	stored := &applicationv1.OneKSApplication{}
-	err := reconciler.Get(ctx, client.ObjectKeyFromObject(app), stored)
-	if err == nil && containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) {
-		t.Fatalf("application finalizer remains: %#v", stored.Finalizers)
-	}
-	if err != nil && !apierrors.IsNotFound(err) {
-		t.Fatalf("get deleted application: %v", err)
-	}
-}
-
-func TestDeletionSkipsNamespaceCheckAndRetainsTopLevelHelmChart(t *testing.T) {
-	ctx := context.Background()
-	app := goldenApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
-	app.Spec.DeletionPolicy = applicationv1.DeletionPolicyRetain
-	app.Spec.Resources[0].DeletionPolicy = applicationv1.DeletionPolicyRetain
-	refreshDigest(t, app)
-	now := metav1.NewTime(time.Now())
-	app.DeletionTimestamp = &now
-	configMap := desiredConfigMap(app, app.Spec.Resources[0])
-	helm := desiredHelmChart(app)
-	reconciler, recorder := testReconciler(t, app, configMap, helm)
-	reconciler.Client = &namespaceErrorClient{
-		Client: reconciler.Client,
-		err: apierrors.NewNotFound(
-			schema.GroupResource{Resource: "namespaces"}, WorkloadNamespace,
-		),
-	}
-
-	reconcileOnce(t, ctx, reconciler, app)
-	if len(recorder.childWrites) != 0 {
-		t.Fatalf("Retain cleanup mutated children: %#v", recorder.childWrites)
-	}
-	assertExists(t, ctx, reconciler.Client, helmChartObject(helm.GetName()), HelmChartNamespace, helm.GetName())
-	assertExists(t, ctx, reconciler.Client, &corev1.ConfigMap{}, WorkloadNamespace, configMap.Name)
-}
-
-func TestDriftedRetainedChildrenDoNotBlockFinalizerRemoval(t *testing.T) {
-	ctx := context.Background()
-	app := goldenApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
-	app.Spec.DeletionPolicy = applicationv1.DeletionPolicyRetain
-	app.Spec.Resources[0].DeletionPolicy = applicationv1.DeletionPolicyRetain
-	refreshDigest(t, app)
-	now := metav1.NewTime(time.Now())
-	app.DeletionTimestamp = &now
-	configMap := desiredConfigMap(app, app.Spec.Resources[0])
-	configMap.Labels = nil
-	helm := desiredHelmChart(app)
-	helm.SetLabels(nil)
-	reconciler, recorder := testReconciler(t, app, configMap, helm)
-
-	reconcileOnce(t, ctx, reconciler, app)
-	if len(recorder.childWrites) != 0 {
-		t.Fatalf("drifted retained children were mutated: %#v", recorder.childWrites)
-	}
-	assertExists(t, ctx, reconciler.Client, &corev1.ConfigMap{}, WorkloadNamespace, configMap.Name)
-	assertExists(t, ctx, reconciler.Client, helmChartObject(helm.GetName()), HelmChartNamespace, helm.GetName())
-	stored := &applicationv1.OneKSApplication{}
-	err := reconciler.Get(ctx, client.ObjectKeyFromObject(app), stored)
-	if err == nil && containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) {
-		t.Fatalf("retained drift blocked finalizer removal: %#v", stored.Finalizers)
-	}
-	if err != nil && !apierrors.IsNotFound(err) {
-		t.Fatalf("get application after retained cleanup: %v", err)
-	}
-}
-
-func TestDeletionConflictDoesNotDeleteAnyChild(t *testing.T) {
-	ctx := context.Background()
-	app := goldenApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
-	now := metav1.NewTime(time.Now())
-	app.DeletionTimestamp = &now
-	configMap := desiredConfigMap(app, app.Spec.Resources[0])
-	helm := desiredHelmChart(app)
-	helm.SetLabels(nil)
-	reconciler, recorder := testReconciler(t, app, configMap, helm)
-
-	reconcileOnce(t, ctx, reconciler, app)
-	if len(recorder.childWrites) != 0 {
-		t.Fatalf("deletion conflict mutated children: %#v", recorder.childWrites)
-	}
-	stored := getApplication(t, ctx, reconciler.Client, app)
-	if !containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) || stored.Status.LastError == nil || stored.Status.LastError.Reason != "OwnershipConflict" {
-		t.Fatalf("deletion conflict did not preserve ownership boundary: %#v", stored)
 	}
 }
 
@@ -679,7 +310,7 @@ func (c *ownershipRaceClient) Get(ctx context.Context, key client.ObjectKey, obj
 }
 
 func (c *namespaceErrorClient) Get(ctx context.Context, key client.ObjectKey, object client.Object, options ...client.GetOption) error {
-	if _, ok := object.(*corev1.Namespace); ok && key.Name == WorkloadNamespace {
+	if _, ok := object.(*corev1.Namespace); ok && key.Name == "catalogue-workloads" {
 		return c.err
 	}
 	return c.Client.Get(ctx, key, object, options...)
@@ -700,7 +331,7 @@ func testReconciler(t *testing.T, objects ...client.Object) (*Reconciler, *recor
 	base := fake.NewClientBuilder().WithScheme(scheme).
 		WithStatusSubresource(&applicationv1.OneKSApplication{}).
 		WithObjects(append(objects, &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{Name: WorkloadNamespace},
+			ObjectMeta: metav1.ObjectMeta{Name: "catalogue-workloads"},
 		})...).Build()
 	recorder := &recordingClient{Client: base}
 	return &Reconciler{

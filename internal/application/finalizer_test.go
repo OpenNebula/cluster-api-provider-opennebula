@@ -29,14 +29,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-func TestSparseV4ApplicationFinalizersUseMetadataPatches(t *testing.T) {
+func TestSparseCurrentPlanApplicationFinalizersUseMetadataPatches(t *testing.T) {
 	ctx := context.Background()
-	app := runAIPlanV1Alpha4(t)
+	app := runAIProtectedPlan(t)
 	app.Spec.Resources = []applicationv1.ResourceSpec{}
 	app.Spec.Dependencies = []applicationv1.DependencyReference{}
 	app.Spec.DependencyPlans = []applicationv1.DependencyPlan{}
 	app.Spec.ManagedResources = []applicationv1.ManagedResourceSpec{}
-	refreshV4(t, app)
+	refreshProtectedPlan(t, app)
 	wantSpec := app.DeepCopy().Spec
 	wantSpecJSON, err := json.Marshal(wantSpec)
 	if err != nil {
@@ -84,7 +84,7 @@ func TestSparseV4ApplicationFinalizersUseMetadataPatches(t *testing.T) {
 
 func TestRemoveApplicationFinalizerNormally(t *testing.T) {
 	ctx := context.Background()
-	app := planV1Alpha1FixtureApplication(t)
+	app := goldenApplication(t)
 	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	reconciler, _ := testReconciler(t, app)
 	stored := getApplication(t, ctx, reconciler.Client, app)
@@ -199,7 +199,7 @@ func (c *applicationFinalizerMutationClient) Update(ctx context.Context, object 
 func finalizerErrorReconciler(t *testing.T) (*Reconciler, *applicationv1.OneKSApplication, error) {
 	t.Helper()
 	ctx := context.Background()
-	app := planV1Alpha1FixtureApplication(t)
+	app := goldenApplication(t)
 	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	reconciler, _ := testReconciler(t, app)
 	stored := getApplication(t, ctx, reconciler.Client, app)

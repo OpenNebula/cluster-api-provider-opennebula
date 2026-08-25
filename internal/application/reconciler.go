@@ -81,17 +81,26 @@ type observation struct {
 	allResources            bool
 }
 
-func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.Result, error) {
+func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (result ctrl.Result, reconcileErr error) {
 	app := &applicationv1.OneKSApplication{}
 	if err := r.Get(ctx, request.NamespacedName, app); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	ctx = contextWithApplicationLogger(ctx, app)
-	ctrl.LoggerFrom(ctx).V(1).Info(
+	ctrl.LoggerFrom(ctx).Info(
 		"application reconciliation started",
 		"observedGeneration", app.Status.ObservedGeneration,
 		"phase", app.Status.Phase,
 	)
+	defer func() {
+		ctrl.LoggerFrom(ctx).Info(
+			"application reconciliation completed",
+			"state", app.Status.Phase,
+			"requeue", result.Requeue,
+			"requeueAfter", result.RequeueAfter,
+			"success", reconcileErr == nil,
+		)
+	}()
 
 	deleting := !app.DeletionTimestamp.IsZero()
 	hasCleanupFinalizer := containsString(app.Finalizers, applicationv1.ApplicationFinalizer)
@@ -104,7 +113,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 	if validationError != nil {
 		return r.recordTerminal(ctx, app, validationError.Reason, validationError.Message, false)
 	}
-	if !deleting && app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5 &&
+	if !deleting && app.Spec.PlanVersion == applicationv1.PlanVersion &&
 		app.Spec.ExecutionMode == applicationv1.ExecutionModeExecute && !hasCleanupFinalizer {
 		updated, err := r.patchApplicationFinalizers(
 			ctx, app, append(append([]string(nil), app.Finalizers...), applicationv1.ApplicationFinalizer),
@@ -183,7 +192,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 	}
 
 	if deleting {
-		if (app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5) && app.Spec.ExecutionMode == applicationv1.ExecutionModeObserve {
+		if app.Spec.PlanVersion == applicationv1.PlanVersion && app.Spec.ExecutionMode == applicationv1.ExecutionModeObserve {
 			return ctrl.Result{}, nil
 		}
 		if err := r.preflightOwnership(ctx, app, true, managedAPIsRequired); err != nil {
@@ -243,7 +252,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	if (app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5) && app.Spec.Role == applicationv1.ApplicationRoleRoot {
+	if app.Spec.PlanVersion == applicationv1.PlanVersion && app.Spec.Role == applicationv1.ApplicationRoleRoot {
 		raced, terminating, conflict, err := r.materializeRootDependencies(ctx, app)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -1064,7 +1073,7 @@ func (r *Reconciler) recordTerminal(ctx context.Context, app *applicationv1.OneK
 		planCondition = metav1.ConditionFalse
 	}
 	setCondition(&status, app.Generation, ConditionPlanValid, planCondition, reason, message)
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha2 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5 {
+	if app.Spec.PlanVersion == applicationv1.PlanVersion {
 		if len(app.Spec.Dependencies) == 0 {
 			setCondition(&status, app.Generation, ConditionDependenciesReady, metav1.ConditionTrue, "NoDependencies", "Application has no direct dependencies")
 		} else {

@@ -39,12 +39,12 @@ import (
 
 func TestExternalDetectionMaterializesAndChangesCanonicalDigests(t *testing.T) {
 	plan := validDependencyPlan()
-	baselineRoot := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
-	withoutCanonical, err := canonicalPlanV1Alpha2(dependencyPlanChildSpec("42", plan))
+	baselineRoot := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
+	withoutCanonical, err := canonicalPlan(dependencyPlanChildSpec("42", plan))
 	if err != nil {
 		t.Fatalf("canonicalize dependency without detector: %v", err)
 	}
-	if got := Digest(withoutCanonical); got != "sha256-iEENLPb-Vuqfdd9s4o4UsxVtW9FcjgjnLQDvddz4EnI" {
+	if got := Digest(withoutCanonical); got != "sha256-FkBWdB_MwBRN_QCgiTN-viWhCwxlEWh7EsfcILeOFQ4" {
 		t.Fatalf("no-detector compatibility digest = %s", got)
 	}
 	plan.ExternalDetection = &applicationv1.ExternalDetectionSpec{Detector: applicationv1.ExternalDetectorCertManager}
@@ -53,18 +53,18 @@ func TestExternalDetectionMaterializesAndChangesCanonicalDigests(t *testing.T) {
 	if child.ExternalDetection == nil || child.ExternalDetection.Detector != applicationv1.ExternalDetectorCertManager {
 		t.Fatalf("external detector was not copied to child: %#v", child.ExternalDetection)
 	}
-	withCanonical, err := canonicalPlanV1Alpha2(child)
+	withCanonical, err := canonicalPlan(child)
 	if err != nil {
 		t.Fatalf("canonicalize dependency with detector: %v", err)
 	}
 	if reflect.DeepEqual(withoutCanonical, withCanonical) || !strings.Contains(string(withCanonical), `"externalDetection":{"detector":"cert-manager"}`) {
 		t.Fatalf("external detector did not affect child canonical input: %s", withCanonical)
 	}
-	if got := Digest(withCanonical); got != "sha256-xMa1Z9VAPLr52YmJSlGcLPfRn6LzkxggiTU_wQmVJT0" {
+	if got := Digest(withCanonical); got != "sha256-ZXBLv4WBR-bTMnz1oYAyitAgYG7uTmueRcMsipNcwX8" {
 		t.Fatalf("cross-language external detector digest = %s", got)
 	}
 
-	root := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
+	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 	if err := ValidatePlan(root, ValidationConfig{ClusterID: "42"}); err != nil {
 		t.Fatalf("validate Root external dependency plan: %v", err)
 	}
@@ -96,12 +96,7 @@ func TestExternalDetectionValidationScope(t *testing.T) {
 		reason string
 	}{
 		{"unsupported detector", func(app *applicationv1.OneKSApplication) { app.Spec.ExternalDetection.Detector = "other" }, "InvalidExternalDetector"},
-		{"v2 Root", func(app *applicationv1.OneKSApplication) {
-			app.Spec.Role = applicationv1.ApplicationRoleRoot
-			app.Name = "root"
-		}, "InvalidExternalDetection"},
-		{"v3 Root", func(app *applicationv1.OneKSApplication) {
-			app.Spec.PlanVersion = applicationv1.PlanVersionV1Alpha3
+		{"Root role", func(app *applicationv1.OneKSApplication) {
 			app.Spec.Role = applicationv1.ApplicationRoleRoot
 			app.Name = "root"
 		}, "InvalidExternalDetection"},
@@ -110,7 +105,7 @@ func TestExternalDetectionValidationScope(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			app := dependency.DeepCopy()
 			test.mutate(app)
-			refreshPlanV1Alpha2TestDigest(app)
+			refreshPlanDigest(app)
 			app.Labels = producerLabels(app)
 			if err := ValidatePlan(app, ValidationConfig{ClusterID: "42"}); err == nil || err.Reason != test.reason {
 				t.Fatalf("validation error = %#v, want %s", err, test.reason)
@@ -352,7 +347,7 @@ func TestCertManagerNamespaceAloneIsAbsent(t *testing.T) {
 
 func externalDependencyApplication(t *testing.T) *applicationv1.OneKSApplication {
 	t.Helper()
-	app := validPlanV1Alpha2Dependency(t)
+	app := validDependencyPlanApplication(t)
 	app.Spec.CatalogueChartID = "cert-manager"
 	app.Spec.Release.ChartID = "cert-manager"
 	app.Spec.Release.Chart = "cert-manager"
@@ -361,7 +356,7 @@ func externalDependencyApplication(t *testing.T) *applicationv1.OneKSApplication
 	app.Spec.ExternalDetection = &applicationv1.ExternalDetectionSpec{Detector: applicationv1.ExternalDetectorCertManager}
 	app.Name = dependencyApplicationName(app.Spec.Release.ReleaseName)
 	app.UID = types.UID("uid-cert-manager")
-	refreshPlanV1Alpha2TestDigest(app)
+	refreshPlanDigest(app)
 	app.Labels = producerLabels(app)
 	return app
 }

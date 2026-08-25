@@ -143,7 +143,7 @@ func TestEarlyManagedPreflightDoesNotDeferOtherAPIErrors(t *testing.T) {
 func dependencyProvidedManagedRoot(t *testing.T) (*applicationv1.OneKSApplication, applicationv1.DependencyPlan) {
 	t.Helper()
 	plan := dependencyPlanForTest("trust-manager", "trust-manager", nil)
-	root := validPlanV1Alpha4(t)
+	root := validBoundProtectedRootPlan(t)
 	root.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	root.Spec.Dependencies = []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}
 	root.Spec.DependencyPlans = []applicationv1.DependencyPlan{plan}
@@ -157,7 +157,7 @@ func dependencyProvidedManagedRoot(t *testing.T) (*applicationv1.OneKSApplicatio
 		},
 		DeletionPolicy: applicationv1.DeletionPolicyDelete,
 	}}
-	refreshV4(t, root)
+	refreshProtectedPlan(t, root)
 	return root, plan
 }
 

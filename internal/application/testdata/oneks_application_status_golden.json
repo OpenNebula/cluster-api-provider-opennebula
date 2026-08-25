@@ -1,9 +1,9 @@
 {
   "observedGeneration": 1,
-  "observedPlanDigest": "sha256-M55-5y1MVfp5TI27rz_ssKVui_0RNKYTrM_wVWSfRqg",
+  "observedPlanDigest": "sha256-XAzlfgfdUl1xBO0uhtRAJunc6ayrSxi8VQ-P2ZApF_U",
   "controllerVersion": "v0.1.0",
   "supportedPlanVersions": [
-    "oneks.opennebula.io/plan-v1alpha1"
+    "oneks.opennebula.io/plan-v1alpha5"
   ],
   "phase": "Ready",
   "progress": {

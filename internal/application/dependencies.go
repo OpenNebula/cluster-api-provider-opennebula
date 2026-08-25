@@ -149,7 +149,7 @@ func (r *Reconciler) materializeRootDependencies(ctx context.Context, root *appl
 
 func (r *Reconciler) observeDependencies(ctx context.Context, app *applicationv1.OneKSApplication) (dependencyObservation, error) {
 	result := dependencyObservation{ready: true}
-	if app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha2 && app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha3 && app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha4 && app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha5 {
+	if app.Spec.PlanVersion != applicationv1.PlanVersion {
 		return result, nil
 	}
 	result.enabled = true
@@ -243,8 +243,8 @@ func dependencyReferenceConflict(dependency *applicationv1.OneKSApplication, ref
 	if len(dependency.OwnerReferences) != 0 {
 		return conflict("shared dependencies must not have ownerReferences")
 	}
-	if dependency.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha2 || dependency.Spec.Role != applicationv1.ApplicationRoleDependency {
-		return conflict("referenced application is not a plan-v1alpha2 Dependency")
+	if dependency.Spec.PlanVersion != applicationv1.PlanVersion || dependency.Spec.Role != applicationv1.ApplicationRoleDependency {
+		return conflict("referenced application is not a plan-v1alpha5 Dependency")
 	}
 	if dependency.Spec.CatalogueChartID != reference.CatalogueChartID || dependency.Spec.PlanDigest != reference.PlanDigest {
 		return conflict("catalogueChartID or planDigest differs from the dependency reference")

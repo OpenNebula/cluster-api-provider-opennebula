@@ -75,10 +75,16 @@ type protectedSecretsObservation struct {
 }
 
 func usesProtectedSecrets(app *applicationv1.OneKSApplication) bool {
-	return (app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5) && app.Spec.Role == applicationv1.ApplicationRoleRoot
+	return app.Spec.PlanVersion == applicationv1.PlanVersion && app.Spec.Role == applicationv1.ApplicationRoleRoot && len(app.Spec.ProtectedSecrets) != 0
 }
 
 func validateProtectedSecretContract(spec applicationv1.OneKSApplicationSpec) *PlanError {
+	if len(spec.ProtectedSecrets) == 0 {
+		if spec.SecretInputRef != nil {
+			return invalid("UnexpectedSecretInputRef", "secretInputRef requires protectedSecrets")
+		}
+		return nil
+	}
 	if spec.SecretInputRef == nil {
 		return invalid("MissingSecretInputRef", "%s requires secretInputRef", spec.PlanVersion)
 	}
@@ -89,14 +95,8 @@ func validateProtectedSecretContract(spec applicationv1.OneKSApplicationSpec) *P
 	if !validUTF8Bytes(input.Name, 1, 253) || len(validation.IsDNS1123Subdomain(input.Name)) != 0 {
 		return invalid("InvalidSecretInputName", "secretInputRef.name must be a DNS-1123 subdomain")
 	}
-	if spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 && !validUTF8Bytes(input.UID, 1, maxSecretInputUID) {
-		return invalid("InvalidSecretInputUID", "plan-v1alpha4 secretInputRef.uid must be valid UTF-8 between 1 and %d bytes", maxSecretInputUID)
-	}
-	if spec.PlanVersion == applicationv1.PlanVersionV1Alpha5 && input.UID != "" {
+	if input.UID != "" {
 		return invalid("InvalidSecretInputUID", "plan-v1alpha5 binds the input Secret UID through status")
-	}
-	if len(spec.ProtectedSecrets) == 0 {
-		return invalid("MissingProtectedSecrets", "plan-v1alpha4 requires at least one protected Secret")
 	}
 	if len(spec.ProtectedSecrets) > maxProtectedSecrets {
 		return invalid("TooManyProtectedSecrets", "protectedSecrets exceeds %d entries", maxProtectedSecrets)
@@ -214,7 +214,7 @@ func (r *Reconciler) readSecretInput(ctx context.Context, app *applicationv1.One
 		return nil, false, &protectedSecretAPIError{operation: "read input", namespace: reference.Namespace, name: reference.Name, cause: err}
 	}
 	expectedUID := reference.UID
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5 {
+	if app.Spec.PlanVersion == applicationv1.PlanVersion {
 		expectedUID = app.Status.SecretInputUID
 		labels := input.GetLabels()
 		expectedLabels := map[string]string{
@@ -250,7 +250,7 @@ func (r *Reconciler) readSecretInput(ctx context.Context, app *applicationv1.One
 }
 
 func (r *Reconciler) bindV1Alpha5SecretInput(ctx context.Context, app *applicationv1.OneKSApplication) (bool, error) {
-	if app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha5 || app.Status.SecretInputUID != "" {
+	if !usesProtectedSecrets(app) || app.Status.SecretInputUID != "" {
 		return false, nil
 	}
 	input, missing, err := r.readSecretInput(ctx, app)
@@ -638,7 +638,7 @@ func (r *Reconciler) reconcileDeleteSecretInput(ctx context.Context, app *applic
 		return false, &protectedSecretAPIError{operation: "read deleting input", namespace: reference.Namespace, name: reference.Name, cause: err}
 	}
 	expectedUID := reference.UID
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5 {
+	if app.Spec.PlanVersion == applicationv1.PlanVersion {
 		expectedUID = app.Status.SecretInputUID
 	}
 	if expectedUID == "" || string(current.UID) != expectedUID {

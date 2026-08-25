@@ -49,7 +49,6 @@ const (
 	maxProtectedSecrets    = 16
 	maxUninstallPreActions = 8
 	maxMergePatchBytes     = 16384
-	WorkloadNamespace      = "oneks-poc-workloads"
 )
 
 var (
@@ -104,52 +103,28 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 	if !validUTF8Bytes(app.Spec.ClusterID, 1, 63) || len(validation.IsValidLabelValue(app.Spec.ClusterID)) > 0 {
 		return invalid("InvalidClusterID", "spec.clusterID is not a Kubernetes label value")
 	}
-	switch app.Spec.PlanVersion {
-	case applicationv1.PlanVersionV1Alpha1:
-		if app.Spec.Role != "" || app.Spec.Dependencies != nil || app.Spec.DependencyPlans != nil || app.Spec.ManagedResources != nil || app.Spec.SecretInputRef != nil || app.Spec.ProtectedSecrets != nil || app.Spec.Release.AuthSecret != nil || app.Spec.ExternalDetection != nil {
-			return invalid("InvalidPlanV1Alpha1Fields", "plan-v1alpha1 does not permit role or dependency fields")
-		}
-	case applicationv1.PlanVersionV1Alpha2:
-		if app.Spec.ManagedResources != nil || app.Spec.SecretInputRef != nil || app.Spec.ProtectedSecrets != nil || app.Spec.Release.AuthSecret != nil {
-			return invalid("InvalidPlanV1Alpha2Fields", "plan-v1alpha2 does not permit managedResources")
-		}
-		if app.Spec.Role != applicationv1.ApplicationRoleRoot && app.Spec.Role != applicationv1.ApplicationRoleDependency {
-			return invalid("InvalidApplicationRole", "plan-v1alpha2 role must be Root or Dependency")
-		}
-	case applicationv1.PlanVersionV1Alpha3:
-		if app.Spec.SecretInputRef != nil || app.Spec.ProtectedSecrets != nil || app.Spec.Release.AuthSecret != nil {
-			return invalid("InvalidPlanV1Alpha3Fields", "plan-v1alpha3 does not permit protected Secret fields")
-		}
-		if app.Spec.Role != applicationv1.ApplicationRoleRoot {
-			return invalid("InvalidApplicationRole", "plan-v1alpha3 supports only Root applications")
-		}
-		if len(app.Spec.Resources) != 0 {
-			return invalid("InvalidPlanV1Alpha3Resources", "plan-v1alpha3 does not permit legacy resources")
-		}
-	case applicationv1.PlanVersionV1Alpha4:
-		if app.Spec.Role != applicationv1.ApplicationRoleRoot {
-			return invalid("InvalidApplicationRole", "plan-v1alpha4 supports only Root applications")
-		}
-		if len(app.Spec.Resources) != 0 {
-			return invalid("InvalidPlanV1Alpha4Resources", "plan-v1alpha4 does not permit legacy resources")
-		}
-	case applicationv1.PlanVersionV1Alpha5:
-		if app.Spec.Role != applicationv1.ApplicationRoleRoot {
-			return invalid("InvalidApplicationRole", "plan-v1alpha5 supports only Root applications")
-		}
-		if len(app.Spec.Resources) != 0 {
-			return invalid("InvalidPlanV1Alpha5Resources", "plan-v1alpha5 does not permit legacy resources")
-		}
-	default:
+	if app.Spec.PlanVersion != applicationv1.PlanVersion {
 		return invalid("UnsupportedPlanVersion", "unsupported planVersion %q", app.Spec.PlanVersion)
 	}
-	if app.Spec.Uninstall != nil &&
-		(app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha2 || app.Spec.Role != applicationv1.ApplicationRoleDependency) {
-		return invalid("InvalidUninstall", "top-level uninstall is permitted only for plan-v1alpha2 Dependency applications")
+	if app.Spec.Role != applicationv1.ApplicationRoleRoot && app.Spec.Role != applicationv1.ApplicationRoleDependency {
+		return invalid("InvalidApplicationRole", "plan-v1alpha5 role must be Root or Dependency")
 	}
-	if app.Spec.ExternalDetection != nil &&
-		(app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha2 || app.Spec.Role != applicationv1.ApplicationRoleDependency) {
-		return invalid("InvalidExternalDetection", "top-level externalDetection is permitted only for plan-v1alpha2 Dependency applications")
+	if len(app.Spec.Resources) != 0 {
+		return invalid("InvalidPlanResources", "plan-v1alpha5 does not permit legacy resources")
+	}
+	if app.Spec.Role == applicationv1.ApplicationRoleDependency {
+		if len(app.Spec.ManagedResources) != 0 {
+			return invalid("InvalidDependencyManagedResources", "Dependency applications must not contain managedResources")
+		}
+		if app.Spec.SecretInputRef != nil || len(app.Spec.ProtectedSecrets) != 0 || app.Spec.Release.AuthSecret != nil {
+			return invalid("InvalidDependencyProtectedSecrets", "Dependency applications must not contain protected Secret fields")
+		}
+	}
+	if app.Spec.Uninstall != nil && app.Spec.Role != applicationv1.ApplicationRoleDependency {
+		return invalid("InvalidUninstall", "top-level uninstall is permitted only for Dependency applications")
+	}
+	if app.Spec.ExternalDetection != nil && app.Spec.Role != applicationv1.ApplicationRoleDependency {
+		return invalid("InvalidExternalDetection", "top-level externalDetection is permitted only for Dependency applications")
 	}
 	if app.Spec.ExternalDetection != nil {
 		if err := validateExternalDetection(*app.Spec.ExternalDetection, "externalDetection"); err != nil {
@@ -174,17 +149,13 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 	if !validUTF8Bytes(app.Spec.Release.Version, 1, 253) {
 		return invalid("InvalidChartVersion", "release version must be valid UTF-8 between 1 and 253 bytes")
 	}
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha1 {
-		if err := validateRepositoryURL(app.Spec.Release.RepositoryURL); err != nil {
-			return err
-		}
-	} else if err := validateReleaseSourceV1Alpha2(app.Spec.Release, "release"); err != nil {
+	if err := validateReleaseSource(app.Spec.Release, "release"); err != nil {
 		return err
 	}
 	if !validUTF8Bytes(app.Spec.Release.ReleaseName, 1, 63) || len(validation.IsDNS1123Label(app.Spec.Release.ReleaseName)) > 0 {
 		return invalid("InvalidReleaseName", "releaseName is not a DNS-1123 label of at most 63 characters")
 	}
-	if app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha1 && app.Spec.Role == applicationv1.ApplicationRoleDependency {
+	if app.Spec.Role == applicationv1.ApplicationRoleDependency {
 		expectedName := dependencyApplicationName(app.Spec.Release.ReleaseName)
 		if app.Name != expectedName {
 			return invalid("InvalidDependencyApplicationName", "application name must be %q for releaseName %q", expectedName, app.Spec.Release.ReleaseName)
@@ -192,14 +163,6 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 	}
 	if !validUTF8Bytes(app.Spec.Release.TargetNamespace, 1, 63) || len(validation.IsDNS1123Label(app.Spec.Release.TargetNamespace)) > 0 {
 		return invalid("InvalidTargetNamespace", "targetNamespace is not a DNS-1123 label of at most 63 characters")
-	}
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha1 {
-		if app.Spec.Release.TargetNamespace != WorkloadNamespace {
-			return invalid("InvalidTargetNamespace", "targetNamespace must be %q", WorkloadNamespace)
-		}
-		if app.Spec.Release.CreateNamespace {
-			return invalid("InvalidCreateNamespace", "createNamespace must be false")
-		}
 	}
 	if app.Spec.Role == applicationv1.ApplicationRoleDependency && app.Spec.Release.CreateNamespace && len(app.Spec.Resources) != 0 {
 		return invalid("InvalidDependencyResources", "Dependency with createNamespace=true must not contain resources")
@@ -270,28 +233,22 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 		}
 	}
 
-	if app.Spec.PlanVersion != applicationv1.PlanVersionV1Alpha1 {
-		if err := validateDependencyContract(app); err != nil {
-			return err
-		}
+	if err := validateDependencyContract(app); err != nil {
+		return err
 	}
 	if app.Spec.Uninstall != nil {
 		if err := validateUninstall(*app.Spec.Uninstall, "uninstall"); err != nil {
 			return err
 		}
 	}
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha3 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5 {
-		if err := validateManagedResources(app.Spec.ManagedResources); err != nil {
-			return err
-		}
+	if err := validateManagedResources(app.Spec.ManagedResources); err != nil {
+		return err
 	}
-	if app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha4 || app.Spec.PlanVersion == applicationv1.PlanVersionV1Alpha5 {
-		if err := validateProtectedSecretContract(app.Spec); err != nil {
-			return err
-		}
-		if err := validateReleaseAuthSecret(app.Spec); err != nil {
-			return err
-		}
+	if err := validateProtectedSecretContract(app.Spec); err != nil {
+		return err
+	}
+	if err := validateReleaseAuthSecret(app.Spec); err != nil {
+		return err
 	}
 
 	canonical, err := CanonicalPlan(app.Spec)
@@ -442,7 +399,7 @@ func validateRootDependencyGraph(rootDependencies []applicationv1.DependencyRefe
 
 func validateDependencyPlanDigest(clusterID string, plan applicationv1.DependencyPlan, path string) *PlanError {
 	child := dependencyPlanChildSpec(clusterID, plan)
-	canonical, err := canonicalPlanV1Alpha2(child)
+	canonical, err := canonicalPlan(child)
 	if err != nil {
 		return invalid("InvalidDependencyPlanDigest", "%s child plan cannot be canonicalized: %v", path, err)
 	}
@@ -455,7 +412,7 @@ func validateDependencyPlanDigest(clusterID string, plan applicationv1.Dependenc
 func dependencyPlanChildSpec(clusterID string, plan applicationv1.DependencyPlan) applicationv1.OneKSApplicationSpec {
 	return applicationv1.OneKSApplicationSpec{
 		ClusterID: clusterID, CatalogueChartID: plan.CatalogueChartID,
-		PlanVersion: applicationv1.PlanVersionV1Alpha2, PlanDigest: plan.PlanDigest,
+		PlanVersion: applicationv1.PlanVersion, PlanDigest: plan.PlanDigest,
 		ExecutionMode: applicationv1.ExecutionModeExecute,
 		Release:       plan.Release, Resources: plan.Resources,
 		Role: applicationv1.ApplicationRoleDependency, Dependencies: plan.Dependencies,
@@ -490,7 +447,7 @@ func validateDependencyPlan(plan applicationv1.DependencyPlan, path string) *Pla
 	if !validUTF8Bytes(plan.Release.Version, 1, 253) {
 		return invalid("InvalidDependencyChartVersion", "%s.release.version must be valid UTF-8 between 1 and 253 bytes", path)
 	}
-	if err := validateReleaseSourceV1Alpha2(plan.Release, path+".release"); err != nil {
+	if err := validateReleaseSource(plan.Release, path+".release"); err != nil {
 		return err
 	}
 	if !validUTF8Bytes(plan.Release.ReleaseName, 1, 63) || len(validation.IsDNS1123Label(plan.Release.ReleaseName)) > 0 {
@@ -674,81 +631,13 @@ func validateDependencyPlanResources(resources []applicationv1.ResourceSpec, tar
 }
 
 func CanonicalPlan(spec applicationv1.OneKSApplicationSpec) ([]byte, error) {
-	switch spec.PlanVersion {
-	case applicationv1.PlanVersionV1Alpha1:
-		return canonicalPlanV1Alpha1(spec)
-	case applicationv1.PlanVersionV1Alpha2:
-		return canonicalPlanV1Alpha2(spec)
-	case applicationv1.PlanVersionV1Alpha3:
-		return canonicalPlanV1Alpha3(spec)
-	case applicationv1.PlanVersionV1Alpha4:
-		return canonicalPlanV1Alpha4(spec)
-	case applicationv1.PlanVersionV1Alpha5:
-		return canonicalPlanV1Alpha4(spec)
-	default:
+	if spec.PlanVersion != applicationv1.PlanVersion {
 		return nil, fmt.Errorf("unsupported planVersion %q", spec.PlanVersion)
 	}
+	return canonicalPlan(spec)
 }
 
-func canonicalPlanV1Alpha3(spec applicationv1.OneKSApplicationSpec) ([]byte, error) {
-	dependencies := make([]any, len(spec.Dependencies))
-	for index, dependency := range spec.Dependencies {
-		dependencies[index] = canonicalDependencyReference(dependency)
-	}
-	dependencyPlans := make([]any, len(spec.DependencyPlans))
-	for index, dependencyPlan := range spec.DependencyPlans {
-		dependencyPlans[index] = canonicalDependencyPlan(dependencyPlan)
-	}
-	managed := make([]any, len(spec.ManagedResources))
-	for index, resource := range spec.ManagedResources {
-		conditions := make([]any, len(resource.Readiness.Conditions))
-		for i, condition := range resource.Readiness.Conditions {
-			conditions[i] = map[string]any{"type": condition.Type, "status": condition.Status}
-		}
-		required := make([]any, len(resource.Readiness.RequiredResources))
-		for i, reference := range resource.Readiness.RequiredResources {
-			required[i] = map[string]any{
-				"apiVersion": reference.APIVersion, "kind": reference.Kind,
-				"apiResource": reference.APIResource, "namespace": reference.Namespace, "name": reference.Name,
-			}
-		}
-		checks := make([]any, len(resource.Readiness.Checks))
-		for i, check := range resource.Readiness.Checks {
-			checks[i] = map[string]any{
-				"type": string(check.Type), "hostname": check.Hostname,
-				"service": map[string]any{"namespace": check.Service.Namespace, "name": check.Service.Name},
-			}
-		}
-		dependsOn := make([]any, len(resource.DependsOn))
-		for i, dependency := range resource.DependsOn {
-			dependsOn[i] = dependency
-		}
-		managed[index] = map[string]any{
-			"id": resource.ID, "scope": string(resource.Scope), "apiVersion": resource.APIVersion,
-			"kind": resource.Kind, "apiResource": resource.APIResource, "namespace": resource.Namespace,
-			"name": resource.Name, "manifestJSON": resource.ManifestJSON, "dependsOn": dependsOn,
-			"readiness": map[string]any{
-				"conditions": conditions, "requiredResources": required, "checks": checks,
-				"timeoutSeconds": resource.Readiness.TimeoutSeconds,
-			},
-			"deletionPolicy": string(resource.DeletionPolicy),
-		}
-	}
-	plan := map[string]any{
-		"clusterID": spec.ClusterID, "catalogueChartID": spec.CatalogueChartID,
-		"planVersion": spec.PlanVersion, "executionMode": string(spec.ExecutionMode),
-		"release": canonicalRelease(spec.Release), "resources": canonicalResources(spec.Resources),
-		"role": string(spec.Role), "dependencies": dependencies, "dependencyPlans": dependencyPlans,
-		"managedResources": managed, "deletionPolicy": string(spec.DeletionPolicy),
-	}
-	var output bytes.Buffer
-	if err := writeCanonicalJSON(&output, plan); err != nil {
-		return nil, err
-	}
-	return output.Bytes(), nil
-}
-
-func canonicalPlanV1Alpha4(spec applicationv1.OneKSApplicationSpec) ([]byte, error) {
+func canonicalPlan(spec applicationv1.OneKSApplicationSpec) ([]byte, error) {
 	dependencies := make([]any, len(spec.Dependencies))
 	for index, dependency := range spec.Dependencies {
 		dependencies[index] = canonicalDependencyReference(dependency)
@@ -806,79 +695,23 @@ func canonicalPlanV1Alpha4(spec applicationv1.OneKSApplicationSpec) ([]byte, err
 			"deletionPolicy": string(secret.DeletionPolicy),
 		}
 	}
-	input := map[string]any{"namespace": "", "name": "", "uid": ""}
+	plan := map[string]any{
+		"clusterID": spec.ClusterID, "catalogueChartID": spec.CatalogueChartID,
+		"planVersion": spec.PlanVersion, "executionMode": string(spec.ExecutionMode),
+		"release": canonicalRelease(spec.Release), "resources": canonicalResources(spec.Resources),
+		"role": string(spec.Role), "dependencies": dependencies, "dependencyPlans": dependencyPlans,
+		"managedResources": managed,
+		"deletionPolicy":   string(spec.DeletionPolicy),
+	}
 	if spec.SecretInputRef != nil {
-		input = map[string]any{
+		plan["secretInputRef"] = map[string]any{
 			"namespace": spec.SecretInputRef.Namespace,
 			"name":      spec.SecretInputRef.Name,
 			"uid":       spec.SecretInputRef.UID,
 		}
 	}
-	plan := map[string]any{
-		"clusterID": spec.ClusterID, "catalogueChartID": spec.CatalogueChartID,
-		"planVersion": spec.PlanVersion, "executionMode": string(spec.ExecutionMode),
-		"release": canonicalReleaseV1Alpha4(spec.Release), "resources": canonicalResources(spec.Resources),
-		"role": string(spec.Role), "dependencies": dependencies, "dependencyPlans": dependencyPlans,
-		"managedResources": managed, "secretInputRef": input, "protectedSecrets": protected,
-		"deletionPolicy": string(spec.DeletionPolicy),
-	}
-	var output bytes.Buffer
-	if err := writeCanonicalJSON(&output, plan); err != nil {
-		return nil, err
-	}
-	return output.Bytes(), nil
-}
-
-func canonicalPlanV1Alpha1(spec applicationv1.OneKSApplicationSpec) ([]byte, error) {
-	resources := make([]any, len(spec.Resources))
-	for index, resource := range spec.Resources {
-		data := make(map[string]any, len(resource.Data))
-		for key, value := range resource.Data {
-			data[key] = value
-		}
-		resources[index] = map[string]any{
-			"id": resource.ID, "apiVersion": resource.APIVersion,
-			"kind": resource.Kind, "namespace": resource.Namespace,
-			"name": resource.Name, "data": data,
-			"deletionPolicy": string(resource.DeletionPolicy),
-		}
-	}
-	plan := map[string]any{
-		"clusterID": spec.ClusterID, "catalogueChartID": spec.CatalogueChartID,
-		"planVersion": spec.PlanVersion, "executionMode": string(spec.ExecutionMode),
-		"release": map[string]any{
-			"chartID": spec.Release.ChartID, "repositoryURL": spec.Release.RepositoryURL,
-			"chart": spec.Release.Chart, "version": spec.Release.Version,
-			"releaseName":     spec.Release.ReleaseName,
-			"targetNamespace": spec.Release.TargetNamespace,
-			"createNamespace": spec.Release.CreateNamespace,
-			"valuesContent":   spec.Release.ValuesContent,
-		},
-		"resources": resources, "deletionPolicy": string(spec.DeletionPolicy),
-	}
-
-	var output bytes.Buffer
-	if err := writeCanonicalJSON(&output, plan); err != nil {
-		return nil, err
-	}
-	return output.Bytes(), nil
-}
-
-func canonicalPlanV1Alpha2(spec applicationv1.OneKSApplicationSpec) ([]byte, error) {
-	dependencies := make([]any, len(spec.Dependencies))
-	for index, dependency := range spec.Dependencies {
-		dependencies[index] = canonicalDependencyReference(dependency)
-	}
-	dependencyPlans := make([]any, len(spec.DependencyPlans))
-	for index, dependencyPlan := range spec.DependencyPlans {
-		dependencyPlans[index] = canonicalDependencyPlan(dependencyPlan)
-	}
-	plan := map[string]any{
-		"clusterID": spec.ClusterID, "catalogueChartID": spec.CatalogueChartID,
-		"planVersion": spec.PlanVersion, "executionMode": string(spec.ExecutionMode),
-		"release": canonicalRelease(spec.Release), "resources": canonicalResources(spec.Resources),
-		"role": string(spec.Role), "dependencies": dependencies,
-		"dependencyPlans": dependencyPlans, "deletionPolicy": string(spec.DeletionPolicy),
+	if len(spec.ProtectedSecrets) != 0 {
+		plan["protectedSecrets"] = protected
 	}
 	if spec.Uninstall != nil {
 		plan["uninstall"] = canonicalUninstall(*spec.Uninstall)
@@ -886,7 +719,6 @@ func canonicalPlanV1Alpha2(spec applicationv1.OneKSApplicationSpec) ([]byte, err
 	if spec.ExternalDetection != nil {
 		plan["externalDetection"] = canonicalExternalDetection(*spec.ExternalDetection)
 	}
-
 	var output bytes.Buffer
 	if err := writeCanonicalJSON(&output, plan); err != nil {
 		return nil, err
@@ -945,16 +777,12 @@ func canonicalDependencyReference(reference applicationv1.DependencyReference) m
 }
 
 func canonicalRelease(release applicationv1.ReleaseSpec) map[string]any {
-	return map[string]any{
+	canonical := map[string]any{
 		"chartID": release.ChartID, "repositoryURL": release.RepositoryURL,
 		"chart": release.Chart, "version": release.Version,
 		"releaseName": release.ReleaseName, "targetNamespace": release.TargetNamespace,
 		"createNamespace": release.CreateNamespace, "valuesContent": release.ValuesContent,
 	}
-}
-
-func canonicalReleaseV1Alpha4(release applicationv1.ReleaseSpec) map[string]any {
-	canonical := canonicalRelease(release)
 	if release.AuthSecret != nil {
 		canonical["authSecret"] = map[string]any{"name": release.AuthSecret.Name}
 	}
@@ -1115,7 +943,7 @@ func validateRepositoryURL(raw string) *PlanError {
 	return nil
 }
 
-func validateReleaseSourceV1Alpha2(release applicationv1.ReleaseSpec, path string) *PlanError {
+func validateReleaseSource(release applicationv1.ReleaseSpec, path string) *PlanError {
 	if release.RepositoryURL == "" {
 		parsed, err := url.Parse(release.Chart)
 		if err != nil || !ociChartPattern.MatchString(release.Chart) || parsed.Scheme != "oci" || parsed.Host == "" {

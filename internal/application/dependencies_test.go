@@ -40,7 +40,7 @@ func TestRootMaterializesFlatTransitiveDependencyGraph(t *testing.T) {
 	ctx := context.Background()
 	e := dependencyPlanForTest("oneks-e", "chart-e", nil)
 	d := dependencyPlanForTest("oneks-d", "chart-d", []applicationv1.DependencyReference{dependencyReferenceForPlan(e)})
-	root := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(d)}, []applicationv1.DependencyPlan{d, e})
+	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(d)}, []applicationv1.DependencyPlan{d, e})
 	reconciler, _ := testReconciler(t, root)
 
 	reconcileOnce(t, ctx, reconciler, root)
@@ -81,7 +81,7 @@ func TestDependencyCompatibilityAcceptsAPINormalizedEmptyDependencies(t *testing
 		"shared-chart",
 		[]applicationv1.DependencyReference{},
 	)
-	root := validPlanV1Alpha2RootGraph(
+	root := validRootPlanGraph(
 		t,
 		[]applicationv1.DependencyReference{dependencyReferenceForPlan(plan)},
 		[]applicationv1.DependencyPlan{plan},
@@ -121,7 +121,7 @@ func TestDependencyPreflightReusesCompatibleAndCreatesMissing(t *testing.T) {
 	ctx := context.Background()
 	e := dependencyPlanForTest("oneks-e", "chart-e", nil)
 	d := dependencyPlanForTest("oneks-d", "chart-d", []applicationv1.DependencyReference{dependencyReferenceForPlan(e)})
-	root := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(d)}, []applicationv1.DependencyPlan{d, e})
+	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(d)}, []applicationv1.DependencyPlan{d, e})
 	root.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	existing := existingDependencyForTest(root, d)
 	existing.Annotations = map[string]string{"unrelated.example.test/kept": "true"}
@@ -148,9 +148,8 @@ func TestDependencyPreflightConflictCreatesNothing(t *testing.T) {
 	ctx := context.Background()
 	e := dependencyPlanForTest("oneks-e", "chart-e", nil)
 	d := dependencyPlanForTest("oneks-d", "chart-d", []applicationv1.DependencyReference{dependencyReferenceForPlan(e)})
-	root := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(d)}, []applicationv1.DependencyPlan{d, e})
+	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(d)}, []applicationv1.DependencyPlan{d, e})
 	root.Finalizers = []string{applicationv1.ApplicationFinalizer}
-	addOwnConfigMapForTest(t, root)
 	conflictingE := existingDependencyForTest(root, e)
 	conflictingE.Spec.Release.Version = "different-version"
 	reconciler, _ := testReconciler(t, root, conflictingE)
@@ -169,13 +168,13 @@ func TestDependencyPreflightUsesAuthoritativeReaderForConflicts(t *testing.T) {
 	ctx := context.Background()
 	e := dependencyPlanForTest("oneks-e", "chart-e", nil)
 	d := dependencyPlanForTest("oneks-d", "chart-d", []applicationv1.DependencyReference{dependencyReferenceForPlan(e)})
-	root := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(d)}, []applicationv1.DependencyPlan{d, e})
+	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(d)}, []applicationv1.DependencyPlan{d, e})
 	root.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	conflictingE := existingDependencyForTest(root, e)
 	conflictingE.Spec.Release.Version = "conflicting-version"
 	reconciler, _ := testReconciler(t, root)
 	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Scheme).WithObjects(
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: WorkloadNamespace}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "catalogue-workloads"}},
 		conflictingE,
 	).Build()
 
@@ -189,12 +188,12 @@ func TestDependencyPreflightUsesAuthoritativeReaderForConflicts(t *testing.T) {
 func TestDependencyPreflightReusesExactAuthoritativeObject(t *testing.T) {
 	ctx := context.Background()
 	plan := dependencyPlanForTest("existing-release", "existing-chart", nil)
-	root := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
+	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 	root.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	existing := existingDependencyForTest(root, plan)
 	reconciler, _ := testReconciler(t, root)
 	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Scheme).WithObjects(
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: WorkloadNamespace}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "catalogue-workloads"}},
 		existing,
 	).Build()
 
@@ -207,31 +206,9 @@ func TestDependencyPreflightReusesExactAuthoritativeObject(t *testing.T) {
 	}
 }
 
-func TestConfigMapOwnershipPreflightUsesAuthoritativeReader(t *testing.T) {
-	ctx := context.Background()
-	app := planV1Alpha1FixtureApplication(t)
-	resource := app.Spec.Resources[0]
-	unmanaged := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: resource.Namespace, Name: resource.Name}}
-	reconciler, _ := testReconciler(t, app)
-	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Scheme).WithObjects(
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: resource.Namespace}},
-		unmanaged,
-	).Build()
-
-	reconcileOnce(t, ctx, reconciler, app)
-	stored := getApplication(t, ctx, reconciler.Client, app)
-	if stored.Status.LastError == nil || stored.Status.LastError.Reason != "OwnershipConflict" {
-		t.Fatalf("authoritative unmanaged ConfigMap conflict was not detected: %#v", stored.Status)
-	}
-	if containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) {
-		t.Fatalf("ConfigMap conflict allowed finalizer progression: %#v", stored.Finalizers)
-	}
-	assertNotFound(t, ctx, reconciler.Client, helmChartObject(app.Spec.Release.ReleaseName))
-}
-
 func TestReconcileHelmChartUsesAuthoritativeExistingState(t *testing.T) {
 	ctx := context.Background()
-	app := planV1Alpha1FixtureApplication(t)
+	app := goldenApplication(t)
 	existing := desiredHelmChart(app)
 	existing.SetUID(types.UID("helm-uid"))
 	existing.SetResourceVersion("7")
@@ -249,7 +226,10 @@ func TestReconcileHelmChartUsesAuthoritativeExistingState(t *testing.T) {
 
 func TestDeletionUsesAuthoritativeHelmChartState(t *testing.T) {
 	ctx := context.Background()
-	app := planV1Alpha1FixtureApplication(t)
+	app := goldenApplication(t)
+	app.Spec.ManagedResources = nil
+	refreshDigest(t, app)
+	app.Labels = producerLabels(app)
 	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	now := metav1.Now()
 	app.DeletionTimestamp = &now
@@ -288,7 +268,7 @@ func TestDependencyPreflightRejectsIncompatibleExistingApplications(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
 			plan := dependencyPlanForTest("shared-release", "shared-chart", nil)
-			root := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
+			root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 			root.Finalizers = []string{applicationv1.ApplicationFinalizer}
 			existing := existingDependencyForTest(root, plan)
 			test.mutate(existing)
@@ -305,7 +285,7 @@ func TestDependencyPreflightRejectsIncompatibleExistingApplications(t *testing.T
 func TestDependencyCreateAlreadyExistsRaceRequeuesWithoutAssumingCompatibility(t *testing.T) {
 	ctx := context.Background()
 	plan := dependencyPlanForTest("raced-release", "raced-chart", nil)
-	root := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
+	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 	root.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	reconciler, _ := testReconciler(t, root)
 	reconciler.Client = &alreadyExistsDependencyClient{Client: reconciler.Client, name: plan.Name}
@@ -324,7 +304,7 @@ func TestDependencyCreateAlreadyExistsRaceRequeuesWithoutAssumingCompatibility(t
 func TestSharedDependencyIsReusedAndConflictingPlanFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	plan := dependencyPlanForTest("shared-release", "shared-chart", nil)
-	rootA := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
+	rootA := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 	rootA.Name = "root-a"
 	rootA.UID = "root-a-uid"
 	rootA.Finalizers = []string{applicationv1.ApplicationFinalizer}
@@ -361,7 +341,7 @@ func TestSharedDependencyIsReusedAndConflictingPlanFailsClosed(t *testing.T) {
 	conflictingPlan := plan
 	conflictingPlan.Release.ValuesContent = "mode: conflicting\n"
 	refreshDependencyPlanDigestForTest(rootA.Spec.ClusterID, &conflictingPlan)
-	rootC := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(conflictingPlan)}, []applicationv1.DependencyPlan{conflictingPlan})
+	rootC := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(conflictingPlan)}, []applicationv1.DependencyPlan{conflictingPlan})
 	rootC.Name = "root-c"
 	rootC.UID = "root-c-uid"
 	rootC.Finalizers = []string{applicationv1.ApplicationFinalizer}
@@ -397,7 +377,6 @@ func TestDependencyReadinessGatesOwnEffects(t *testing.T) {
 			ctx := context.Background()
 			plan := dependencyPlanForTest("oneks-e", "chart-e", nil)
 			consumer := dependencyConsumerForTest(t, "oneks-d", dependencyReferenceForPlan(plan))
-			addOwnConfigMapForTest(t, consumer)
 			consumer.Finalizers = []string{applicationv1.ApplicationFinalizer}
 			objects := []client.Object{consumer}
 			if test.dependency != nil {
@@ -416,9 +395,7 @@ func TestDependencyReadinessGatesOwnEffects(t *testing.T) {
 			}
 			helm := helmChartObject(consumer.Spec.Release.ReleaseName)
 			if test.wantOwnEffect {
-				resource := consumer.Spec.Resources[0]
-				assertExists(t, ctx, reconciler.Client, &corev1.ConfigMap{}, resource.Namespace, resource.Name)
-				assertNotFound(t, ctx, reconciler.Client, helm)
+				assertExists(t, ctx, reconciler.Client, helm, HelmChartNamespace, consumer.Spec.Release.ReleaseName)
 			} else {
 				assertOwnEffectsAbsent(t, ctx, reconciler.Client, consumer)
 			}
@@ -428,7 +405,7 @@ func TestDependencyReadinessGatesOwnEffects(t *testing.T) {
 
 func TestDependencyWithNoDirectDependenciesProceeds(t *testing.T) {
 	ctx := context.Background()
-	app := validPlanV1Alpha2Dependency(t)
+	app := validDependencyPlanApplication(t)
 	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	reconciler, _ := testReconciler(t, app)
 
@@ -442,7 +419,7 @@ func TestRootWaitsForDirectDependencyNotMerelyTransitiveDependency(t *testing.T)
 	ctx := context.Background()
 	e := dependencyPlanForTest("oneks-e", "chart-e", nil)
 	d := dependencyPlanForTest("oneks-d", "chart-d", []applicationv1.DependencyReference{dependencyReferenceForPlan(e)})
-	root := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(d)}, []applicationv1.DependencyPlan{d, e})
+	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(d)}, []applicationv1.DependencyPlan{d, e})
 	root.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	dependencyD := existingDependencyForTest(root, d)
 	dependencyD.Generation = 1
@@ -472,32 +449,28 @@ func TestRootWaitsForDirectDependencyNotMerelyTransitiveDependency(t *testing.T)
 	}
 }
 
-func TestDirectDependencyProgressTotalsPreserveV1Alpha1(t *testing.T) {
+func TestDirectDependencyProgressTotals(t *testing.T) {
 	e := dependencyPlanForTest("oneks-e", "chart-e", nil)
 	d := dependencyConsumerForTest(t, "oneks-d", dependencyReferenceForPlan(e))
-	root := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(e)}, []applicationv1.DependencyPlan{e})
-	v1 := planV1Alpha1FixtureApplication(t)
+	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(e)}, []applicationv1.DependencyPlan{e})
 	if got := applicationProgressTotal(root); got != 2 {
 		t.Fatalf("Root total = %d, want direct dependency + Helm = 2", got)
 	}
 	if got := applicationProgressTotal(d); got != 2 {
 		t.Fatalf("Dependency total = %d, want direct dependency + Helm = 2", got)
 	}
-	eApp := validPlanV1Alpha2Dependency(t)
+	eApp := validDependencyPlanApplication(t)
 	if got := applicationProgressTotal(eApp); got != 1 {
 		t.Fatalf("leaf total = %d, want Helm = 1", got)
-	}
-	if got, want := applicationProgressTotal(v1), int32(len(v1.Spec.Resources)+1); got != want {
-		t.Fatalf("plan-v1alpha1 total = %d, want legacy %d", got, want)
 	}
 }
 
 func TestObserveRootDoesNotMaterializeDependencies(t *testing.T) {
 	ctx := context.Background()
 	plan := dependencyPlanForTest("observe-dependency", "observe-chart", nil)
-	root := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
+	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 	root.Spec.ExecutionMode = applicationv1.ExecutionModeObserve
-	refreshPlanV1Alpha2TestDigest(root)
+	refreshPlanDigest(root)
 	root.Labels = producerLabels(root)
 	reconciler, _ := testReconciler(t, root)
 
@@ -514,7 +487,7 @@ func TestObserveRootDoesNotMaterializeDependencies(t *testing.T) {
 func TestDeletingRootNeverCreatesMissingDependency(t *testing.T) {
 	ctx := context.Background()
 	plan := dependencyPlanForTest("missing-dependency", "missing-chart", nil)
-	root := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
+	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 	root.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	now := metav1.Now()
 	root.DeletionTimestamp = &now
@@ -528,7 +501,7 @@ func TestDeletingOneOfTwoExecuteConsumersKeepsSharedDependency(t *testing.T) {
 	ctx := context.Background()
 	plan := dependencyPlanForTest("shared-gc", "shared-chart", nil)
 	rootA := deletingRootForTest(t, "root-a", plan)
-	rootB := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
+	rootB := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 	rootB.Name = "root-b"
 	rootB.UID = "root-b-uid"
 	dependency := existingDependencyForTest(rootA, plan)
@@ -626,11 +599,11 @@ func TestObserveConsumersDoNotProtectDependencyGC(t *testing.T) {
 	ctx := context.Background()
 	plan := dependencyPlanForTest("observe-consumer", "shared-chart", nil)
 	root := deletingRootForTest(t, "root", plan)
-	observer := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
+	observer := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 	observer.Name = "observer"
 	observer.UID = "observer-uid"
 	observer.Spec.ExecutionMode = applicationv1.ExecutionModeObserve
-	refreshPlanV1Alpha2TestDigest(observer)
+	refreshPlanDigest(observer)
 	observer.Labels = producerLabels(observer)
 	dependency := existingDependencyForTest(root, plan)
 	reconciler, _ := testReconciler(t, root, observer, dependency)
@@ -643,7 +616,7 @@ func TestAuthoritativeConsumerLookupProtectsAgainstCachedFalseZero(t *testing.T)
 	ctx := context.Background()
 	plan := dependencyPlanForTest("authoritative-consumer", "shared-chart", nil)
 	rootA := deletingRootForTest(t, "root-a", plan)
-	rootB := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
+	rootB := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 	rootB.Name = "root-b"
 	rootB.UID = "root-b-uid"
 	dependency := existingDependencyForTest(rootA, plan)
@@ -676,7 +649,7 @@ func TestDependencyGCReleasesOnlyDirectEdges(t *testing.T) {
 	ctx := context.Background()
 	e := dependencyPlanForTest("oneks-e-gc", "chart-e", nil)
 	d := dependencyPlanForTest("oneks-d-gc", "chart-d", []applicationv1.DependencyReference{dependencyReferenceForPlan(e)})
-	root := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(d)}, []applicationv1.DependencyPlan{d, e})
+	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(d)}, []applicationv1.DependencyPlan{d, e})
 	root.Name = "root"
 	root.UID = "root-uid"
 	root.Finalizers = []string{applicationv1.ApplicationFinalizer}
@@ -734,7 +707,7 @@ func TestTerminatingDependencyIsNeverReady(t *testing.T) {
 func TestRootWaitsForTerminatingDeterministicDependency(t *testing.T) {
 	ctx := context.Background()
 	plan := dependencyPlanForTest("terminating-preflight", "shared-chart", nil)
-	root := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
+	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 	root.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	dependency := existingDependencyForTest(root, plan)
 	now := metav1.Now()
@@ -752,7 +725,7 @@ func TestRootWaitsForTerminatingDeterministicDependency(t *testing.T) {
 func TestAuthoritativeTerminatingDependencyOverridesStaleCachedReady(t *testing.T) {
 	ctx := context.Background()
 	plan := dependencyPlanForTest("authoritative-terminating", "shared-chart", nil)
-	root := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
+	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 	root.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	staleReady := existingDependencyForTest(root, plan)
 	staleReady.Generation = 1
@@ -762,7 +735,7 @@ func TestAuthoritativeTerminatingDependencyOverridesStaleCachedReady(t *testing.
 	authoritativeTerminating.DeletionTimestamp = &now
 	reconciler, _ := testReconciler(t, root, staleReady)
 	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Scheme).WithObjects(
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: WorkloadNamespace}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "catalogue-workloads"}},
 		authoritativeTerminating,
 	).Build()
 
@@ -786,8 +759,8 @@ func TestDependencyEventMapsOnlyDirectConsumersThroughIndex(t *testing.T) {
 	}
 	e := dependencyPlanForTest("oneks-e", "chart-e", nil)
 	dPlan := dependencyPlanForTest("oneks-d", "chart-d", []applicationv1.DependencyReference{dependencyReferenceForPlan(e)})
-	d := expectedDependencyApplication(validPlanV1Alpha2Root(t), dPlan)
-	root := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(dPlan)}, []applicationv1.DependencyPlan{dPlan, e})
+	d := expectedDependencyApplication(validRootPlan(t), dPlan)
+	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(dPlan)}, []applicationv1.DependencyPlan{dPlan, e})
 	base := fake.NewClientBuilder().WithScheme(scheme).
 		WithIndex(&applicationv1.OneKSApplication{}, dependencyNameIndex, directDependencyNames).
 		WithObjects(d, root).Build()
@@ -819,11 +792,11 @@ func (c *alreadyExistsDependencyClient) Create(ctx context.Context, object clien
 
 func dependencyConsumerForTest(t *testing.T, releaseName string, dependency applicationv1.DependencyReference) *applicationv1.OneKSApplication {
 	t.Helper()
-	app := validPlanV1Alpha2Dependency(t)
+	app := validDependencyPlanApplication(t)
 	app.Name = dependencyApplicationName(releaseName)
 	app.Spec.Release.ReleaseName = releaseName
 	app.Spec.Dependencies = []applicationv1.DependencyReference{dependency}
-	refreshPlanV1Alpha2TestDigest(app)
+	refreshPlanDigest(app)
 	app.Labels = producerLabels(app)
 	return app
 }
@@ -836,7 +809,7 @@ func existingDependencyForTest(root *applicationv1.OneKSApplication, plan applic
 
 func deletingRootForTest(t *testing.T, name string, plan applicationv1.DependencyPlan) *applicationv1.OneKSApplication {
 	t.Helper()
-	root := validPlanV1Alpha2RootGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
+	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 	root.Name = name
 	root.UID = types.UID(name + "-uid")
 	root.Finalizers = []string{applicationv1.ApplicationFinalizer}
@@ -851,19 +824,6 @@ func assertDependencyTerminating(t *testing.T, ctx context.Context, kubeClient c
 	if dependency.DeletionTimestamp.IsZero() {
 		t.Fatalf("dependency %s is not terminating", name)
 	}
-}
-
-func addOwnConfigMapForTest(t *testing.T, app *applicationv1.OneKSApplication) {
-	t.Helper()
-	app.Spec.Release.TargetNamespace = WorkloadNamespace
-	app.Spec.Release.CreateNamespace = false
-	app.Spec.Resources = []applicationv1.ResourceSpec{{
-		ID: "own-config", APIVersion: "v1", Kind: "ConfigMap",
-		Namespace: WorkloadNamespace, Name: "own-config",
-		Data: map[string]string{"mode": "test"}, DeletionPolicy: applicationv1.DeletionPolicyDelete,
-	}}
-	refreshPlanV1Alpha2TestDigest(app)
-	app.Labels = producerLabels(app)
 }
 
 func setDependencyStatus(app *applicationv1.OneKSApplication, phase applicationv1.ApplicationPhase, ready bool, failureReason string) {

@@ -11,6 +11,7 @@ The chart requires the workload cluster identifier explicitly:
 ```console
 helm upgrade --install oneks-application-controller \
   oci-or-local/oneks-application-controller-X.Y.Z.tgz \
+  --namespace oneks-system --create-namespace \
   --set-string clusterID=<workload-cluster-id>
 ```
 
@@ -22,14 +23,14 @@ ConfigMap is replaced with the actual workload cluster ID.
 
 Before uninstalling the controller, delete every `OneKSApplication` in
 `oneks-system` and wait for its controller finalizer and managed children to be
-cleaned up. Both `oneks-system` and `oneks-poc-workloads` carry Helm's `keep`
-resource policy, so Helm uninstall cannot remove them and strand application
-finalizers. After successful application cleanup, an operator may remove the
-kept namespaces explicitly if nothing else uses them.
+cleaned up. Helm owns creation of the `oneks-system` release namespace through
+`--create-namespace`; the chart itself renders no Namespace objects. After
+successful application cleanup, an operator may remove the controller namespace
+explicitly if nothing else uses it.
 
 If controller removal or an upgrade is interrupted while application roots
-remain, reinstall or roll back the chart with the same `clusterID`. The kept
-namespaces and CRD preserve the roots so the controller can resume
+remain, reinstall or roll back the chart with the same `clusterID`. The CRD
+preserves the roots so the controller can resume
 ownership-checked reconciliation and finalizer cleanup.
 
 ## Protected input handoff
@@ -41,10 +42,6 @@ creates any child, the controller acquires its cleanup finalizer, validates the
 Secret type, immutability, exact input keys and correlation labels, and stores
 the observed UID in `status.secretInputUID`. Every later read and deletion is
 guarded by that UID, so a replacement Secret is never consumed or deleted.
-
-`plan-v1alpha4` remains readable for existing applications and continues to
-require the UID in `spec.secretInputRef.uid`. New protected plans should use
-v1alpha5.
 
 Repository targets:
 
