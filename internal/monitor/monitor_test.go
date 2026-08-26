@@ -126,21 +126,31 @@ func TestPendingCallbackIdentitiesAreGloballyBounded(t *testing.T) {
 	}
 }
 
-func TestReadyProviderIDs(t *testing.T) {
+func TestInitialNodeSynchronizationQueuesOneReportPerNode(t *testing.T) {
 	nodes := cache.NewSharedIndexInformer(&cache.ListWatch{}, &corev1.Node{}, 0, cache.Indexers{})
-	m := &Monitor{nodes: nodes}
+	queue := newReportQueue(&recordingSender{})
+	defer queue.queue.ShutDown()
+	m := &Monitor{nodes: nodes, reports: queue}
 	for _, node := range []*corev1.Node{
 		{ObjectMeta: metav1.ObjectMeta{Name: "node-2"}, Spec: corev1.NodeSpec{ProviderID: "one://2"}, Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}}},
-		{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}, Spec: corev1.NodeSpec{ProviderID: "one://1"}, Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}}},
-		{ObjectMeta: metav1.ObjectMeta{Name: "node-3"}, Spec: corev1.NodeSpec{ProviderID: "one://3"}, Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionFalse}}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}, Spec: corev1.NodeSpec{ProviderID: "one://1"}, Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionFalse}}}},
 	} {
 		if err := nodes.GetStore().Add(node); err != nil {
 			t.Fatalf("add node: %v", err)
 		}
 	}
 
-	got := m.readyProviderIDs("one://2")
-	if len(got) != 1 || got[0] != "one://1" {
-		t.Fatalf("unexpected ready provider IDs: %#v", got)
+	m.enqueueInitialNodes()
+	if len(queue.pending) != 2 {
+		t.Fatalf("expected one report per Node, got %#v", queue.pending)
+	}
+	if queue.pending["Node/node-1"].Status["ready"] != false ||
+		queue.pending["Node/node-2"].Status["ready"] != true {
+		t.Fatalf("initial reports do not contain independent readiness: %#v", queue.pending)
+	}
+	for _, report := range queue.pending {
+		if _, exists := report.Status["readyProviderIDs"]; exists {
+			t.Fatalf("initial report contains readiness snapshot: %#v", report.Status)
+		}
 	}
 }

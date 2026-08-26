@@ -18,33 +18,44 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-func TestNodeReportReady(t *testing.T) {
-	node := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: "worker-1", ResourceVersion: "12"},
-		Spec:       corev1.NodeSpec{ProviderID: "one://317"},
-		Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{
-			Type: corev1.NodeReady, Status: corev1.ConditionTrue, Reason: "KubeletReady",
-		}}},
+func TestNodeReportProjectsOnlyNodeReadiness(t *testing.T) {
+	tests := []struct {
+		name      string
+		condition *corev1.NodeCondition
+		event     string
+		wantReady bool
+	}{
+		{name: "ready", condition: &corev1.NodeCondition{Type: corev1.NodeReady, Status: corev1.ConditionTrue}, event: "Updated", wantReady: true},
+		{name: "not ready", condition: &corev1.NodeCondition{Type: corev1.NodeReady, Status: corev1.ConditionFalse}, event: "Updated"},
+		{name: "unknown", condition: &corev1.NodeCondition{Type: corev1.NodeReady, Status: corev1.ConditionUnknown}, event: "Updated"},
+		{name: "condition missing", event: "Updated"},
+		{name: "deleted ready node", condition: &corev1.NodeCondition{Type: corev1.NodeReady, Status: corev1.ConditionTrue}, event: "Deleted"},
 	}
-	report := nodeReport(node, "Updated")
-	if report.Status["state"] != "ready" {
-		t.Fatalf("expected ready node, got %#v", report.Status)
-	}
-	if report.Status["providerID"] != "one://317" {
-		t.Fatalf("expected providerID, got %#v", report.Status)
-	}
-}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			node := &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{Name: "worker-1", UID: "node-uid", ResourceVersion: "12"},
+				Spec:       corev1.NodeSpec{ProviderID: "one://317"},
+			}
+			if test.condition != nil {
+				node.Status.Conditions = []corev1.NodeCondition{*test.condition}
+			}
 
-func TestNodeReportWarning(t *testing.T) {
-	node := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: "worker-1"},
-		Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{
-			Type: corev1.NodeReady, Status: corev1.ConditionFalse,
-		}}},
-	}
-	report := nodeReport(node, "Updated")
-	if report.Status["state"] != "warning" {
-		t.Fatalf("expected warning node, got %#v", report.Status)
+			report := nodeReport(node, test.event)
+			if report.Kind != "Node" || report.Name != "worker-1" || report.UID != "node-uid" ||
+				report.ResourceVersion != "12" || report.Event != test.event {
+				t.Fatalf("unexpected Node identity: %#v", report)
+			}
+			if report.Status["providerID"] != "one://317" || report.Status["ready"] != test.wantReady {
+				t.Fatalf("unexpected Node status: %#v", report.Status)
+			}
+			if _, exists := report.Status["readyProviderIDs"]; exists {
+				t.Fatalf("Node report contains readiness snapshot: %#v", report.Status)
+			}
+			if _, exists := report.Status["state"]; exists {
+				t.Fatalf("Node report contains legacy state: %#v", report.Status)
+			}
+		})
 	}
 }
 

@@ -75,17 +75,16 @@ The endpoint must accept a JSON `POST`. A typical Node update is:
   "resourceVersion": "23852",
   "event": "Updated",
   "status": {
-    "state": "warning",
     "providerID": "one://317",
-    "readyProviderIDs": ["one://301", "one://317"]
+    "ready": false
   }
 }
 ```
 
-`readyProviderIDs` is the monitor's current in-memory snapshot of every
-Kubernetes Node with `Ready=True`. OneKS uses the snapshot to move a fully
-ready group to `RUNNING`, to move it to `WARNING` when a Node loses readiness,
-and to return it to `RUNNING` after recovery.
+Each report contains only the readiness of the Node that generated the event.
+OneKS stores that observation for the corresponding VM and then evaluates all
+current VMs in its NodeGroup. A group can be `RUNNING` only after every current
+VM has been observed and every corresponding Kubernetes Node is Ready.
 
 OneKSApplication reports contain immutable correlation fields from the root CR
 and its complete status projection:
@@ -146,4 +145,11 @@ list, so current state is reported again.
 
 Failed HTTP requests remain in a rate-limited queue until delivery succeeds.
 A later event for the same resource replaces its queued report with the newest
-state. A single worker processes reports serially.
+state. Node reports are keyed as `Node/<node-name>`, and a single worker
+processes reports serially. OneKS compares `resourceVersion` only with the
+previous observation for the same VM, so duplicate or stale reports cannot
+replace a newer state.
+
+Without a cluster-wide readiness snapshot, an event for one Node cannot repair
+a missed observation for another Node. A later event for the affected Node, an
+informer relist, or a monitor restart reports its current state again.

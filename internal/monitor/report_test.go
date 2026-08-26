@@ -28,8 +28,7 @@ func TestExistingNodeReportJSONIsStable(t *testing.T) {
 		Kind: "Node", Name: "worker-1", UID: "node-uid",
 		ResourceVersion: "42", Event: "Updated",
 		Status: map[string]any{
-			"state": "ready", "providerID": "one://317",
-			"readyProviderIDs": []string{"one://317"},
+			"providerID": "one://317", "ready": true,
 		},
 	}
 
@@ -37,7 +36,7 @@ func TestExistingNodeReportJSONIsStable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal report: %v", err)
 	}
-	want := `{"kind":"Node","name":"worker-1","uid":"node-uid","resourceVersion":"42","event":"Updated","status":{"providerID":"one://317","readyProviderIDs":["one://317"],"state":"ready"}}`
+	want := `{"kind":"Node","name":"worker-1","uid":"node-uid","resourceVersion":"42","event":"Updated","status":{"providerID":"one://317","ready":true}}`
 	if string(body) != want {
 		t.Fatalf("Node callback changed:\n got: %s\nwant: %s", body, want)
 	}

@@ -13,7 +13,6 @@ package monitor
 import (
 	"context"
 	"fmt"
-	"sort"
 	"sync/atomic"
 
 	corev1 "k8s.io/api/core/v1"
@@ -78,7 +77,7 @@ func (m *Monitor) Run(ctx context.Context) error {
 	if !cache.WaitForCacheSync(ctx.Done(), m.nodes.HasSynced, m.applications.HasSynced) {
 		return fmt.Errorf("initial informer cache sync failed")
 	}
-	m.enqueueNodeSnapshot()
+	m.enqueueInitialNodes()
 	m.ready.Store(true)
 	defer m.ready.Store(false)
 	klog.InfoS("monitor caches synchronized")
@@ -94,39 +93,12 @@ func (m *Monitor) onNode(obj any, event string) {
 	if !ok {
 		return
 	}
-	exclude := ""
-	report := nodeReport(node, event)
-	if event == "Deleted" {
-		report.Status["deleted"] = true
-		exclude = node.Spec.ProviderID
-	}
-	report.Status["readyProviderIDs"] = m.readyProviderIDs(exclude)
-	m.reports.Add("Node/"+node.Name, report)
+	m.reports.Add("Node/"+node.Name, nodeReport(node, event))
 }
 
-func (m *Monitor) readyProviderIDs(exclude string) []string {
-	providerIDs := make([]string, 0)
+func (m *Monitor) enqueueInitialNodes() {
 	for _, item := range m.nodes.GetStore().List() {
-		node, ok := item.(*corev1.Node)
-		if !ok || node.Spec.ProviderID == "" || node.Spec.ProviderID == exclude || !nodeReady(node) {
-			continue
-		}
-		providerIDs = append(providerIDs, node.Spec.ProviderID)
-	}
-	sort.Strings(providerIDs)
-	return providerIDs
-}
-
-func (m *Monitor) enqueueNodeSnapshot() {
-	readyProviderIDs := m.readyProviderIDs("")
-	for _, item := range m.nodes.GetStore().List() {
-		node, ok := item.(*corev1.Node)
-		if !ok {
-			continue
-		}
-		report := nodeReport(node, "Updated")
-		report.Status["readyProviderIDs"] = readyProviderIDs
-		m.reports.Add("Node/"+node.Name, report)
+		m.onNode(item, "Updated")
 	}
 }
 

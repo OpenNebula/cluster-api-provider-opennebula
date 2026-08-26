@@ -16,14 +16,14 @@ import (
 )
 
 func nodeReport(node *corev1.Node, event string) Report {
-	state := "warning"
-	if nodeReady(node) {
-		state = "ready"
+	ready := nodeReady(node)
+	if event == "Deleted" {
+		ready = false
 	}
 	return Report{
 		Kind: "Node", Name: node.Name,
 		UID: string(node.UID), ResourceVersion: node.ResourceVersion, Event: event,
-		Status: map[string]any{"state": state, "providerID": node.Spec.ProviderID},
+		Status: map[string]any{"providerID": node.Spec.ProviderID, "ready": ready},
 	}
 }
 
