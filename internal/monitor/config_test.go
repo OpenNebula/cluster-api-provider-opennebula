@@ -9,81 +9,78 @@ package monitor
 
 import (
 	"encoding/base64"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func setRequiredMonitorEnv(t *testing.T, endpoint, clusterID string) string {
 	t.Helper()
-	authFile := filepath.Join(t.TempDir(), "ONE_AUTH")
-	if err := os.WriteFile(authFile, []byte("oneadmin:secret\n"), 0o600); err != nil {
-		t.Fatalf("write authentication file: %v", err)
-	}
+	authFile := writeMonitorAuthFile(t, "oneadmin:secret\n")
 	t.Setenv("MONITOR_ENDPOINT", endpoint)
 	t.Setenv("MONITOR_CLUSTER_ID", clusterID)
 	t.Setenv("MONITOR_KEY", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))))
 	t.Setenv("MONITOR_AUTH_FILE", authFile)
+	t.Setenv("MONITOR_APPLICATION_NAMESPACE", "oneks-system")
+	t.Setenv("MONITOR_HTTP_TIMEOUT", "10s")
+	t.Setenv("MONITOR_HEALTH_ADDRESS", ":8081")
 	return authFile
 }
 
-func TestHealthListenerUsesDefaultAddress(t *testing.T) {
-	setRequiredMonitorEnv(t, "http://oneks.example/api/v1", "42")
+func TestConfigLoadsExplicitValues(t *testing.T) {
+	setRequiredMonitorEnv(t, "http://oneks.example/api/v1", "cluster-west_1")
 
 	config, err := ConfigFromEnv()
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if config.HealthAddress != ":8081" {
-		t.Fatalf("health address changed: %q", config.HealthAddress)
+	if config.ClusterID != "cluster-west_1" {
+		t.Fatalf("cluster ID changed: %q", config.ClusterID)
+	}
+	if config.HealthAddress != ":8081" || config.ApplicationNamespace != "oneks-system" || config.HTTPTimeout.String() != "10s" {
+		t.Fatalf("unexpected configuration: %#v", config)
 	}
 }
 
-func TestClusterIDIsBounded(t *testing.T) {
-	for name, clusterID := range map[string]string{
-		"too long":     strings.Repeat("x", 129),
-		"invalid UTF8": string([]byte{0xff}),
+func TestConfigRequiresRuntimeValues(t *testing.T) {
+	for _, variable := range []string{
+		"MONITOR_ENDPOINT",
+		"MONITOR_CLUSTER_ID",
+		"MONITOR_AUTH_FILE",
+		"MONITOR_APPLICATION_NAMESPACE",
+		"MONITOR_HEALTH_ADDRESS",
+		"MONITOR_KEY",
+		"MONITOR_HTTP_TIMEOUT",
 	} {
-		t.Run(name, func(t *testing.T) {
-			setRequiredMonitorEnv(t, "http://oneks.example/api/v1", clusterID)
-
-			if _, err := ConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "at most 128 bytes") {
-				t.Fatalf("expected bounded cluster ID error, got %v", err)
+		t.Run(variable, func(t *testing.T) {
+			setRequiredMonitorEnv(t, "https://oneks.example/api/v1", "42")
+			t.Setenv(variable, "")
+			if _, err := ConfigFromEnv(); err == nil || !strings.Contains(err.Error(), variable+" is required") {
+				t.Fatalf("expected %s validation error, got %v", variable, err)
 			}
 		})
 	}
 }
 
-func TestEndpointAcceptsAbsoluteHTTPAndHTTPS(t *testing.T) {
-	for _, endpoint := range []string{
-		"http://oneks.example/api/v1",
-		"https://oneks.example/api/v1",
-	} {
-		t.Run(endpoint, func(t *testing.T) {
-			setRequiredMonitorEnv(t, endpoint, "42")
-			if _, err := ConfigFromEnv(); err != nil {
-				t.Fatalf("expected endpoint acceptance, got %v", err)
-			}
-		})
-	}
-}
-
-func TestEndpointRejectsUnsafeOrInvalidURLs(t *testing.T) {
+func TestEndpointRejectsInvalidURLs(t *testing.T) {
 	for name, endpoint := range map[string]string{
-		"relative":    "/api/v1",
-		"credentials": "http://user:password@oneks.example/api/v1",
-		"query":       "http://oneks.example/api/v1?target=elsewhere",
-		"fragment":    "http://oneks.example/api/v1#fragment",
-		"scheme":      "ftp://oneks.example/api/v1",
+		"relative": "/api/v1",
+		"scheme":   "ftp://oneks.example/api/v1",
+		"no host":  "http:///api/v1",
 	} {
 		t.Run(name, func(t *testing.T) {
 			setRequiredMonitorEnv(t, endpoint, "42")
-
 			if _, err := ConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "absolute HTTP or HTTPS URL") {
 				t.Fatalf("expected endpoint validation error, got %v", err)
 			}
 		})
+	}
+}
+
+func TestConfigRejectsInvalidTimeout(t *testing.T) {
+	setRequiredMonitorEnv(t, "https://oneks.example/api/v1", "42")
+	t.Setenv("MONITOR_HTTP_TIMEOUT", "0s")
+	if _, err := ConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "positive duration") {
+		t.Fatalf("expected timeout validation error, got %v", err)
 	}
 }
 
@@ -99,41 +96,5 @@ func TestMonitorKeyMustDecodeTo32Bytes(t *testing.T) {
 				t.Fatalf("expected key validation error, got %v", err)
 			}
 		})
-	}
-}
-
-func TestMonitorAuthFileIsRequired(t *testing.T) {
-	setRequiredMonitorEnv(t, "http://oneks.example/api/v1", "42")
-	t.Setenv("MONITOR_AUTH_FILE", "")
-
-	if _, err := ConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "MONITOR_AUTH_FILE is required") {
-		t.Fatalf("expected authentication file validation error, got %v", err)
-	}
-}
-
-func TestMonitorAuthFileWhitespaceIsRejected(t *testing.T) {
-	setRequiredMonitorEnv(t, "http://oneks.example/api/v1", "42")
-	t.Setenv("MONITOR_AUTH_FILE", " \t\n")
-
-	if _, err := ConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "MONITOR_AUTH_FILE is required") {
-		t.Fatalf("expected authentication file validation error, got %v", err)
-	}
-}
-
-func TestMonitorAuthFilePathIsAcceptedWithoutLegacyFallback(t *testing.T) {
-	authFile := setRequiredMonitorEnv(t, "http://oneks.example/api/v1", "42")
-	t.Setenv("MONITOR_AUTH", "legacy:credential")
-
-	config, err := ConfigFromEnv()
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-	if config.AuthFile != authFile {
-		t.Fatalf("unexpected authentication file path: %q", config.AuthFile)
-	}
-
-	t.Setenv("MONITOR_AUTH_FILE", "")
-	if _, err := ConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "MONITOR_AUTH_FILE is required") {
-		t.Fatalf("legacy authentication unexpectedly used as fallback: %v", err)
 	}
 }

@@ -45,8 +45,7 @@ type Monitor struct {
 
 func New(config Config, client kubernetes.Interface, dynamicClient dynamic.Interface, sender Sender) (*Monitor, error) {
 	m := &Monitor{reports: newReportQueue(sender)}
-	// A zero resync period keeps reconciliation strictly event-driven. Watch
-	// reconnects still relist objects, and initial cache sync emits snapshots.
+	// Disable periodic resync; reconciliation is driven by informer events.
 	m.nodeFactory = informers.NewSharedInformerFactory(client, 0)
 	m.applicationFactory = dynamicinformer.NewFilteredDynamicSharedInformerFactory(
 		dynamicClient, 0, config.ApplicationNamespace,
@@ -58,14 +57,14 @@ func New(config Config, client kubernetes.Interface, dynamicClient dynamic.Inter
 	if _, err := m.nodes.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj any) { m.onNode(obj, "Added") },
 		UpdateFunc: func(_, obj any) { m.onNode(obj, "Updated") },
-		DeleteFunc: func(obj any) { m.onNodeDeleted(obj) },
+		DeleteFunc: func(obj any) { m.onNode(obj, "Deleted") },
 	}); err != nil {
 		return nil, fmt.Errorf("register node handler: %w", err)
 	}
 	if _, err := m.applications.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj any) { m.onApplication(obj, "Added") },
 		UpdateFunc: func(_, obj any) { m.onApplication(obj, "Updated") },
-		DeleteFunc: m.onApplicationDeleted,
+		DeleteFunc: func(obj any) { m.onApplication(obj, "Deleted") },
 	}); err != nil {
 		return nil, fmt.Errorf("register OneKSApplication handler: %w", err)
 	}
@@ -91,23 +90,17 @@ func (m *Monitor) Run(ctx context.Context) error {
 func (m *Monitor) Ready() bool { return m.ready.Load() }
 
 func (m *Monitor) onNode(obj any, event string) {
-	node, ok := obj.(*corev1.Node)
+	node, ok := objectFromEvent[*corev1.Node](obj)
 	if !ok {
 		return
 	}
+	exclude := ""
 	report := nodeReport(node, event)
-	report.Status["readyProviderIDs"] = m.readyProviderIDs("")
-	m.reports.Add("Node/"+node.Name, report)
-}
-
-func (m *Monitor) onNodeDeleted(obj any) {
-	node, ok := deletedObject[*corev1.Node](obj)
-	if !ok {
-		return
+	if event == "Deleted" {
+		report.Status["deleted"] = true
+		exclude = node.Spec.ProviderID
 	}
-	report := nodeReport(node, "Deleted")
-	report.Status["deleted"] = true
-	report.Status["readyProviderIDs"] = m.readyProviderIDs(node.Spec.ProviderID)
+	report.Status["readyProviderIDs"] = m.readyProviderIDs(exclude)
 	m.reports.Add("Node/"+node.Name, report)
 }
 
@@ -138,22 +131,14 @@ func (m *Monitor) enqueueNodeSnapshot() {
 }
 
 func (m *Monitor) onApplication(obj any, event string) {
-	app, ok := obj.(*unstructured.Unstructured)
+	app, ok := objectFromEvent[*unstructured.Unstructured](obj)
 	if !ok {
 		return
 	}
 	m.reports.Add("OneKSApplication/"+app.GetNamespace()+"/"+app.GetName(), applicationReport(app, event))
 }
 
-func (m *Monitor) onApplicationDeleted(obj any) {
-	app, ok := deletedObject[*unstructured.Unstructured](obj)
-	if !ok {
-		return
-	}
-	m.reports.Add("OneKSApplication/"+app.GetNamespace()+"/"+app.GetName(), applicationReport(app, "Deleted"))
-}
-
-func deletedObject[T any](obj any) (T, bool) {
+func objectFromEvent[T any](obj any) (T, bool) {
 	if value, ok := obj.(T); ok {
 		return value, true
 	}

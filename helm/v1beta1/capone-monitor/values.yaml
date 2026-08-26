@@ -12,3 +12,4 @@ monitor:
   authSecretKey: ONE_AUTH
   applicationNamespace: oneks-system
   httpTimeout: 10s
+  healthAddress: ":8081"

@@ -30,6 +30,25 @@ import (
 
 const monitorAuthMountPath = "/var/run/secrets/oneks-monitor"
 
+func TestMonitorHelmConfigRequiresRuntimeValues(t *testing.T) {
+	template, err := os.ReadFile("../../helm/v1beta1/capone-monitor/templates/configmap.yaml")
+	if err != nil {
+		t.Fatalf("read monitor ConfigMap template: %v", err)
+	}
+	text := string(template)
+	for _, required := range []string{
+		`required "monitor.endpoint is required" .Values.monitor.endpoint`,
+		`required "monitor.clusterID is required" .Values.monitor.clusterID`,
+		`required "monitor.applicationNamespace is required" .Values.monitor.applicationNamespace`,
+		`required "monitor.httpTimeout is required" .Values.monitor.httpTimeout`,
+		`required "monitor.healthAddress is required" .Values.monitor.healthAddress`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("monitor ConfigMap template does not contain %q", required)
+		}
+	}
+}
+
 func TestMonitorHelmValuesAndTemplateConfigureAuthenticationProjection(t *testing.T) {
 	values, err := os.ReadFile("../../helm/v1beta1/capone-monitor/values.yaml")
 	if err != nil {

@@ -6,5 +6,6 @@ metadata:
 data:
   MONITOR_ENDPOINT: {{ required "monitor.endpoint is required" .Values.monitor.endpoint | quote }}
   MONITOR_CLUSTER_ID: {{ required "monitor.clusterID is required" .Values.monitor.clusterID | quote }}
-  MONITOR_APPLICATION_NAMESPACE: {{ .Values.monitor.applicationNamespace | quote }}
-  MONITOR_HTTP_TIMEOUT: {{ .Values.monitor.httpTimeout | quote }}
+  MONITOR_APPLICATION_NAMESPACE: {{ required "monitor.applicationNamespace is required" .Values.monitor.applicationNamespace | quote }}
+  MONITOR_HTTP_TIMEOUT: {{ required "monitor.httpTimeout is required" .Values.monitor.httpTimeout | quote }}
+  MONITOR_HEALTH_ADDRESS: {{ required "monitor.healthAddress is required" .Values.monitor.healthAddress | quote }}
