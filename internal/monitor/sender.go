@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 )
 
@@ -35,14 +36,8 @@ type Report struct {
 	Status          map[string]any `json:"status,omitempty"`
 }
 
-func (Report) CallbackKind() string { return "resource-status" }
-
-type CallbackPayload interface {
-	CallbackKind() string
-}
-
 type Sender interface {
-	Send(context.Context, CallbackPayload) error
+	Send(context.Context, Report) error
 }
 
 type encryptedEnvelope struct {
@@ -51,21 +46,16 @@ type encryptedEnvelope struct {
 
 type HTTPEncryptedSender struct {
 	endpoint string
-	auth     AuthProvider
+	authFile string
 	aead     cipher.AEAD
 	random   io.Reader
 	client   *http.Client
 }
 
 func NewHTTPEncryptedSender(config Config) (*HTTPEncryptedSender, error) {
-	auth, err := newFileAuthProvider(config.AuthFile)
-	if err != nil {
+	if _, err := readCredential(config.AuthFile); err != nil {
 		return nil, fmt.Errorf("configure monitor authentication: %w", err)
 	}
-	return newHTTPEncryptedSender(config, auth)
-}
-
-func newHTTPEncryptedSender(config Config, auth AuthProvider) (*HTTPEncryptedSender, error) {
 	block, err := aes.NewCipher(config.Key)
 	if err != nil {
 		return nil, fmt.Errorf("create AES cipher: %w", err)
@@ -77,9 +67,9 @@ func newHTTPEncryptedSender(config Config, auth AuthProvider) (*HTTPEncryptedSen
 	return &HTTPEncryptedSender{
 		endpoint: strings.TrimRight(config.Endpoint, "/") + "/clusters/" +
 			url.PathEscape(config.ClusterID) + "/status",
-		auth:   auth,
-		aead:   aead,
-		random: rand.Reader,
+		authFile: config.AuthFile,
+		aead:     aead,
+		random:   rand.Reader,
 		client: &http.Client{
 			Timeout: config.HTTPTimeout,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
@@ -89,8 +79,8 @@ func newHTTPEncryptedSender(config Config, auth AuthProvider) (*HTTPEncryptedSen
 	}, nil
 }
 
-func (s *HTTPEncryptedSender) Send(ctx context.Context, payload CallbackPayload) error {
-	credential, err := s.auth.Auth(ctx)
+func (s *HTTPEncryptedSender) Send(ctx context.Context, report Report) error {
+	credential, err := readCredential(s.authFile)
 	if err != nil {
 		return fmt.Errorf("resolve monitor authentication: %w", err)
 	}
@@ -98,7 +88,7 @@ func (s *HTTPEncryptedSender) Send(ctx context.Context, payload CallbackPayload)
 	if !ok || user == "" || password == "" {
 		return fmt.Errorf("monitor authentication credential must have the form username:password-or-token")
 	}
-	plaintext, err := json.Marshal(payload)
+	plaintext, err := json.Marshal(report)
 	if err != nil {
 		return fmt.Errorf("encode report: %w", err)
 	}
@@ -133,4 +123,16 @@ func (s *HTTPEncryptedSender) Send(ctx context.Context, payload CallbackPayload)
 		return fmt.Errorf("endpoint returned %s: %s", resp.Status, string(message))
 	}
 	return nil
+}
+
+func readCredential(path string) (string, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read monitor authentication file: %w", err)
+	}
+	credential := strings.TrimSpace(string(contents))
+	if credential == "" {
+		return "", fmt.Errorf("monitor authentication file is empty")
+	}
+	return credential, nil
 }

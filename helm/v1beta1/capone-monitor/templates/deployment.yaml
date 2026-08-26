@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: capone-cluster-monitor
-  namespace: kube-system
+  namespace: {{ .Release.Namespace | quote }}
   labels:
     app.kubernetes.io/name: capone-cluster-monitor
 spec:
@@ -22,7 +22,8 @@ spec:
           type: RuntimeDefault
       containers:
       - name: monitor
-        image: monitor:latest
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
         envFrom:
         - configMapRef:
             name: capone-cluster-monitor
@@ -38,8 +39,6 @@ spec:
         ports:
         - name: health
           containerPort: 8081
-        - name: metrics
-          containerPort: 8082
         readinessProbe:
           httpGet:
             path: /readyz
@@ -65,8 +64,8 @@ spec:
       volumes:
       - name: monitor-auth
         secret:
-          secretName: cloud-config
+          secretName: {{ required "monitor.authSecretName is required" .Values.monitor.authSecretName | quote }}
           items:
-          - key: ONE_AUTH
+          - key: {{ required "monitor.authSecretKey is required" .Values.monitor.authSecretKey | quote }}
             path: ONE_AUTH
       terminationGracePeriodSeconds: 30

@@ -12,8 +12,3 @@ monitor:
   authSecretKey: ONE_AUTH
   applicationNamespace: oneks-system
   httpTimeout: 10s
-  prometheusNamespaces: []
-
-metrics:
-  enabled: false
-  address: :8082

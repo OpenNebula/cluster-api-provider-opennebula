@@ -10,8 +10,6 @@ RUN go mod download
 
 COPY cmd/monitor/ cmd/monitor/
 COPY internal/monitor/ internal/monitor/
-COPY internal/monitoring/ internal/monitoring/
-COPY internal/readiness/ internal/readiness/
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o monitor ./cmd/monitor
 
 FROM gcr.io/distroless/static:nonroot

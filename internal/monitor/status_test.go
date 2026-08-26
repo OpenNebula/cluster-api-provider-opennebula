@@ -26,7 +26,7 @@ func TestNodeReportReady(t *testing.T) {
 			Type: corev1.NodeReady, Status: corev1.ConditionTrue, Reason: "KubeletReady",
 		}}},
 	}
-	report := nodeReport(Config{}, node, "Updated")
+	report := nodeReport(node, "Updated")
 	if report.Status["state"] != "ready" {
 		t.Fatalf("expected ready node, got %#v", report.Status)
 	}
@@ -42,7 +42,7 @@ func TestNodeReportWarning(t *testing.T) {
 			Type: corev1.NodeReady, Status: corev1.ConditionFalse,
 		}}},
 	}
-	report := nodeReport(Config{}, node, "Updated")
+	report := nodeReport(node, "Updated")
 	if report.Status["state"] != "warning" {
 		t.Fatalf("expected warning node, got %#v", report.Status)
 	}

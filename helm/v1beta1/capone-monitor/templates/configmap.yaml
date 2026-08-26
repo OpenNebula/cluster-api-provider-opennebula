@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: capone-cluster-monitor
+  namespace: {{ .Release.Namespace | quote }}
+data:
+  MONITOR_ENDPOINT: {{ required "monitor.endpoint is required" .Values.monitor.endpoint | quote }}
+  MONITOR_CLUSTER_ID: {{ required "monitor.clusterID is required" .Values.monitor.clusterID | quote }}
+  MONITOR_APPLICATION_NAMESPACE: {{ .Values.monitor.applicationNamespace | quote }}
+  MONITOR_HTTP_TIMEOUT: {{ .Values.monitor.httpTimeout | quote }}

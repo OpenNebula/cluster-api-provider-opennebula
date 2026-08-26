@@ -15,7 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-func nodeReport(config Config, node *corev1.Node, event string) Report {
+func nodeReport(node *corev1.Node, event string) Report {
 	state := "warning"
 	if nodeReady(node) {
 		state = "ready"

@@ -30,17 +30,7 @@ import (
 
 const monitorAuthMountPath = "/var/run/secrets/oneks-monitor"
 
-func TestMonitorDeploymentProjectsOnlyAuthenticationSecretKey(t *testing.T) {
-	var deployment appsv1.Deployment
-	readMonitorYAML(t, "../../kustomize/v1beta1/monitor/deployment.yaml", &deployment)
-	if len(deployment.Spec.Template.Spec.Containers) != 1 {
-		t.Fatalf("monitor Deployment has %d containers", len(deployment.Spec.Template.Spec.Containers))
-	}
-	assertMonitorAuthProjection(t, deployment.Spec.Template.Spec.Containers[0],
-		deployment.Spec.Template.Spec.Volumes, "cloud-config", "ONE_AUTH")
-}
-
-func TestMonitorHelmValuesAndOverlayConfigureAuthenticationProjection(t *testing.T) {
+func TestMonitorHelmValuesAndTemplateConfigureAuthenticationProjection(t *testing.T) {
 	values, err := os.ReadFile("../../helm/v1beta1/capone-monitor/values.yaml")
 	if err != nil {
 		t.Fatalf("read monitor Helm values: %v", err)
@@ -57,23 +47,21 @@ func TestMonitorHelmValuesAndOverlayConfigureAuthenticationProjection(t *testing
 		t.Fatalf("unexpected authentication Helm values: %#v", monitorValues)
 	}
 
-	overlay, err := os.ReadFile("../../kustomize/v1beta1/monitor-helm/kustomization.yaml")
+	template, err := os.ReadFile("../../helm/v1beta1/capone-monitor/templates/deployment.yaml")
 	if err != nil {
-		t.Fatalf("read monitor Helm overlay: %v", err)
+		t.Fatalf("read monitor Deployment template: %v", err)
 	}
-	text := string(overlay)
+	text := string(template)
 	for _, required := range []string{
 		`required "monitor.authSecretName is required" .Values.monitor.authSecretName`,
 		`required "monitor.authSecretKey is required" .Values.monitor.authSecretKey`,
-		`/spec/template/spec/volumes/0/secret/secretName`,
-		`/spec/template/spec/volumes/0/secret/items/0/key`,
 	} {
 		if !strings.Contains(text, required) {
-			t.Fatalf("monitor Helm overlay does not contain %q", required)
+			t.Fatalf("monitor Deployment template does not contain %q", required)
 		}
 	}
 	if strings.Contains(text, "secretKeyRef") || strings.Contains(text, "name: MONITOR_AUTH\n") {
-		t.Fatal("monitor Helm overlay injects authentication through an environment Secret reference")
+		t.Fatal("monitor Deployment injects authentication through an environment Secret reference")
 	}
 }
 
@@ -83,13 +71,12 @@ func TestGeneratedMonitorChartRendersSecretFileAuthentication(t *testing.T) {
 		t.Fatalf("resolve repository root: %v", err)
 	}
 	helm := repositoryTool(t, repositoryRoot, "helm")
-	kustomize := repositoryTool(t, repositoryRoot, "kustomize")
 	chartsDirectory := t.TempDir()
 	version := "9.8.7"
 
 	generate := exec.Command(
 		"make", "monitor-chart", "MONITOR_VERSION="+version,
-		"CHARTS_DIR="+chartsDirectory, "HELM="+helm, "KUSTOMIZE="+kustomize,
+		"CHARTS_DIR="+chartsDirectory, "HELM="+helm,
 	)
 	generate.Dir = repositoryRoot
 	if output, err := generate.CombinedOutput(); err != nil {
@@ -165,38 +152,14 @@ func TestGeneratedMonitorChartRendersSecretFileAuthentication(t *testing.T) {
 	}
 }
 
-func TestMonitorOwnedSecretContainsOnlyEncryptionKey(t *testing.T) {
-	var secret corev1.Secret
-	readMonitorYAML(t, "../../kustomize/v1beta1/monitor/secret.yaml", &secret)
-	if len(secret.Data) != 0 || len(secret.StringData) != 1 || secret.StringData["MONITOR_KEY"] == "" {
-		t.Fatalf("monitor-owned Secret must contain only MONITOR_KEY: %#v", secret.StringData)
-	}
-}
-
 func TestMonitorRBACDoesNotGrantSecretAPIAccess(t *testing.T) {
-	paths, err := filepath.Glob("../../kustomize/v1beta1/monitor/*role*.yaml")
-	if err != nil {
-		t.Fatalf("list monitor RBAC sources: %v", err)
-	}
-	for _, path := range paths {
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
-		}
-		if strings.Contains(string(contents), `"secrets"`) || strings.Contains(string(contents), "- secrets") {
-			t.Fatalf("monitor RBAC source %s grants Secret API access", path)
-		}
-	}
-}
-
-func readMonitorYAML(t *testing.T, path string, object any) {
-	t.Helper()
+	path := "../../helm/v1beta1/capone-monitor/templates/rbac.yaml"
 	contents, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
-	if err := yaml.Unmarshal(contents, object); err != nil {
-		t.Fatalf("parse %s: %v", path, err)
+	if strings.Contains(string(contents), `"secrets"`) || strings.Contains(string(contents), "- secrets") {
+		t.Fatalf("monitor RBAC source %s grants Secret API access", path)
 	}
 }
 

@@ -1,20 +1,21 @@
 # In-cluster status monitor
 
-`cmd/monitor` is a separate binary intended to run in each workload cluster. It
-uses Kubernetes shared informers (`List` followed by `Watch`) for Nodes and
+`cmd/monitor` is a separate binary intended to run in each workload cluster.
+It uses Kubernetes shared informers (`List` followed by `Watch`) for Nodes and
 root `oneks.opennebula.io/v1alpha1` OneKSApplications. The application
 controller remains the only component that executes application plans; the
-monitor only projects their status to OneKS. It does not access Kubernetes
-Secrets through the Kubernetes API or read Helm release storage. Kubelet
-projects the configured authentication credential into the container as a
-read-only file, which the monitor reads when sending a report.
+monitor only projects their status to OneKS.
+
+The monitor does not access Kubernetes Secrets through the Kubernetes API or
+read Helm release storage. Kubelet projects the configured authentication
+credential into the container as a read-only file, which the monitor reads
+when sending each report.
 
 ## Configuration
 
 Non-secret settings can be supplied directly as environment variables or
 through an `envFrom` ConfigMap. Authentication is supplied only through the
-projected Secret file named by `MONITOR_AUTH_FILE`. The example deployment is
-in `kustomize/v1beta1/monitor`.
+projected Secret file named by `MONITOR_AUTH_FILE`.
 
 | Variable | Required | Default | Meaning |
 |---|---:|---|---|
@@ -24,204 +25,39 @@ in `kustomize/v1beta1/monitor`.
 | `MONITOR_AUTH_FILE` | yes | | Path to a projected Secret file containing `username:password-or-token` for HTTP Basic Auth against OneKS |
 | `MONITOR_APPLICATION_NAMESPACE` | no | `oneks-system` | Namespace containing root OneKSApplications |
 | `MONITOR_HTTP_TIMEOUT` | no | `10s` | Timeout for one report attempt |
-| `MONITOR_HEALTH_ADDRESS` | no | `:8081` | Health and readiness listener; it never serves metrics |
-| `MONITOR_METRICS_ADDRESS` | no | disabled | Separate Prometheus metrics listener, normally `:8082` |
-| `MONITOR_PROFILE_NAMESPACE` | no | `kube-system` | Namespace containing MonitoringProfile ConfigMaps |
-| `MONITOR_PROMETHEUS_NAMESPACES` | no | none | Comma-separated allowlist of namespaces containing queryable Prometheus Services |
+| `MONITOR_HEALTH_ADDRESS` | no | `:8081` | Health and readiness listener |
 
-## Prometheus metrics
+The health listener exposes `/healthz` and `/readyz`. Readiness becomes true
+after the Node and OneKSApplication informer caches have synchronized.
 
-Metrics are disabled by default. Enable the separate listener in the Helm
-chart with `--set metrics.enabled=true`. Health and readiness probes remain on
-port 8081 and `/metrics` is not registered on that listener. The metrics-only
-Service uses port 8082.
+## Installation
 
-The included NetworkPolicy allows metrics ingress only when both of these
-labels are present:
-
-- the scraper namespace has
-  `monitoring.oneks.opennebula.io/metrics-access=true`;
-- the scraper Pod has
-  `monitoring.oneks.opennebula.io/metrics-scraper=true`.
-
-The policy keeps port 8081 reachable for kubelet probes. It does not add an
-authentication proxy or mount any additional Secret.
-
-The monitor exports these bounded metric families:
-
-- `capone_monitor_nodes_total`, `capone_monitor_nodes_ready`, and
-  `capone_monitor_nodes_not_ready`;
-- `capone_monitor_nodes_memory_pressure`,
-  `capone_monitor_nodes_disk_pressure`, and
-  `capone_monitor_nodes_pid_pressure`;
-- `capone_monitor_callback_queue_depth`,
-  `capone_monitor_callback_attempts_total`,
-  `capone_monitor_callback_failures_total`,
-  `capone_monitor_callback_retries_total`,
-  `capone_monitor_callback_rejected_total`, and
-  `capone_monitor_callback_last_success_timestamp_seconds`;
-- `capone_monitor_profile_parse_failures_total`,
-  `capone_monitor_rule_evaluation_failures_total`, and
-  `capone_monitor_active_signals{severity}`.
-
-Only the closed `severity` vocabulary is a label. Node, application, profile,
-rule, and user-provided label identities are never metric labels.
-
-## Monitoring profiles
-
-Day-2 rules are loaded from ConfigMaps in `MONITOR_PROFILE_NAMESPACE` carrying
-`monitoring.oneks.opennebula.io/profile=true`. The profile is stored under the
-single `data.profile.yaml` key:
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: cluster-health
-  namespace: kube-system
-  labels:
-    monitoring.oneks.opennebula.io/profile: "true"
-data:
-  profile.yaml: |
-    apiVersion: monitoring.oneks.opennebula.io/v1alpha1
-    kind: MonitoringProfile
-    metadata:
-      name: cluster-health
-    spec:
-      evaluationInterval: 60s
-      sources:
-      - id: prometheus
-        type: prometheus
-        service:
-          namespace: monitoring
-          name: prometheus
-          port: http
-          path: /api/v1/query
-        timeout: 10s
-      rules:
-      - id: node-memory
-        source: prometheus
-        query: max(node_memory_pressure_percent)
-        unit: percent
-        comparison: GreaterThanOrEqual
-        warning: 80
-        critical: 90
-        recovery: 75
-        labels:
-          allow:
-          - zone
-        message: "{{profile}}/{{rule}} is {{severity}} at {{value}} (threshold {{threshold}})"
-```
-
-Profiles reject unknown or duplicate fields, YAML aliases, multiple YAML
-documents, unsupported sources, external URLs, Secret references, malformed
-templates, duplicate IDs, non-finite thresholds, and unallowlisted Service
-namespaces. An invalid update increments
-`capone_monitor_profile_parse_failures_total` and leaves the last valid version
-active. Removing the label or ConfigMap removes the profile.
-
-The implementation allows at most 32 profiles, 8 sources and 64 rules per
-profile. Documents are limited to 64 KiB, evaluation intervals to 15 seconds
-through 24 hours, source timeouts to 1 through 30 seconds, PromQL to 4096
-bytes, and returned vectors to 100 series. A timeout cannot exceed its
-profile's interval. Message templates accept only `value`, `threshold`,
-`severity`, `profile`, and `rule` placeholders.
-
-Prometheus queries use the HTTP query API through an ordinary Kubernetes
-Service reference. ExternalName Services, redirects, proxy environment
-variables, arbitrary URLs, authentication Secrets, and commands are not
-supported. The Helm chart creates a namespaced Role granting only `get` on
-Services for every unique entry in `monitor.prometheusNamespaces`. The raw
-Kustomize example allows `monitoring` and includes the matching `get`-only
-Role and RoleBinding in that namespace. To change the raw allowlist, add one
-equivalent namespaced Role and RoleBinding for every configured namespace.
-Neither packaging path grants cluster-wide Service access or mutation.
-
-Rule state is rebuilt from current Prometheus results after a monitor restart.
-Callbacks occur on warning, critical, resolved, or unknown transitions, not
-on every sample. The recovery threshold supplies hysteresis. Historical
-samples and query responses remain in Prometheus and are never sent to or
-stored by OneKS.
-
-The evaluator retains at most 4096 signal identities and executes at most 32
-sequential queries per one-second scheduler interval. Profile changes cancel
-the active query and force a fresh bounded batch; shutdown also cancels the
-active query. The callback queue retains at most 8192 identities, coalesces a
-new transition into an already pending identity, and increments
-`capone_monitor_callback_rejected_total` when a new identity reaches the
-global bound.
-
-Evaluator state is intentionally in memory. A restart re-emits states still
-present in current query results. If a series disappeared entirely while the
-monitor was stopped, its former label identity cannot be reconstructed and a
-resolved transition cannot be emitted. Solving that requires durable state or
-an authoritative consumer-side expiry policy; the observation-only monitor
-does not request mutation credentials for it.
-
-## ClusterSignal callback
-
-Monitoring transitions use the existing callback URL, per-cluster encrypted
-payload, timeout, rate-limited queue, and latest-state coalescing behavior.
-Before encryption, they use this report document:
-
-```json
-{
-  "apiVersion": "monitoring.oneks.opennebula.io/v1alpha1",
-  "kind": "ClusterSignal",
-  "clusterId": "42",
-  "identity": "signal-...",
-  "profile": "cluster-health",
-  "rule": "node-memory",
-  "source": "prometheus",
-  "category": "monitoring",
-  "severity": "warning",
-  "status": "active",
-  "observedAt": "2026-08-06T12:30:00Z",
-  "value": 81.5,
-  "unit": "percent",
-  "threshold": 80,
-  "labels": {"zone": "west"},
-  "message": "cluster-health/node-memory is warning at 81.5"
-}
-```
-
-Identity is an unpadded base64url SHA-256 digest of canonical ASCII JSON over
-profile, rule, source, and sorted emitted labels. A signal is limited to 16
-KiB, 8 explicitly allowlisted labels, 128-byte label values, and a 512-byte
-message. NaN, infinities, credentials, raw responses, annotations, and
-non-allowlisted labels are rejected. Delivery is an optional state hint; it is
-not application lifecycle truth and monitor state does not depend on callback
-success.
-
-Edit the ConfigMap and apply the manifests:
-
-```sh
-kubectl apply -k kustomize/v1beta1/monitor
-```
-
-The raw Kustomize example expects `Secret/cloud-config` in `kube-system` with
-the `ONE_AUTH` key and projects only that key into the monitor Pod.
-
-Alternatively, generate and install the dedicated Helm chart. As with the
-CAPONE template charts, its Kubernetes manifest is generated from `config`:
+Generate and install the dedicated Helm chart. It expects the configured
+authentication Secret to contain the `ONE_AUTH` key and projects only that
+key into the monitor Pod:
 
 ```sh
 make charts CLOSEST_TAG=v0.1.0
 helm upgrade --install capone-monitor _charts/v0.1.0/capone-monitor-0.1.0.tgz \
   --namespace kube-system --create-namespace \
   --set monitor.endpoint=http://oneks.example/api/v1 \
-  --set monitor.clusterID=42 \
-  --set monitor.key=$MONITOR_KEY \
-  --set monitor.authSecretName=cloud-config \
-  --set 'monitor.prometheusNamespaces={monitoring}'
+  --set-string monitor.clusterID=42 \
+  --set-string monitor.key="$MONITOR_KEY" \
+  --set monitor.authSecretName=cloud-config
 ```
 
-Build the dedicated image with `make docker-build-monitor`. Set a deployment
-image without editing YAML with:
+Build the dedicated image with `make docker-build-monitor`. Override the image
+when installing without editing the chart:
 
 ```sh
-cd kustomize/v1beta1/monitor
-kustomize edit set image monitor=registry.example/monitor:v1
+helm upgrade --install capone-monitor _charts/v0.1.0/capone-monitor-0.1.0.tgz \
+  --namespace kube-system --create-namespace \
+  --set image.repository=registry.example/monitor \
+  --set image.tag=v1 \
+  --set monitor.endpoint=http://oneks.example/api/v1 \
+  --set-string monitor.clusterID=42 \
+  --set-string monitor.key="$MONITOR_KEY" \
+  --set monitor.authSecretName=cloud-config
 ```
 
 ## Endpoint contract
@@ -244,13 +80,12 @@ The endpoint must accept a JSON `POST`. A typical Node update is:
 ```
 
 `readyProviderIDs` is the monitor's current in-memory snapshot of every
-Kubernetes Node with `Ready=True`. OneKS does not persist per-node readiness:
-it uses the snapshot to move a fully ready group to `RUNNING`, to move it to
-`WARNING` when a Node loses readiness, and to return it to `RUNNING` after
-recovery.
+Kubernetes Node with `Ready=True`. OneKS uses the snapshot to move a fully
+ready group to `RUNNING`, to move it to `WARNING` when a Node loses readiness,
+and to return it to `RUNNING` after recovery.
 
-OneKSApplication reports contain the immutable correlation fields from the
-root CR and its complete status projection:
+OneKSApplication reports contain immutable correlation fields from the root CR
+and its complete status projection:
 
 ```json
 {
@@ -278,49 +113,35 @@ root CR and its complete status projection:
 ```
 
 Only roots labelled as managed by and produced by OneKS are watched. Reports
-are coalesced per application identity and retried with rate limiting until
-OneKS persists them. A relist after a watch reconnect or monitor restart emits
-the current object again. Deletions use `event: Deleted`; OneKS validates the
-UID before completing an admitted uninstall.
+are coalesced per resource identity and retried with rate limiting until OneKS
+accepts them. A relist after a watch reconnect or monitor restart emits the
+current object again. Deletions use `event: Deleted`; OneKS validates the UID
+before completing an admitted uninstall.
+
+## Encryption and authentication
 
 Every request body contains one `payload` field. Its value is Base64 encoding
 of a random 12-byte nonce followed by AES-256-GCM ciphertext and its 16-byte
 authentication tag. OneKS stores a separate key in each cluster model and the
-monitor reads the same key from `MONITOR_KEY`. Every request also uses
-the credential read from `MONITOR_AUTH_FILE` as HTTP Basic authentication. No
-monitor token is sent in request headers.
+monitor reads the same key from `MONITOR_KEY`.
 
-The Helm chart projects only `monitor.authSecretKey` (default `ONE_AUTH`) from
-the required `monitor.authSecretName` into a read-only volume. The Deployment
-receives only the path
-`MONITOR_AUTH_FILE=/var/run/secrets/oneks-monitor/ONE_AUTH`; it does not receive
-the credential in its environment or copy it into the monitor-owned Secret.
-`Secret/capone-cluster-monitor` remains limited to the monitor-specific
-`MONITOR_KEY` encryption material.
-The credential file must contain `username:password-or-token`. The sender reads
-and validates its current contents for every report before setting HTTP Basic
-Auth, so a later request observes a projected Secret update without restarting
-the monitor. Kubernetes Secret projection updates are eventually propagated by
-kubelet and are not instantaneous.
+Every request uses the credential read from `MONITOR_AUTH_FILE` as HTTP Basic
+authentication. The sender reads and validates its current contents for every
+report, so a later projected Secret update is observed without restarting the
+monitor. The Deployment receives only the file path; it does not receive the
+credential in its environment or copy it into the monitor-owned Secret.
 
-The monitor builds `/clusters/<clusterID>/status` from its endpoint and cluster
-ID settings. OneKS uses that ID to select the key and rejects payloads that do
-not authenticate. Absolute HTTP and HTTPS endpoints are accepted, while URL
-credentials, query strings, fragments, and redirects remain rejected.
-Failed requests remain in a rate-limited work queue, and
-a later event for the same object replaces the queued report with the newest
-state. A single worker processes all reports serially.
+The monitor sends reports to `/clusters/<clusterID>/status`. Absolute HTTP and
+HTTPS endpoints are accepted, while URL credentials, query strings, fragments
+and redirects are rejected.
 
 ## Delivery semantics
 
 Kubernetes watches are not durable message queues. Informers recover watch
 disconnects with `resourceVersion`, handle expired history by listing again,
-and perform a new list when required. A pod restart also performs a full
-initial list, so the current state is reported again. Failed HTTP requests stay
-in the monitor's rate-limited queue until delivery succeeds.
+and perform a new list when required. A Pod restart performs a full initial
+list, so current state is reported again.
 
-This guarantees convergence of current state, not delivery of every transient
-intermediate transition. If every transition must be retained while both the
-monitor and endpoint are unavailable, add a durable outbox (for example a
-small external queue) or consume Kubernetes audit events; an in-memory
-informer cannot provide that guarantee.
+Failed HTTP requests remain in a rate-limited queue until delivery succeeds.
+A later event for the same resource replaces its queued report with the newest
+state. A single worker processes reports serially.

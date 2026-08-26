@@ -13,13 +13,13 @@ import (
 	"testing"
 )
 
-func TestMonitorDockerfileIncludesMonitoringPackageBeforeBuild(t *testing.T) {
+func TestMonitorDockerfileIncludesMonitorPackageBeforeBuild(t *testing.T) {
 	dockerfile, err := os.ReadFile("../../Dockerfile.monitor")
 	if err != nil {
 		t.Fatalf("read Dockerfile.monitor: %v", err)
 	}
 	content := string(dockerfile)
-	copyStep := "COPY internal/monitoring/ internal/monitoring/"
+	copyStep := "COPY internal/monitor/ internal/monitor/"
 	buildStep := "go build -a -o monitor ./cmd/monitor"
 	copyIndex := strings.Index(content, copyStep)
 	buildIndex := strings.Index(content, buildStep)
@@ -30,6 +30,6 @@ func TestMonitorDockerfileIncludesMonitoringPackageBeforeBuild(t *testing.T) {
 		t.Fatalf("Dockerfile.monitor does not include monitor build step %q", buildStep)
 	}
 	if copyIndex > buildIndex {
-		t.Fatal("Dockerfile.monitor copies internal/monitoring after building the monitor")
+		t.Fatal("Dockerfile.monitor copies internal/monitor after building the monitor")
 	}
 }

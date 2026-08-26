@@ -25,111 +25,104 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/util/workqueue"
-
-	"github.com/OpenNebula/cluster-api-provider-opennebula/internal/monitoring"
 )
 
 type recordingSender struct {
-	reports []CallbackPayload
+	reports []Report
 	err     error
 }
 
-func (s *recordingSender) Send(_ context.Context, report CallbackPayload) error {
+func (s *recordingSender) Send(_ context.Context, report Report) error {
 	s.reports = append(s.reports, report)
 	return s.err
 }
 
+type senderFunc func(context.Context, Report) error
+
+func (f senderFunc) Send(ctx context.Context, report Report) error { return f(ctx, report) }
+
 func TestEnqueueKeepsLatestReportForExistingKey(t *testing.T) {
-	queue := workqueue.NewTypedRateLimitingQueue(
-		workqueue.DefaultTypedControllerRateLimiter[string](),
-	)
-	defer queue.ShutDown()
-	m := &Monitor{queue: queue, pending: map[string]pendingReport{}}
+	queue := newReportQueue(&recordingSender{})
+	defer queue.queue.ShutDown()
 
-	m.enqueue("Node/worker-1", Report{Kind: "Node", Name: "worker-1", Event: "Added"})
-	m.enqueue("Node/worker-1", Report{Kind: "Node", Name: "worker-1", Event: "Updated"})
+	queue.Add("Node/worker-1", Report{Kind: "Node", Name: "worker-1", Event: "Added"})
+	queue.Add("Node/worker-1", Report{Kind: "Node", Name: "worker-1", Event: "Updated"})
 
-	if len(m.pending) != 1 {
-		t.Fatalf("expected one pending key, got %d", len(m.pending))
+	if len(queue.pending) != 1 {
+		t.Fatalf("expected one pending key, got %d", len(queue.pending))
 	}
-	latest, ok := m.pending["Node/worker-1"].report.(Report)
-	if !ok {
-		t.Fatalf("pending callback changed type: %T", m.pending["Node/worker-1"].report)
-	}
-	if got := latest.Event; got != "Updated" {
+	if got := queue.pending["Node/worker-1"].Event; got != "Updated" {
 		t.Fatalf("expected latest event, got %q", got)
 	}
 }
 
 func TestFailedCallbackRemainsPendingAndIsRateLimited(t *testing.T) {
-	queue := workqueue.NewTypedRateLimitingQueue(
-		workqueue.DefaultTypedControllerRateLimiter[string](),
-	)
-	defer queue.ShutDown()
 	sender := &recordingSender{err: errors.New("endpoint unavailable")}
-	m := &Monitor{sender: sender, queue: queue, pending: map[string]pendingReport{}}
-	m.enqueue("Node/worker-1", Report{Kind: "Node", Name: "worker-1", Event: "Updated"})
+	queue := newReportQueue(sender)
+	defer queue.queue.ShutDown()
+	queue.Add("Node/worker-1", Report{Kind: "Node", Name: "worker-1", Event: "Updated"})
 
-	if !m.processNext(context.Background()) {
+	if !queue.processNext(context.Background()) {
 		t.Fatal("worker stopped after retryable callback failure")
 	}
-	if len(sender.reports) != 1 || len(m.pending) != 1 {
-		t.Fatalf("failed callback was not retained: reports=%d pending=%d", len(sender.reports), len(m.pending))
+	if len(sender.reports) != 1 || len(queue.pending) != 1 {
+		t.Fatalf("failed callback was not retained: reports=%d pending=%d", len(sender.reports), len(queue.pending))
 	}
-	if got := queue.NumRequeues("Node/worker-1"); got != 1 {
+	if got := queue.queue.NumRequeues("Node/worker-1"); got != 1 {
 		t.Fatalf("expected one rate-limited retry, got %d", got)
 	}
 }
 
-func TestClusterSignalQueueKeepsLatestTransition(t *testing.T) {
-	queue := workqueue.NewTypedRateLimitingQueue(
-		workqueue.DefaultTypedControllerRateLimiter[string](),
-	)
-	defer queue.ShutDown()
-	m := &Monitor{queue: queue, pending: map[string]pendingReport{}}
-	signal := monitoring.ClusterSignal{
-		APIVersion: monitoring.APIVersion, Kind: monitoring.SignalKind,
-		ClusterID: "42", Identity: "signal-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
-		Profile: "health", Rule: "availability", Source: "prometheus",
-		Category: "monitoring", Severity: "warning", Status: "active",
-		ObservedAt: "2026-08-06T12:30:00Z", Value: 0.5, Unit: "ratio",
-		Threshold: 0.9, Labels: map[string]string{}, Message: "warning",
-	}
-	m.enqueue("ClusterSignal/"+signal.Identity, signal)
-	signal.Severity = "critical"
-	signal.Threshold = 0.5
-	signal.Message = "critical"
-	m.enqueue("ClusterSignal/"+signal.Identity, signal)
+func TestReportAddedDuringSendRemainsPending(t *testing.T) {
+	var queue *reportQueue
+	sent := make([]Report, 0, 2)
+	queue = newReportQueue(senderFunc(func(_ context.Context, report Report) error {
+		sent = append(sent, report)
+		if report.Event == "Added" {
+			queue.Add("Node/worker-1", Report{Kind: "Node", Name: "worker-1", Event: "Updated"})
+		}
+		return nil
+	}))
+	defer queue.queue.ShutDown()
+	queue.Add("Node/worker-1", Report{Kind: "Node", Name: "worker-1", Event: "Added"})
 
-	pending, ok := m.pending["ClusterSignal/"+signal.Identity].report.(monitoring.ClusterSignal)
-	if !ok || pending.Severity != "critical" || len(m.pending) != 1 {
-		t.Fatalf("latest signal transition was not retained: %#v", m.pending)
+	if !queue.processNext(context.Background()) {
+		t.Fatal("worker stopped after successful send")
+	}
+	if pending := queue.pending["Node/worker-1"]; pending == nil || pending.Event != "Updated" {
+		t.Fatalf("new report was not retained: %#v", pending)
+	}
+
+	if !queue.processNext(context.Background()) {
+		t.Fatal("worker stopped before sending replacement report")
+	}
+	if len(queue.pending) != 0 {
+		t.Fatalf("sent replacement remained pending: %#v", queue.pending)
+	}
+	if len(sent) != 2 || sent[0].Event != "Added" || sent[1].Event != "Updated" {
+		t.Fatalf("unexpected reports sent: %#v", sent)
 	}
 }
 
 func TestPendingCallbackIdentitiesAreGloballyBounded(t *testing.T) {
-	queue := workqueue.NewTypedRateLimitingQueue(
-		workqueue.DefaultTypedControllerRateLimiter[string](),
-	)
-	defer queue.ShutDown()
-	pending := make(map[string]pendingReport, MaxPendingCallbackIdentities)
-	for index := 0; index < MaxPendingCallbackIdentities; index++ {
+	queue := newReportQueue(&recordingSender{})
+	defer queue.queue.ShutDown()
+	for index := 0; index < maxPendingReports; index++ {
 		key := fmt.Sprintf("Node/worker-%d", index)
-		pending[key] = pendingReport{report: Report{Kind: "Node", Name: key}}
+		report := &Report{Kind: "Node", Name: key}
+		queue.pending[key] = report
 	}
-	m := &Monitor{queue: queue, pending: pending}
-	if m.enqueue("Node/overflow", Report{Kind: "Node", Name: "overflow"}) {
+	if queue.Add("Node/overflow", Report{Kind: "Node", Name: "overflow"}) {
 		t.Fatal("new callback identity exceeded the global bound")
 	}
-	if len(m.pending) != MaxPendingCallbackIdentities {
-		t.Fatalf("callback bound changed after rejection: %d", len(m.pending))
+	if len(queue.pending) != maxPendingReports {
+		t.Fatalf("callback bound changed after rejection: %d", len(queue.pending))
 	}
-	if !m.enqueue("Node/worker-0", Report{Kind: "Node", Name: "worker-0", Event: "Updated"}) {
+	if !queue.Add("Node/worker-0", Report{Kind: "Node", Name: "worker-0", Event: "Updated"}) {
 		t.Fatal("latest state for an existing callback identity was rejected")
 	}
-	if len(m.pending) != MaxPendingCallbackIdentities {
-		t.Fatalf("existing-key update changed callback identity count: %d", len(m.pending))
+	if len(queue.pending) != maxPendingReports {
+		t.Fatalf("existing-key update changed callback identity count: %d", len(queue.pending))
 	}
 }
 
@@ -150,62 +143,4 @@ func TestReadyProviderIDs(t *testing.T) {
 	if len(got) != 1 || got[0] != "one://1" {
 		t.Fatalf("unexpected ready provider IDs: %#v", got)
 	}
-}
-
-func TestMonitoringProfileLifecycleRetainsLastValidUpdate(t *testing.T) {
-	store := monitoring.NewStore([]string{"monitoring"})
-	m := &Monitor{profiles: store}
-	configMap := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "cluster-health", Namespace: "kube-system",
-			Labels: map[string]string{monitoring.ProfileLabel: "true"},
-		},
-		Data: map[string]string{monitoring.ProfileDataKey: monitorProfileDocument()},
-	}
-	m.onMonitoringProfile(configMap)
-	if profiles := store.List(); len(profiles) != 1 || profiles[0].Metadata.Name != "cluster-health" {
-		t.Fatalf("valid profile was not loaded: %#v", profiles)
-	}
-
-	invalid := configMap.DeepCopy()
-	invalid.Data[monitoring.ProfileDataKey] = "not: a profile"
-	m.onMonitoringProfile(invalid)
-	if profiles := store.List(); len(profiles) != 1 || profiles[0].Metadata.Name != "cluster-health" {
-		t.Fatalf("invalid update replaced the last valid profile: %#v", profiles)
-	}
-
-	m.onMonitoringProfileDeleted(cache.DeletedFinalStateUnknown{Key: "kube-system/cluster-health", Obj: configMap})
-	if profiles := store.List(); len(profiles) != 0 {
-		t.Fatalf("deleted profile remains loaded: %#v", profiles)
-	}
-}
-
-func monitorProfileDocument() string {
-	return `apiVersion: monitoring.oneks.opennebula.io/v1alpha1
-kind: MonitoringProfile
-metadata:
-  name: cluster-health
-spec:
-  evaluationInterval: 1m
-  sources:
-  - id: prometheus
-    type: prometheus
-    service:
-      namespace: monitoring
-      name: prometheus
-      port: http
-      path: /api/v1/query
-    timeout: 10s
-  rules:
-  - id: availability
-    source: prometheus
-    query: up
-    unit: ratio
-    comparison: LessThan
-    warning: 0.9
-    critical: 0.5
-    recovery: 1
-    labels:
-      allow: []
-    message: "{{rule}} is {{severity}} at {{value}}"`
 }

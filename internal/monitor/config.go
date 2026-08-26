@@ -22,10 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
-const (
-	defaultApplicationNamespace = "oneks-system"
-	defaultProfileNamespace     = "kube-system"
-)
+const defaultApplicationNamespace = "oneks-system"
 
 type Config struct {
 	Endpoint             string
@@ -34,10 +31,7 @@ type Config struct {
 	AuthFile             string
 	HTTPTimeout          time.Duration
 	HealthAddress        string
-	MetricsAddress       string
 	ApplicationNamespace string
-	ProfileNamespace     string
-	PrometheusNamespaces []string
 }
 
 func ConfigFromEnv() (Config, error) {
@@ -46,15 +40,10 @@ func ConfigFromEnv() (Config, error) {
 		ClusterID:            strings.TrimSpace(os.Getenv("MONITOR_CLUSTER_ID")),
 		AuthFile:             strings.TrimSpace(os.Getenv("MONITOR_AUTH_FILE")),
 		HealthAddress:        envOrDefault("MONITOR_HEALTH_ADDRESS", ":8081"),
-		MetricsAddress:       strings.TrimSpace(os.Getenv("MONITOR_METRICS_ADDRESS")),
 		ApplicationNamespace: envOrDefault("MONITOR_APPLICATION_NAMESPACE", defaultApplicationNamespace),
 	}
-	c.ProfileNamespace = envOrDefault("MONITOR_PROFILE_NAMESPACE", defaultProfileNamespace)
 	if errors := validation.IsDNS1123Label(c.ApplicationNamespace); len(errors) != 0 {
 		return Config{}, fmt.Errorf("MONITOR_APPLICATION_NAMESPACE contains invalid namespace %q", c.ApplicationNamespace)
-	}
-	if errors := validation.IsDNS1123Label(c.ProfileNamespace); len(errors) != 0 {
-		return Config{}, fmt.Errorf("MONITOR_PROFILE_NAMESPACE contains invalid namespace %q", c.ProfileNamespace)
 	}
 	if c.Endpoint == "" {
 		return Config{}, fmt.Errorf("MONITOR_ENDPOINT is required")
@@ -84,34 +73,7 @@ func ConfigFromEnv() (Config, error) {
 	if c.HTTPTimeout, err = durationEnv("MONITOR_HTTP_TIMEOUT", 10*time.Second); err != nil {
 		return Config{}, err
 	}
-	if c.PrometheusNamespaces, err = namespaceListEnv("MONITOR_PROMETHEUS_NAMESPACES", 32); err != nil {
-		return Config{}, err
-	}
 	return c, nil
-}
-
-func namespaceListEnv(key string, maximum int) ([]string, error) {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return nil, nil
-	}
-	seen := make(map[string]struct{})
-	result := make([]string, 0)
-	for _, item := range strings.Split(raw, ",") {
-		namespace := strings.TrimSpace(item)
-		if errors := validation.IsDNS1123Label(namespace); len(errors) != 0 {
-			return nil, fmt.Errorf("%s contains invalid namespace %q", key, namespace)
-		}
-		if _, exists := seen[namespace]; exists {
-			continue
-		}
-		seen[namespace] = struct{}{}
-		result = append(result, namespace)
-		if len(result) > maximum {
-			return nil, fmt.Errorf("%s exceeds %d namespaces", key, maximum)
-		}
-	}
-	return result, nil
 }
 
 func envOrDefault(key, value string) string {

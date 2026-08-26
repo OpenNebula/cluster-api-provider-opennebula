@@ -21,8 +21,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/OpenNebula/cluster-api-provider-opennebula/internal/monitoring"
 )
 
 func TestExistingNodeReportJSONIsStable(t *testing.T) {
@@ -90,44 +88,6 @@ func TestHTTPEncryptedSender(t *testing.T) {
 	wantBody := `{"kind":"Node","name":"worker-1","resourceVersion":"42","event":"Updated"}`
 	if decrypted := decryptEnvelope(t, body, key); decrypted != wantBody {
 		t.Fatalf("unexpected decrypted body:\n got: %s\nwant: %s", decrypted, wantBody)
-	}
-}
-
-func TestClusterSignalUsesEncryptedCallbackWire(t *testing.T) {
-	var body, authorization, token string
-	transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
-		payload, err := io.ReadAll(request.Body)
-		if err != nil {
-			t.Fatalf("read request body: %v", err)
-		}
-		body = string(payload)
-		authorization = request.Header.Get("Authorization")
-		token = request.Header.Get("X-OneKS-Monitor-Token")
-		return &http.Response{
-			StatusCode: http.StatusNoContent, Status: "204 No Content",
-			Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header),
-		}, nil
-	})
-	key := bytes.Repeat([]byte{0x24}, 32)
-	sender := newTestEncryptedSender(t, "http://monitor.example/api/v1", key)
-	sender.client.Transport = transport
-	signal := monitoring.ClusterSignal{
-		APIVersion: monitoring.APIVersion, Kind: monitoring.SignalKind,
-		ClusterID: "42", Identity: "signal-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
-		Profile: "health", Rule: "availability", Source: "prometheus",
-		Category: "monitoring", Severity: "warning", Status: "active",
-		ObservedAt: "2026-08-06T12:30:00Z", Value: 0.5, Unit: "ratio",
-		Threshold: 0.9, Labels: map[string]string{"zone": "a"}, Message: "availability warning",
-	}
-	if err := sender.Send(context.Background(), signal); err != nil {
-		t.Fatalf("send ClusterSignal: %v", err)
-	}
-	if authorization != "Basic b25lYWRtaW46c2VjcmV0" || token != "" {
-		t.Fatalf("unexpected callback headers: authorization=%q token=%q", authorization, token)
-	}
-	want := `{"apiVersion":"monitoring.oneks.opennebula.io/v1alpha1","kind":"ClusterSignal","clusterId":"42","identity":"signal-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG","profile":"health","rule":"availability","source":"prometheus","category":"monitoring","severity":"warning","status":"active","observedAt":"2026-08-06T12:30:00Z","value":0.5,"unit":"ratio","threshold":0.9,"labels":{"zone":"a"},"message":"availability warning"}`
-	if decrypted := decryptEnvelope(t, body, key); decrypted != want {
-		t.Fatalf("unexpected decrypted callback:\n got: %s\nwant: %s", decrypted, want)
 	}
 }
 

@@ -264,8 +264,7 @@ $(eval $(call chart-generator-tool,capone-rke2,rke2))
 
 MONITOR_RELEASE_TAG   ?= monitor-v$(MONITOR_VERSION)
 MONITOR_CHART_PACKAGE := $(CHARTS_DIR)/$(MONITOR_RELEASE_TAG)/capone-monitor-$(MONITOR_VERSION).tgz
-MONITOR_CHART_DIR     := $(CHARTS_DIR)/$(MONITOR_RELEASE_TAG)/capone-monitor
-MONITOR_CHART_SOURCES := $(shell find helm/v1beta1/capone-monitor kustomize/v1beta1/monitor kustomize/v1beta1/monitor-helm -type f)
+MONITOR_CHART_SOURCES := $(shell find helm/v1beta1/capone-monitor -type f)
 
 monitor-chart: $(MONITOR_CHART_PACKAGE)
 
@@ -273,16 +272,11 @@ monitor-release: monitor-chart
 
 application-controller-release: application-controller-chart
 
-$(MONITOR_CHART_DIR): $(KUSTOMIZE) $(MONITOR_CHART_SOURCES)
-	install -m u=rwx,go=rx -d $(MONITOR_CHART_DIR)/templates
-	cp -rf helm/v1beta1/capone-monitor/. $(MONITOR_CHART_DIR)/.
-	$(KUSTOMIZE) build kustomize/v1beta1/monitor-helm \
-	| install -m u=rw,go=r -D /dev/fd/0 $(MONITOR_CHART_DIR)/templates/monitor.yaml
-
-$(MONITOR_CHART_PACKAGE): $(MONITOR_CHART_DIR) $(MONITOR_CHART_SOURCES) $(HELM)
+$(MONITOR_CHART_PACKAGE): $(MONITOR_CHART_SOURCES) $(HELM)
+	install -m u=rwx,go=rx -d $(CHARTS_DIR)/$(MONITOR_RELEASE_TAG)
 	$(HELM) package -d $(CHARTS_DIR)/$(MONITOR_RELEASE_TAG) \
 		--version $(MONITOR_VERSION) --app-version v$(MONITOR_VERSION) \
-		$(MONITOR_CHART_DIR)
+		helm/v1beta1/capone-monitor
 
 APPLICATION_CONTROLLER_RELEASE_TAG ?= application-controller-v$(APPLICATION_CONTROLLER_VERSION)
 APPLICATION_CONTROLLER_CHART_PACKAGE := $(CHARTS_DIR)/$(APPLICATION_CONTROLLER_RELEASE_TAG)/oneks-application-controller-$(APPLICATION_CONTROLLER_VERSION).tgz

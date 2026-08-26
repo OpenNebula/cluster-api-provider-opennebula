@@ -1,0 +1,16 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: capone-cluster-monitor
+  namespace: {{ .Release.Namespace | quote }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: capone-cluster-monitor
+  policyTypes:
+  - Ingress
+  ingress:
+  # Preserve kubelet health and readiness probes while denying other ingress.
+  - ports:
+    - port: health
+      protocol: TCP
