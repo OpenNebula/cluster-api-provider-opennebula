@@ -44,8 +44,8 @@ func TestExternalDetectionMaterializesAndChangesCanonicalDigests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("canonicalize dependency without detector: %v", err)
 	}
-	if got := Digest(withoutCanonical); got != "sha256-FkBWdB_MwBRN_QCgiTN-viWhCwxlEWh7EsfcILeOFQ4" {
-		t.Fatalf("no-detector compatibility digest = %s", got)
+	if got := Digest(withoutCanonical); got != "sha256-GHKwcVdzJtmSmOdJeQHMbAp_7L2TDsoLGnO7KeRq5zw" {
+		t.Fatalf("dependency digest without detector = %s", got)
 	}
 	plan.ExternalDetection = &applicationv1.ExternalDetectionSpec{Detector: applicationv1.ExternalDetectorCertManager}
 	refreshDependencyPlanDigestForTest("42", &plan)
@@ -60,7 +60,7 @@ func TestExternalDetectionMaterializesAndChangesCanonicalDigests(t *testing.T) {
 	if reflect.DeepEqual(withoutCanonical, withCanonical) || !strings.Contains(string(withCanonical), `"externalDetection":{"detector":"cert-manager"}`) {
 		t.Fatalf("external detector did not affect child canonical input: %s", withCanonical)
 	}
-	if got := Digest(withCanonical); got != "sha256-ZXBLv4WBR-bTMnz1oYAyitAgYG7uTmueRcMsipNcwX8" {
+	if got := Digest(withCanonical); got != "sha256-AZfmrfCmm7jJyLKA4z_8mqJ6bRtC84arLnv0Kyf8EG4" {
 		t.Fatalf("cross-language external detector digest = %s", got)
 	}
 

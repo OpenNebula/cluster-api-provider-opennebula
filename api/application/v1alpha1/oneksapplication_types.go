@@ -65,11 +65,8 @@ const (
 // +kubebuilder:validation:XValidation:rule="((size(self.release.repositoryURL) == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$') && !self.release.chart.startsWith('oci://')))",message="release must use either an HTTPS repositoryURL with a non-OCI chart or an empty repositoryURL with an OCI chart"
 // +kubebuilder:validation:XValidation:rule="!has(self.release.authSecret) || self.release.repositoryURL.matches('^https://[^[:space:]]+$')",message="release.authSecret requires an HTTPS repositoryURL"
 // +kubebuilder:validation:XValidation:rule="!has(self.release.authSecret) || (has(self.protectedSecrets) && self.protectedSecrets.filter(p, p.builderType == 'basicAuthSecret' && p.__namespace__ == 'kube-system' && p.name == self.release.authSecret.name).size() == 1)",message="release.authSecret must match exactly one protected basicAuthSecret in kube-system"
-// +kubebuilder:validation:XValidation:rule="size(self.resources) == 0",message="plan-v1alpha5 does not permit legacy resources"
 // +kubebuilder:validation:XValidation:rule="((!has(self.protectedSecrets) || size(self.protectedSecrets) == 0) ? !has(self.secretInputRef) : has(self.secretInputRef))",message="plan-v1alpha5 requires secretInputRef exactly when protectedSecrets are present"
-// +kubebuilder:validation:XValidation:rule="!has(self.secretInputRef) || !has(self.secretInputRef.uid) || size(self.secretInputRef.uid) == 0",message="plan-v1alpha5 binds secretInputRef.uid through status"
 // +kubebuilder:validation:XValidation:rule="!has(self.managedResources) || !has(self.protectedSecrets) || size(self.managedResources) + size(self.protectedSecrets) <= 16",message="plan-v1alpha5 permits at most 16 combined managedResources and protectedSecrets"
-// +kubebuilder:validation:XValidation:rule="self.resources.all(r, r.__namespace__ == self.release.targetNamespace)",message="resources must use the release targetNamespace"
 // +kubebuilder:validation:XValidation:rule="!has(self.dependencies) || self.dependencies.all(d, self.dependencies.filter(x, x.name == d.name).size() == 1)",message="dependency names must be unique"
 // +kubebuilder:validation:XValidation:rule="!has(self.dependencyPlans) || self.dependencyPlans.all(p, self.dependencyPlans.filter(x, x.name == p.name).size() == 1)",message="dependency plan names must be unique"
 // +kubebuilder:validation:XValidation:rule="self.role != 'Root' || !has(self.dependencies) || (has(self.dependencyPlans) && self.dependencies.all(d, self.dependencyPlans.filter(p, p.name == d.name && p.catalogueChartID == d.catalogueChartID && p.planDigest == d.planDigest).size() == 1))",message="each direct Root dependency must resolve to exactly one matching dependencyPlan"
@@ -95,8 +92,6 @@ type OneKSApplicationSpec struct {
 	// +kubebuilder:validation:Enum=Observe;Execute
 	ExecutionMode ExecutionMode `json:"executionMode"`
 	Release       ReleaseSpec   `json:"release"`
-	// +kubebuilder:validation:MaxItems=16
-	Resources []ResourceSpec `json:"resources"`
 	// +kubebuilder:validation:Enum=Root;Dependency
 	Role ApplicationRole `json:"role,omitempty"`
 	// +kubebuilder:validation:MaxItems=16
@@ -173,8 +168,6 @@ type SecretInputReference struct {
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
 	Name string `json:"name"`
-	// +kubebuilder:validation:MaxLength=128
-	UID string `json:"uid,omitempty"`
 }
 
 type ProtectedSecretBuilderType string
@@ -364,29 +357,6 @@ type ReleaseSpec struct {
 	ValuesContent string `json:"valuesContent"`
 }
 
-type ResourceSpec struct {
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:Pattern=`^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$`
-	ID string `json:"id"`
-	// +kubebuilder:validation:Enum=v1
-	APIVersion string `json:"apiVersion"`
-	// +kubebuilder:validation:Enum=ConfigMap
-	Kind string `json:"kind"`
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
-	Namespace string `json:"namespace"`
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=253
-	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
-	Name string `json:"name"`
-	// +kubebuilder:validation:MaxProperties=128
-	Data map[string]string `json:"data"`
-	// +kubebuilder:validation:Enum=Delete;Retain
-	DeletionPolicy DeletionPolicy `json:"deletionPolicy"`
-}
-
 type DependencyReference struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
@@ -403,8 +373,6 @@ type DependencyReference struct {
 
 // +kubebuilder:validation:XValidation:rule="self.release.chartID == self.catalogueChartID",message="release.chartID must equal catalogueChartID"
 // +kubebuilder:validation:XValidation:rule="(size(self.release.repositoryURL) == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$') && !self.release.chart.startsWith('oci://'))",message="dependency release must use either an HTTPS repositoryURL with a non-OCI chart or an empty repositoryURL with an OCI chart"
-// +kubebuilder:validation:XValidation:rule="self.resources.all(r, r.__namespace__ == self.release.targetNamespace)",message="resources must use the release targetNamespace"
-// +kubebuilder:validation:XValidation:rule="!self.release.createNamespace || size(self.resources) == 0",message="dependency plan with createNamespace must not contain resources"
 // +kubebuilder:validation:XValidation:rule="self.dependencies.all(d, self.dependencies.filter(x, x.name == d.name).size() == 1)",message="dependency names must be unique"
 // +kubebuilder:validation:XValidation:rule="self.dependencies.all(d, d.name != self.name)",message="dependency plan must not directly reference itself"
 // +kubebuilder:validation:XValidation:rule="!has(self.release.authSecret)",message="dependency plans do not permit release.authSecret"
@@ -421,8 +389,6 @@ type DependencyPlan struct {
 	// +kubebuilder:validation:Pattern=`^sha256-[A-Za-z0-9_-]{43}$`
 	PlanDigest string      `json:"planDigest"`
 	Release    ReleaseSpec `json:"release"`
-	// +kubebuilder:validation:MaxItems=16
-	Resources []ResourceSpec `json:"resources"`
 	// +kubebuilder:validation:MaxItems=16
 	Dependencies      []DependencyReference  `json:"dependencies"`
 	Uninstall         *UninstallSpec         `json:"uninstall,omitempty"`

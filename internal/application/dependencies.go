@@ -72,7 +72,7 @@ func expectedDependencyApplication(root *applicationv1.OneKSApplication, plan ap
 	return expected
 }
 
-func dependencyCompatibilityError(existing, expected *applicationv1.OneKSApplication, clusterID string) *DependencyConflictError {
+func dependencyIdentityError(existing, expected *applicationv1.OneKSApplication, clusterID string) *DependencyConflictError {
 	conflict := func(message string) *DependencyConflictError {
 		return &DependencyConflictError{Name: expected.Name, Message: message}
 	}
@@ -105,7 +105,7 @@ func dependencyCompatibilityError(existing, expected *applicationv1.OneKSApplica
 	return nil
 }
 
-// materializeRootDependencies performs a complete compatibility scan before it
+// materializeRootDependencies performs a complete identity scan before it
 // creates any missing application. raced is true when Create reported
 // AlreadyExists; the caller must requeue so the next scan verifies that object.
 func (r *Reconciler) materializeRootDependencies(ctx context.Context, root *applicationv1.OneKSApplication) (raced bool, terminating string, conflict *DependencyConflictError, err error) {
@@ -125,8 +125,8 @@ func (r *Reconciler) materializeRootDependencies(ctx context.Context, root *appl
 		if !existing.DeletionTimestamp.IsZero() {
 			return false, existing.Name, nil, nil
 		}
-		if compatibilityError := dependencyCompatibilityError(existing, expected, root.Spec.ClusterID); compatibilityError != nil {
-			return false, "", compatibilityError, nil
+		if identityError := dependencyIdentityError(existing, expected, root.Spec.ClusterID); identityError != nil {
+			return false, "", identityError, nil
 		}
 	}
 
@@ -149,9 +149,6 @@ func (r *Reconciler) materializeRootDependencies(ctx context.Context, root *appl
 
 func (r *Reconciler) observeDependencies(ctx context.Context, app *applicationv1.OneKSApplication) (dependencyObservation, error) {
 	result := dependencyObservation{ready: true}
-	if app.Spec.PlanVersion != applicationv1.PlanVersion {
-		return result, nil
-	}
 	result.enabled = true
 	if len(app.Spec.Dependencies) == 0 {
 		result.reason = "NoDependencies"

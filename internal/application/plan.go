@@ -38,11 +38,6 @@ import (
 const (
 	maxValuesContentBytes  = 65536
 	maxCanonicalPlanBytes  = 131072
-	maxResources           = 16
-	maxConfigMapEntries    = 128
-	maxConfigMapKeyBytes   = 253
-	maxConfigMapValueBytes = 32768
-	maxConfigMapDataBytes  = 65536
 	maxDependencies        = 16
 	maxDependencyPlans     = 16
 	maxManagedResources    = 16
@@ -109,9 +104,6 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 	if app.Spec.Role != applicationv1.ApplicationRoleRoot && app.Spec.Role != applicationv1.ApplicationRoleDependency {
 		return invalid("InvalidApplicationRole", "plan-v1alpha5 role must be Root or Dependency")
 	}
-	if len(app.Spec.Resources) != 0 {
-		return invalid("InvalidPlanResources", "plan-v1alpha5 does not permit legacy resources")
-	}
 	if app.Spec.Role == applicationv1.ApplicationRoleDependency {
 		if len(app.Spec.ManagedResources) != 0 {
 			return invalid("InvalidDependencyManagedResources", "Dependency applications must not contain managedResources")
@@ -164,9 +156,6 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 	if !validUTF8Bytes(app.Spec.Release.TargetNamespace, 1, 63) || len(validation.IsDNS1123Label(app.Spec.Release.TargetNamespace)) > 0 {
 		return invalid("InvalidTargetNamespace", "targetNamespace is not a DNS-1123 label of at most 63 characters")
 	}
-	if app.Spec.Role == applicationv1.ApplicationRoleDependency && app.Spec.Release.CreateNamespace && len(app.Spec.Resources) != 0 {
-		return invalid("InvalidDependencyResources", "Dependency with createNamespace=true must not contain resources")
-	}
 	if !utf8.ValidString(app.Spec.Release.ValuesContent) {
 		return invalid("InvalidValuesContent", "valuesContent must be valid UTF-8")
 	}
@@ -179,60 +168,6 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 	if err := validateNonSensitiveValues(app.Spec.Release.ValuesContent); err != nil {
 		return err
 	}
-	if len(app.Spec.Resources) > maxResources {
-		return invalid("TooManyResources", "resources exceeds %d entries", maxResources)
-	}
-
-	resourceIDs := make(map[string]struct{}, len(app.Spec.Resources))
-	resourceNames := make(map[string]struct{}, len(app.Spec.Resources))
-	for index, resource := range app.Spec.Resources {
-		if !validUTF8Bytes(resource.ID, 1, 63) || len(validation.IsValidLabelValue(resource.ID)) != 0 {
-			return invalid("InvalidResourceID", "resources[%d].id must be a Kubernetes label value", index)
-		}
-		if _, exists := resourceIDs[resource.ID]; exists {
-			return invalid("DuplicateResourceID", "resource id %q is duplicated", resource.ID)
-		}
-		resourceIDs[resource.ID] = struct{}{}
-		if resource.APIVersion != "v1" || resource.Kind != "ConfigMap" {
-			return invalid("UnsupportedResource", "resources[%d] must be a v1 ConfigMap", index)
-		}
-		if resource.Namespace != app.Spec.Release.TargetNamespace {
-			return invalid("InvalidResourceNamespace", "resources[%d] must use %q", index, app.Spec.Release.TargetNamespace)
-		}
-		if !validUTF8Bytes(resource.Name, 1, 253) || len(validation.IsDNS1123Subdomain(resource.Name)) > 0 {
-			return invalid("InvalidResourceName", "resources[%d].name is not a DNS-1123 subdomain", index)
-		}
-		if _, exists := resourceNames[resource.Name]; exists {
-			return invalid("DuplicateResourceIdentity", "ConfigMap %q is duplicated", resource.Name)
-		}
-		resourceNames[resource.Name] = struct{}{}
-		if !validDeletionPolicy(resource.DeletionPolicy) {
-			return invalid("InvalidDeletionPolicy", "resources[%d].deletionPolicy must be Delete or Retain", index)
-		}
-		if len(resource.Data) > maxConfigMapEntries {
-			return invalid("ConfigMapDataTooLarge", "resources[%d] data exceeds %d entries", index, maxConfigMapEntries)
-		}
-		dataBytes := 0
-		for key, value := range resource.Data {
-			if !utf8.ValidString(key) || len([]byte(key)) > maxConfigMapKeyBytes || len(validation.IsConfigMapKey(key)) > 0 {
-				return invalid("InvalidConfigMapKey", "resources[%d] contains an invalid data key", index)
-			}
-			if !utf8.ValidString(value) || len([]byte(value)) > maxConfigMapValueBytes {
-				return invalid("InvalidConfigMapValue", "resources[%d] contains an invalid or oversized data value", index)
-			}
-			if placeholderPattern.MatchString(key) || placeholderPattern.MatchString(value) {
-				return invalid("UnresolvedPlaceholder", "resources[%d] data contains an unresolved placeholder", index)
-			}
-			if value != "" && sensitiveKeyPattern.MatchString(key) {
-				return invalid("SensitiveConfigMapData", "resources[%d] data contains a sensitive key", index)
-			}
-			dataBytes += len([]byte(key)) + len([]byte(value))
-		}
-		if dataBytes > maxConfigMapDataBytes {
-			return invalid("ConfigMapDataTooLarge", "resources[%d] data exceeds %d aggregate bytes", index, maxConfigMapDataBytes)
-		}
-	}
-
 	if err := validateDependencyContract(app); err != nil {
 		return err
 	}
@@ -414,8 +349,8 @@ func dependencyPlanChildSpec(clusterID string, plan applicationv1.DependencyPlan
 		ClusterID: clusterID, CatalogueChartID: plan.CatalogueChartID,
 		PlanVersion: applicationv1.PlanVersion, PlanDigest: plan.PlanDigest,
 		ExecutionMode: applicationv1.ExecutionModeExecute,
-		Release:       plan.Release, Resources: plan.Resources,
-		Role: applicationv1.ApplicationRoleDependency, Dependencies: plan.Dependencies,
+		Release:       plan.Release,
+		Role:          applicationv1.ApplicationRoleDependency, Dependencies: plan.Dependencies,
 		DependencyPlans: nil, Uninstall: plan.Uninstall, ExternalDetection: plan.ExternalDetection,
 		DeletionPolicy: plan.DeletionPolicy,
 	}
@@ -477,15 +412,6 @@ func validateDependencyPlan(plan applicationv1.DependencyPlan, path string) *Pla
 		if err := validateExternalDetection(*plan.ExternalDetection, path+".externalDetection"); err != nil {
 			return err
 		}
-	}
-	if len(plan.Resources) > maxResources {
-		return invalid("TooManyResources", "%s.resources exceeds %d entries", path, maxResources)
-	}
-	if plan.Release.CreateNamespace && len(plan.Resources) != 0 {
-		return invalid("InvalidDependencyResources", "%s with createNamespace=true must not contain resources", path)
-	}
-	if err := validateDependencyPlanResources(plan.Resources, plan.Release.TargetNamespace, path); err != nil {
-		return err
 	}
 	if len(plan.Dependencies) > maxDependencies {
 		return invalid("TooManyDependencies", "%s.dependencies exceeds %d entries", path, maxDependencies)
@@ -576,60 +502,6 @@ func validateUninstall(uninstall applicationv1.UninstallSpec, path string) *Plan
 	return nil
 }
 
-func validateDependencyPlanResources(resources []applicationv1.ResourceSpec, targetNamespace, path string) *PlanError {
-	resourceIDs := make(map[string]struct{}, len(resources))
-	resourceNames := make(map[string]struct{}, len(resources))
-	for index, resource := range resources {
-		resourcePath := fmt.Sprintf("%s.resources[%d]", path, index)
-		if !validUTF8Bytes(resource.ID, 1, 63) || len(validation.IsValidLabelValue(resource.ID)) != 0 {
-			return invalid("InvalidResourceID", "%s.id must be a Kubernetes label value", resourcePath)
-		}
-		if _, exists := resourceIDs[resource.ID]; exists {
-			return invalid("DuplicateResourceID", "%s resource id %q is duplicated", path, resource.ID)
-		}
-		resourceIDs[resource.ID] = struct{}{}
-		if resource.APIVersion != "v1" || resource.Kind != "ConfigMap" {
-			return invalid("UnsupportedResource", "%s must be a v1 ConfigMap", resourcePath)
-		}
-		if resource.Namespace != targetNamespace {
-			return invalid("InvalidResourceNamespace", "%s must use %q", resourcePath, targetNamespace)
-		}
-		if !validUTF8Bytes(resource.Name, 1, 253) || len(validation.IsDNS1123Subdomain(resource.Name)) > 0 {
-			return invalid("InvalidResourceName", "%s.name is not a DNS-1123 subdomain", resourcePath)
-		}
-		if _, exists := resourceNames[resource.Name]; exists {
-			return invalid("DuplicateResourceIdentity", "%s ConfigMap %q is duplicated", path, resource.Name)
-		}
-		resourceNames[resource.Name] = struct{}{}
-		if !validDeletionPolicy(resource.DeletionPolicy) {
-			return invalid("InvalidDeletionPolicy", "%s.deletionPolicy must be Delete or Retain", resourcePath)
-		}
-		if len(resource.Data) > maxConfigMapEntries {
-			return invalid("ConfigMapDataTooLarge", "%s.data exceeds %d entries", resourcePath, maxConfigMapEntries)
-		}
-		dataBytes := 0
-		for key, value := range resource.Data {
-			if !utf8.ValidString(key) || len([]byte(key)) > maxConfigMapKeyBytes || len(validation.IsConfigMapKey(key)) > 0 {
-				return invalid("InvalidConfigMapKey", "%s contains an invalid data key", resourcePath)
-			}
-			if !utf8.ValidString(value) || len([]byte(value)) > maxConfigMapValueBytes {
-				return invalid("InvalidConfigMapValue", "%s contains an invalid or oversized data value", resourcePath)
-			}
-			if placeholderPattern.MatchString(key) || placeholderPattern.MatchString(value) {
-				return invalid("UnresolvedPlaceholder", "%s.data contains an unresolved placeholder", resourcePath)
-			}
-			if value != "" && sensitiveKeyPattern.MatchString(key) {
-				return invalid("SensitiveConfigMapData", "%s.data contains a sensitive key", resourcePath)
-			}
-			dataBytes += len([]byte(key)) + len([]byte(value))
-		}
-		if dataBytes > maxConfigMapDataBytes {
-			return invalid("ConfigMapDataTooLarge", "%s.data exceeds %d aggregate bytes", resourcePath, maxConfigMapDataBytes)
-		}
-	}
-	return nil
-}
-
 func CanonicalPlan(spec applicationv1.OneKSApplicationSpec) ([]byte, error) {
 	if spec.PlanVersion != applicationv1.PlanVersion {
 		return nil, fmt.Errorf("unsupported planVersion %q", spec.PlanVersion)
@@ -698,8 +570,8 @@ func canonicalPlan(spec applicationv1.OneKSApplicationSpec) ([]byte, error) {
 	plan := map[string]any{
 		"clusterID": spec.ClusterID, "catalogueChartID": spec.CatalogueChartID,
 		"planVersion": spec.PlanVersion, "executionMode": string(spec.ExecutionMode),
-		"release": canonicalRelease(spec.Release), "resources": canonicalResources(spec.Resources),
-		"role": string(spec.Role), "dependencies": dependencies, "dependencyPlans": dependencyPlans,
+		"release": canonicalRelease(spec.Release),
+		"role":    string(spec.Role), "dependencies": dependencies, "dependencyPlans": dependencyPlans,
 		"managedResources": managed,
 		"deletionPolicy":   string(spec.DeletionPolicy),
 	}
@@ -707,7 +579,6 @@ func canonicalPlan(spec applicationv1.OneKSApplicationSpec) ([]byte, error) {
 		plan["secretInputRef"] = map[string]any{
 			"namespace": spec.SecretInputRef.Namespace,
 			"name":      spec.SecretInputRef.Name,
-			"uid":       spec.SecretInputRef.UID,
 		}
 	}
 	if len(spec.ProtectedSecrets) != 0 {
@@ -734,7 +605,7 @@ func canonicalDependencyPlan(plan applicationv1.DependencyPlan) map[string]any {
 	canonical := map[string]any{
 		"name": plan.Name, "catalogueChartID": plan.CatalogueChartID,
 		"planDigest": plan.PlanDigest, "release": canonicalRelease(plan.Release),
-		"resources": canonicalResources(plan.Resources), "dependencies": dependencies,
+		"dependencies":   dependencies,
 		"deletionPolicy": string(plan.DeletionPolicy),
 	}
 	if plan.Uninstall != nil {
@@ -787,23 +658,6 @@ func canonicalRelease(release applicationv1.ReleaseSpec) map[string]any {
 		canonical["authSecret"] = map[string]any{"name": release.AuthSecret.Name}
 	}
 	return canonical
-}
-
-func canonicalResources(resourceSpecs []applicationv1.ResourceSpec) []any {
-	resources := make([]any, len(resourceSpecs))
-	for index, resource := range resourceSpecs {
-		data := make(map[string]any, len(resource.Data))
-		for key, value := range resource.Data {
-			data[key] = value
-		}
-		resources[index] = map[string]any{
-			"id": resource.ID, "apiVersion": resource.APIVersion,
-			"kind": resource.Kind, "namespace": resource.Namespace,
-			"name": resource.Name, "data": data,
-			"deletionPolicy": string(resource.DeletionPolicy),
-		}
-	}
-	return resources
 }
 
 func Digest(canonical []byte) string {

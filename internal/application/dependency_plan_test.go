@@ -57,6 +57,18 @@ func TestGeneratedCRDUsesOnlyCurrentPlanVersion(t *testing.T) {
 	if err := yaml.Unmarshal(payload, external); err != nil {
 		t.Fatalf("decode generated OneKSApplication CRD: %v", err)
 	}
+	specSchema := external.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"]
+	if _, exists := specSchema.Properties["resources"]; exists {
+		t.Fatal("generated current plan schema still exposes removed resources")
+	}
+	secretInput := specSchema.Properties["secretInputRef"]
+	if _, exists := secretInput.Properties["uid"]; exists {
+		t.Fatal("generated current plan schema still exposes spec secretInputRef.uid")
+	}
+	dependencyPlans := specSchema.Properties["dependencyPlans"]
+	if _, exists := dependencyPlans.Items.Schema.Properties["resources"]; exists {
+		t.Fatal("generated dependency plan schema still exposes removed resources")
+	}
 	internal := &apiextensions.CustomResourceDefinition{}
 	if err := apiextensionsv1.Convert_v1_CustomResourceDefinition_To_apiextensions_CustomResourceDefinition(external, internal, nil); err != nil {
 		t.Fatalf("convert generated OneKSApplication CRD: %v", err)
@@ -478,16 +490,6 @@ func TestCurrentPlanRejectsInvalidRoleNamespaceAndDependencyContracts(t *testing
 			reason: "InvalidDependencyPlans",
 		},
 		{
-			name: "resources with namespace creation",
-			mutate: func(app *applicationv1.OneKSApplication) {
-				app.Spec.Resources = []applicationv1.ResourceSpec{{
-					ID: "config", APIVersion: "v1", Kind: "ConfigMap", Namespace: "monitoring",
-					Name: "prometheus-config", Data: map[string]string{}, DeletionPolicy: applicationv1.DeletionPolicyDelete,
-				}}
-			},
-			reason: "InvalidPlanResources",
-		},
-		{
 			name: "invalid dependency name",
 			mutate: func(app *applicationv1.OneKSApplication) {
 				app.Spec.Dependencies = []applicationv1.DependencyReference{{
@@ -691,7 +693,7 @@ func validDependencyPlanApplication(t *testing.T) *applicationv1.OneKSApplicatio
 				Chart: "kube-prometheus-stack", Version: "87.12.2", ReleaseName: "oneks-prometheus",
 				TargetNamespace: "monitoring", CreateNamespace: true, ValuesContent: "grafana:\n  enabled: false\n",
 			},
-			Resources: []applicationv1.ResourceSpec{}, DeletionPolicy: applicationv1.DeletionPolicyDelete,
+			DeletionPolicy: applicationv1.DeletionPolicyDelete,
 		},
 	}
 	refreshPlanDigest(app)
@@ -717,7 +719,7 @@ func validDependencyPlan() applicationv1.DependencyPlan {
 			Chart: "alertmanager", Version: "1.0.0", ReleaseName: "oneks-alertmanager",
 			TargetNamespace: "monitoring", CreateNamespace: true, ValuesContent: "{}\n",
 		},
-		Resources: []applicationv1.ResourceSpec{}, Dependencies: []applicationv1.DependencyReference{},
+		Dependencies:   []applicationv1.DependencyReference{},
 		DeletionPolicy: applicationv1.DeletionPolicyDelete,
 	}
 	refreshDependencyPlanDigestForTest("42", &plan)
@@ -747,7 +749,7 @@ func dependencyPlanForTest(releaseName, catalogueChartID string, dependencies []
 			Chart: catalogueChartID, Version: "1.0.0", ReleaseName: releaseName,
 			TargetNamespace: "monitoring", CreateNamespace: true, ValuesContent: "{}\n",
 		},
-		Resources: []applicationv1.ResourceSpec{}, Dependencies: dependencies,
+		Dependencies:   dependencies,
 		DeletionPolicy: applicationv1.DeletionPolicyDelete,
 	}
 	refreshDependencyPlanDigestForTest("42", &plan)

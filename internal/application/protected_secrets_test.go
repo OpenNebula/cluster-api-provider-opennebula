@@ -69,66 +69,51 @@ func TestProtectedSecretPlanRejectsCrossCollectionResourceIDCollisions(t *testin
 }
 
 func TestManagedTargetNamespaceBootstrapUsesNormalResourceDAG(t *testing.T) {
-	for _, version := range []string{applicationv1.PlanVersion, applicationv1.PlanVersion} {
-		t.Run(version, func(t *testing.T) {
-			var app *applicationv1.OneKSApplication
-			if version == applicationv1.PlanVersion {
-				app = validManagedRootPlan(t)
-			} else {
-				app = validBoundProtectedRootPlan(t)
-			}
-			app.Spec.ManagedResources = []applicationv1.ManagedResourceSpec{managedTargetNamespaceResource()}
-			if version == applicationv1.PlanVersion {
-				refreshManagedPlan(t, app)
-			} else {
-				refreshProtectedPlan(t, app)
-			}
+	app := validManagedRootPlan(t)
+	app.Spec.ManagedResources = []applicationv1.ManagedResourceSpec{managedTargetNamespaceResource()}
+	refreshManagedPlan(t, app)
 
-			ctx := context.Background()
-			reconciler, recorder := testReconciler(t, app)
-			if err := reconciler.Client.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "catalogue-workloads"}}); err != nil {
-				t.Fatal(err)
-			}
-			recorder.childWrites = nil
+	ctx := context.Background()
+	reconciler, recorder := testReconciler(t, app)
+	if err := reconciler.Client.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "catalogue-workloads"}}); err != nil {
+		t.Fatal(err)
+	}
+	recorder.childWrites = nil
 
-			reconcileOnce(t, ctx, reconciler, app)
-			stored := getApplication(t, ctx, reconciler.Client, app)
-			if !containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) {
-				t.Fatalf("managed namespace bootstrap did not progress to finalizer: %#v", stored.Finalizers)
-			}
-			if stored.Status.LastError != nil && stored.Status.LastError.Reason == "TargetNamespaceMissing" {
-				t.Fatalf("managed namespace bootstrap was rejected: %#v", stored.Status.LastError)
-			}
+	reconcileOnce(t, ctx, reconciler, app)
+	stored := getApplication(t, ctx, reconciler.Client, app)
+	if !containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) {
+		t.Fatalf("managed namespace bootstrap did not progress to finalizer: %#v", stored.Finalizers)
+	}
+	if stored.Status.LastError != nil && stored.Status.LastError.Reason == "TargetNamespaceMissing" {
+		t.Fatalf("managed namespace bootstrap was rejected: %#v", stored.Status.LastError)
+	}
 
-			reconcileOnce(t, ctx, reconciler, app)
-			assertExists(t, ctx, reconciler.Client, &corev1.Namespace{}, "", "catalogue-workloads")
-			if !containsWrite(recorder.childWrites, "create:Namespace") {
-				t.Fatalf("normal managed DAG did not create target namespace: %#v", recorder.childWrites)
-			}
-		})
+	reconcileOnce(t, ctx, reconciler, app)
+	assertExists(t, ctx, reconciler.Client, &corev1.Namespace{}, "", "catalogue-workloads")
+	if !containsWrite(recorder.childWrites, "create:Namespace") {
+		t.Fatalf("normal managed DAG did not create target namespace: %#v", recorder.childWrites)
 	}
 }
 
 func TestMissingTargetNamespaceWithoutManagedTargetPreservesFailure(t *testing.T) {
-	t.Run(applicationv1.PlanVersion, func(t *testing.T) {
-		app := validManagedRootPlan(t)
-		ctx := context.Background()
-		reconciler, recorder := testReconciler(t, app)
-		if err := reconciler.Client.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "catalogue-workloads"}}); err != nil {
-			t.Fatal(err)
-		}
-		recorder.childWrites = nil
+	app := validManagedRootPlan(t)
+	ctx := context.Background()
+	reconciler, recorder := testReconciler(t, app)
+	if err := reconciler.Client.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "catalogue-workloads"}}); err != nil {
+		t.Fatal(err)
+	}
+	recorder.childWrites = nil
 
-		reconcileOnce(t, ctx, reconciler, app)
-		reconcileOnce(t, ctx, reconciler, app)
-		stored := getApplication(t, ctx, reconciler.Client, app)
-		if stored.Status.LastError == nil || stored.Status.LastError.Reason != "TargetNamespaceMissing" {
-			t.Fatalf("missing target namespace status = %#v", stored.Status)
-		}
-		if !containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) || len(recorder.childWrites) != 0 {
-			t.Fatalf("missing unmanaged namespace caused progression: finalizers=%#v writes=%#v", stored.Finalizers, recorder.childWrites)
-		}
-	})
+	reconcileOnce(t, ctx, reconciler, app)
+	reconcileOnce(t, ctx, reconciler, app)
+	stored := getApplication(t, ctx, reconciler.Client, app)
+	if stored.Status.LastError == nil || stored.Status.LastError.Reason != "TargetNamespaceMissing" {
+		t.Fatalf("missing target namespace status = %#v", stored.Status)
+	}
+	if !containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) || len(recorder.childWrites) != 0 {
+		t.Fatalf("missing unmanaged namespace caused progression: finalizers=%#v writes=%#v", stored.Finalizers, recorder.childWrites)
+	}
 }
 
 func TestProtectedSecretWaitsForManagedTargetNamespace(t *testing.T) {
@@ -293,7 +278,6 @@ func TestProtectedSecretPlanProtectedFieldsAffectDigestWithoutSorting(t *testing
 	baseDigest := digestSpec(t, base)
 	mutations := []func(*applicationv1.OneKSApplicationSpec){
 		func(spec *applicationv1.OneKSApplicationSpec) { spec.SecretInputRef.Name = "other-input" },
-		func(spec *applicationv1.OneKSApplicationSpec) { spec.SecretInputRef.UID = "other-uid" },
 		func(spec *applicationv1.OneKSApplicationSpec) { spec.Release.AuthSecret.Name = "other-auth-secret" },
 		func(spec *applicationv1.OneKSApplicationSpec) { spec.ProtectedSecrets[0].Username = "other-user" },
 		func(spec *applicationv1.OneKSApplicationSpec) {
@@ -320,9 +304,8 @@ func TestProtectedSecretPlanRootMaterializesUnchangedCurrentDependencyChild(t *t
 	plan := dependencyPlanForTest("dependency", "dependency-chart", nil)
 	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 	root.Spec.PlanVersion = applicationv1.PlanVersion
-	root.Spec.Resources = nil
 	root.Spec.ManagedResources = nil
-	root.Spec.SecretInputRef = &applicationv1.SecretInputReference{Namespace: applicationv1.ApplicationNamespace, Name: "inputs", UID: "input-uid"}
+	root.Spec.SecretInputRef = &applicationv1.SecretInputReference{Namespace: applicationv1.ApplicationNamespace, Name: "inputs"}
 	root.Spec.ProtectedSecrets = []applicationv1.ProtectedSecretSpec{opaqueProtectedSecret("protected", "catalogue-workloads", "protected")}
 	refreshProtectedPlan(t, root)
 	reconciler, _ := testReconciler(t, root)
@@ -700,16 +683,6 @@ func TestCurrentPlanBindsInputUIDBeforeExecution(t *testing.T) {
 	}
 }
 
-func TestCurrentPlanRejectsPreboundUID(t *testing.T) {
-	app := validProtectedRootPlan(t)
-	app.Spec.SecretInputRef.UID = "server-selected-uid"
-	refreshProtectedPlan(t, app)
-	err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID})
-	if err == nil || err.Reason != "InvalidSecretInputUID" {
-		t.Fatalf("prebound v5 UID error = %#v", err)
-	}
-}
-
 func TestCurrentPlanHelmOnlyRootDoesNotRequireProtectedSecrets(t *testing.T) {
 	app := validProtectedRootPlan(t)
 	app.Spec.Release.AuthSecret = nil
@@ -747,7 +720,6 @@ func TestGeneratedCRDEnforcesPlanV1Alpha5InputBinding(t *testing.T) {
 	text := string(payload)
 	for _, required := range []string{
 		"oneks.opennebula.io/plan-v1alpha5",
-		"plan-v1alpha5 binds secretInputRef.uid through status",
 		"secretInputUID:",
 	} {
 		if !strings.Contains(text, required) {

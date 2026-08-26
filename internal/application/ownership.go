@@ -53,9 +53,6 @@ func producerLabels(app *applicationv1.OneKSApplication) map[string]string {
 		LabelPlanDigest:       app.Spec.PlanDigest,
 		LabelCatalogueChartID: app.Spec.CatalogueChartID,
 	}
-	if app.Spec.PlanVersion != applicationv1.PlanVersion {
-		return labels
-	}
 	switch app.Spec.Role {
 	case applicationv1.ApplicationRoleRoot:
 		labels[LabelRole] = RootRoleValue

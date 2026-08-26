@@ -316,7 +316,7 @@ func goldenSpec(t *testing.T) applicationv1.OneKSApplicationSpec {
 			Chart:         "kube-prometheus-stack", Version: "v87.12.2", ReleaseName: "oneks-prometheus",
 			TargetNamespace: "catalogue-workloads", ValuesContent: "grafana:\n  enabled: false\n",
 		},
-		Resources: []applicationv1.ResourceSpec{}, Dependencies: []applicationv1.DependencyReference{},
+		Dependencies:    []applicationv1.DependencyReference{},
 		DependencyPlans: []applicationv1.DependencyPlan{},
 		ManagedResources: []applicationv1.ManagedResourceSpec{
 			managedConfigMap("operator-smoke-config", "catalogue-workloads", "oneks-prometheus-smoke", nil),

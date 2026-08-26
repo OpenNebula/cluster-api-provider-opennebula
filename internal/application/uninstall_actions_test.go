@@ -63,15 +63,15 @@ func TestDependencyPlanUninstallMaterializesIntoV1Alpha5Child(t *testing.T) {
 func TestLonghornDependencyChildDigestMatchesOneKSCompiler(t *testing.T) {
 	plan := applicationv1.DependencyPlan{
 		Name: "oneks-dep-oneks-longhorn-e705e7af33775af3fd13", CatalogueChartID: "e3a6dcfe-abca-406a-a73b-d173b75b143a",
-		PlanDigest: "sha256-6dYpATgfPGBVslfmQFiq9ZJ9yANuUlbMu3FUqyR5vyo",
+		PlanDigest: "sha256-uqTQFTmA5703_2Q4amucXWBarTcoevSXmcZ6gAa3WH0",
 		Release: applicationv1.ReleaseSpec{
 			ChartID: "e3a6dcfe-abca-406a-a73b-d173b75b143a", RepositoryURL: "https://charts.longhorn.io",
 			Chart: "longhorn", Version: "v1.12.0", ReleaseName: "oneks-longhorn",
 			TargetNamespace: "longhorn-system", CreateNamespace: true,
 			ValuesContent: "persistence:\n  createStorageClass: true\n  defaultClass: true\n  defaultClassReplicaCount: 1\n  reclaimPolicy: Retain\n",
 		},
-		Resources: []applicationv1.ResourceSpec{}, Dependencies: []applicationv1.DependencyReference{},
-		Uninstall: longhornUninstall(), DeletionPolicy: applicationv1.DeletionPolicyDelete,
+		Dependencies: []applicationv1.DependencyReference{},
+		Uninstall:    longhornUninstall(), DeletionPolicy: applicationv1.DeletionPolicyDelete,
 	}
 	canonical, err := canonicalPlan(dependencyPlanChildSpec("42", plan))
 	if err != nil {
@@ -90,7 +90,7 @@ func TestLonghornDependencyChildDigestMatchesOneKSCompiler(t *testing.T) {
 			TargetNamespace: "catalogue-workloads", CreateNamespace: false,
 			ValuesContent: "grafana:\n  enabled: false\n",
 		},
-		Resources: []applicationv1.ResourceSpec{}, Role: applicationv1.ApplicationRoleRoot,
+		Role:            applicationv1.ApplicationRoleRoot,
 		Dependencies:    []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)},
 		DependencyPlans: []applicationv1.DependencyPlan{plan}, DeletionPolicy: applicationv1.DeletionPolicyDelete,
 	}

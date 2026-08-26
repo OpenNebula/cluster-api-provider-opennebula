@@ -58,8 +58,8 @@ type externalDetectionResult struct {
 }
 
 func usesExternalDetection(app *applicationv1.OneKSApplication) bool {
-	return app.Spec.PlanVersion == applicationv1.PlanVersion &&
-		app.Spec.Role == applicationv1.ApplicationRoleDependency && app.Spec.ExternalDetection != nil
+	return app.Spec.Role == applicationv1.ApplicationRoleDependency &&
+		app.Spec.ExternalDetection != nil
 }
 
 func externalSelection(app *applicationv1.OneKSApplication) (string, error) {

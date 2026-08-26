@@ -52,15 +52,9 @@ func baseStatus(app *applicationv1.OneKSApplication, controllerVersion string) a
 }
 
 func applicationProgressTotal(app *applicationv1.OneKSApplication) int32 {
-	total := len(app.Spec.Resources) + 1
-	if app.Spec.PlanVersion == applicationv1.PlanVersion && app.Spec.Role == applicationv1.ApplicationRoleRoot {
-		total = len(app.Spec.ManagedResources) + 1
-	}
-	if app.Spec.PlanVersion == applicationv1.PlanVersion {
-		total += len(app.Spec.ProtectedSecrets)
-	}
-	if app.Spec.PlanVersion == applicationv1.PlanVersion {
-		total += len(app.Spec.Dependencies)
+	total := 1 + len(app.Spec.Dependencies)
+	if app.Spec.Role == applicationv1.ApplicationRoleRoot {
+		total += len(app.Spec.ManagedResources) + len(app.Spec.ProtectedSecrets)
 	}
 	return int32(total)
 }

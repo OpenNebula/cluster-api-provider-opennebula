@@ -112,7 +112,7 @@ func TestDependencyCompatibilityAcceptsAPINormalizedEmptyDependencies(t *testing
 		t.Fatalf("API round-trip retained empty dependencies unexpectedly: %#v", existing.Spec.Dependencies)
 	}
 
-	if conflict := dependencyCompatibilityError(existing, expected, root.Spec.ClusterID); conflict != nil {
+	if conflict := dependencyIdentityError(existing, expected, root.Spec.ClusterID); conflict != nil {
 		t.Fatalf("API-normalized empty dependencies were treated as conflicting: %v", conflict)
 	}
 }
@@ -525,9 +525,9 @@ func TestDeletingLastExecuteConsumerDeletesDependency(t *testing.T) {
 	assertDependencyTerminating(t, ctx, reconciler.Client, plan.Name)
 }
 
-func TestLegacyDependencyGetsFinalizerBeforeLastConsumerDeletion(t *testing.T) {
+func TestDependencyWithoutFinalizerGetsOneBeforeLastConsumerDeletion(t *testing.T) {
 	ctx := context.Background()
-	plan := dependencyPlanForTest("legacy-last-consumer", "legacy-chart", nil)
+	plan := dependencyPlanForTest("unfinalized-last-consumer", "unfinalized-chart", nil)
 	root := deletingRootForTest(t, "root", plan)
 	dependency := existingDependencyForTest(root, plan)
 	dependency.Finalizers = nil
@@ -547,14 +547,14 @@ func TestLegacyDependencyGetsFinalizerBeforeLastConsumerDeletion(t *testing.T) {
 
 	result := reconcileOnce(t, ctx, reconciler, root)
 	if result.RequeueAfter == 0 && !result.Requeue {
-		t.Fatalf("legacy dependency finalizer installation did not requeue: %#v", result)
+		t.Fatalf("dependency finalizer installation did not requeue: %#v", result)
 	}
 	storedDependency := getDependencyApplication(t, ctx, reconciler.Client, plan.Name)
 	if !containsString(storedDependency.Finalizers, applicationv1.ApplicationFinalizer) {
-		t.Fatalf("legacy dependency cleanup finalizer was not installed: %#v", storedDependency.Finalizers)
+		t.Fatalf("dependency cleanup finalizer was not installed: %#v", storedDependency.Finalizers)
 	}
 	if !storedDependency.DeletionTimestamp.IsZero() {
-		t.Fatalf("legacy dependency was deleted while its finalizer was first installed: %s", storedDependency.DeletionTimestamp)
+		t.Fatalf("dependency was deleted while its finalizer was first installed: %s", storedDependency.DeletionTimestamp)
 	}
 	storedRoot := getApplication(t, ctx, reconciler.Client, root)
 	if !containsString(storedRoot.Finalizers, applicationv1.ApplicationFinalizer) {
@@ -663,7 +663,7 @@ func TestDependencyGCReleasesOnlyDirectEdges(t *testing.T) {
 	reconcileOnce(t, ctx, reconciler, root)
 	storedD := getDependencyApplication(t, ctx, reconciler.Client, d.Name)
 	if !containsString(storedD.Finalizers, applicationv1.ApplicationFinalizer) || !storedD.DeletionTimestamp.IsZero() {
-		t.Fatalf("legacy D was not finalized before deletion: %#v", storedD.ObjectMeta)
+		t.Fatalf("D was not finalized before deletion: %#v", storedD.ObjectMeta)
 	}
 	storedE := getDependencyApplication(t, ctx, reconciler.Client, e.Name)
 	if !storedE.DeletionTimestamp.IsZero() {
@@ -863,9 +863,6 @@ func assertApplicationNotFound(t *testing.T, ctx context.Context, kubeClient cli
 
 func assertOwnEffectsAbsent(t *testing.T, ctx context.Context, kubeClient client.Client, app *applicationv1.OneKSApplication) {
 	t.Helper()
-	for _, resource := range app.Spec.Resources {
-		assertNotFound(t, ctx, kubeClient, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: resource.Namespace, Name: resource.Name}})
-	}
 	assertNotFound(t, ctx, kubeClient, helmChartObject(app.Spec.Release.ReleaseName))
 }
 

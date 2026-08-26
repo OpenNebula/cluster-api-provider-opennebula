@@ -230,18 +230,4 @@ func logResourceStatusTransition(logger logr.Logger, app *applicationv1.OneKSApp
 		)
 		return
 	}
-	for _, resource := range app.Spec.Resources {
-		if resource.ID != transition.id {
-			continue
-		}
-		logger.Info("managed resource ready",
-			"resourceID", resource.ID,
-			"apiVersion", "v1",
-			"kind", "ConfigMap",
-			"resourceNamespace", resource.Namespace,
-			"name", resource.Name,
-			"reason", transition.reason,
-		)
-		return
-	}
 }

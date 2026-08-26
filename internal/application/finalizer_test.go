@@ -32,7 +32,6 @@ import (
 func TestSparseCurrentPlanApplicationFinalizersUseMetadataPatches(t *testing.T) {
 	ctx := context.Background()
 	app := runAIProtectedPlan(t)
-	app.Spec.Resources = []applicationv1.ResourceSpec{}
 	app.Spec.Dependencies = []applicationv1.DependencyReference{}
 	app.Spec.DependencyPlans = []applicationv1.DependencyPlan{}
 	app.Spec.ManagedResources = []applicationv1.ManagedResourceSpec{}

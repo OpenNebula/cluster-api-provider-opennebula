@@ -75,7 +75,7 @@ type protectedSecretsObservation struct {
 }
 
 func usesProtectedSecrets(app *applicationv1.OneKSApplication) bool {
-	return app.Spec.PlanVersion == applicationv1.PlanVersion && app.Spec.Role == applicationv1.ApplicationRoleRoot && len(app.Spec.ProtectedSecrets) != 0
+	return app.Spec.Role == applicationv1.ApplicationRoleRoot && len(app.Spec.ProtectedSecrets) != 0
 }
 
 func validateProtectedSecretContract(spec applicationv1.OneKSApplicationSpec) *PlanError {
@@ -94,9 +94,6 @@ func validateProtectedSecretContract(spec applicationv1.OneKSApplicationSpec) *P
 	}
 	if !validUTF8Bytes(input.Name, 1, 253) || len(validation.IsDNS1123Subdomain(input.Name)) != 0 {
 		return invalid("InvalidSecretInputName", "secretInputRef.name must be a DNS-1123 subdomain")
-	}
-	if input.UID != "" {
-		return invalid("InvalidSecretInputUID", "plan-v1alpha5 binds the input Secret UID through status")
 	}
 	if len(spec.ProtectedSecrets) > maxProtectedSecrets {
 		return invalid("TooManyProtectedSecrets", "protectedSecrets exceeds %d entries", maxProtectedSecrets)
@@ -213,19 +210,16 @@ func (r *Reconciler) readSecretInput(ctx context.Context, app *applicationv1.One
 	if err != nil {
 		return nil, false, &protectedSecretAPIError{operation: "read input", namespace: reference.Namespace, name: reference.Name, cause: err}
 	}
-	expectedUID := reference.UID
-	if app.Spec.PlanVersion == applicationv1.PlanVersion {
-		expectedUID = app.Status.SecretInputUID
-		labels := input.GetLabels()
-		expectedLabels := map[string]string{
-			LabelRootManagedBy: RootManagedByValue, LabelProducer: ProducerValue,
-			LabelClusterID: app.Spec.ClusterID, LabelCatalogueChartID: app.Spec.CatalogueChartID,
-			LabelPlanDigest: app.Spec.PlanDigest, LabelApplicationName: app.Name,
-		}
-		for key, expected := range expectedLabels {
-			if labels[key] != expected {
-				return nil, false, &InputSecretValidationError{Message: "input Secret labels do not match the compiled application"}
-			}
+	expectedUID := app.Status.SecretInputUID
+	labels := input.GetLabels()
+	expectedLabels := map[string]string{
+		LabelRootManagedBy: RootManagedByValue, LabelProducer: ProducerValue,
+		LabelClusterID: app.Spec.ClusterID, LabelCatalogueChartID: app.Spec.CatalogueChartID,
+		LabelPlanDigest: app.Spec.PlanDigest, LabelApplicationName: app.Name,
+	}
+	for key, expected := range expectedLabels {
+		if labels[key] != expected {
+			return nil, false, &InputSecretValidationError{Message: "input Secret labels do not match the compiled application"}
 		}
 	}
 	if expectedUID != "" && string(input.UID) != expectedUID {
@@ -249,7 +243,7 @@ func (r *Reconciler) readSecretInput(ctx context.Context, app *applicationv1.One
 	return input, false, nil
 }
 
-func (r *Reconciler) bindV1Alpha5SecretInput(ctx context.Context, app *applicationv1.OneKSApplication) (bool, error) {
+func (r *Reconciler) bindSecretInput(ctx context.Context, app *applicationv1.OneKSApplication) (bool, error) {
 	if !usesProtectedSecrets(app) || app.Status.SecretInputUID != "" {
 		return false, nil
 	}
@@ -637,10 +631,7 @@ func (r *Reconciler) reconcileDeleteSecretInput(ctx context.Context, app *applic
 	if err != nil {
 		return false, &protectedSecretAPIError{operation: "read deleting input", namespace: reference.Namespace, name: reference.Name, cause: err}
 	}
-	expectedUID := reference.UID
-	if app.Spec.PlanVersion == applicationv1.PlanVersion {
-		expectedUID = app.Status.SecretInputUID
-	}
+	expectedUID := app.Status.SecretInputUID
 	if expectedUID == "" || string(current.UID) != expectedUID {
 		r.event(app, corev1.EventTypeWarning, "InputSecretReplaced", "Input Secret replacement is not owned by this application and will be retained")
 		return false, nil

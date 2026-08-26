@@ -113,8 +113,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (resul
 	if validationError != nil {
 		return r.recordTerminal(ctx, app, validationError.Reason, validationError.Message, false)
 	}
-	if !deleting && app.Spec.PlanVersion == applicationv1.PlanVersion &&
-		app.Spec.ExecutionMode == applicationv1.ExecutionModeExecute && !hasCleanupFinalizer {
+	if !deleting && app.Spec.ExecutionMode == applicationv1.ExecutionModeExecute &&
+		!hasCleanupFinalizer {
 		updated, err := r.patchApplicationFinalizers(
 			ctx, app, append(append([]string(nil), app.Finalizers...), applicationv1.ApplicationFinalizer),
 		)
@@ -126,7 +126,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (resul
 		return ctrl.Result{Requeue: true}, nil
 	}
 	if !deleting {
-		bound, err := r.bindV1Alpha5SecretInput(ctx, app)
+		bound, err := r.bindSecretInput(ctx, app)
 		if err != nil {
 			var invalidInput *InputSecretValidationError
 			if errors.As(err, &invalidInput) {
@@ -192,7 +192,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (resul
 	}
 
 	if deleting {
-		if app.Spec.PlanVersion == applicationv1.PlanVersion && app.Spec.ExecutionMode == applicationv1.ExecutionModeObserve {
+		if app.Spec.ExecutionMode == applicationv1.ExecutionModeObserve {
 			return ctrl.Result{}, nil
 		}
 		if err := r.preflightOwnership(ctx, app, true, managedAPIsRequired); err != nil {
@@ -252,7 +252,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (resul
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	if app.Spec.PlanVersion == applicationv1.PlanVersion && app.Spec.Role == applicationv1.ApplicationRoleRoot {
+	if app.Spec.Role == applicationv1.ApplicationRoleRoot {
 		raced, terminating, conflict, err := r.materializeRootDependencies(ctx, app)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -291,7 +291,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (resul
 	if externalMode == ExternalSelectionExternal {
 		return r.reconcileStatus(ctx, app, false, dependencies)
 	}
-	if usesManagedResources(app) {
+	if isRootApplication(app) {
 		if err := r.preflightOwnership(ctx, app, false, managedAPIsRequired); err != nil {
 			var conflict *OwnershipConflictError
 			if errors.As(err, &conflict) {
@@ -301,11 +301,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (resul
 		}
 	}
 
-	var resourcesReady bool
-	if usesManagedResources(app) {
+	resourcesReady := true
+	if isRootApplication(app) {
 		resourcesReady, err = r.reconcileManagedResources(ctx, app)
-	} else {
-		resourcesReady, err = r.reconcileConfigMaps(ctx, app)
 	}
 	if err != nil {
 		var conflict *OwnershipConflictError
@@ -367,25 +365,6 @@ func (r *Reconciler) preflightOwnership(ctx context.Context, app *applicationv1.
 			return err
 		}
 	}
-	if !usesManagedResources(app) {
-		for _, resource := range app.Spec.Resources {
-			if deleting && resource.DeletionPolicy == applicationv1.DeletionPolicyRetain {
-				continue
-			}
-			object := &corev1.ConfigMap{}
-			err := reader.Get(ctx, types.NamespacedName{Namespace: resource.Namespace, Name: resource.Name}, object)
-			if apierrors.IsNotFound(err) {
-				continue
-			}
-			if err != nil {
-				return fmt.Errorf("preflight ConfigMap %s/%s: %w", resource.Namespace, resource.Name, err)
-			}
-			if !ownershipMatches(app, object) {
-				return &OwnershipConflictError{Kind: "ConfigMap", Namespace: resource.Namespace, Name: resource.Name}
-			}
-		}
-	}
-
 	if deleting && app.Spec.DeletionPolicy == applicationv1.DeletionPolicyRetain {
 		return nil
 	}
@@ -412,59 +391,6 @@ func (r *Reconciler) preflightOwnership(ctx context.Context, app *applicationv1.
 		return &OwnershipConflictError{Kind: "HelmChart", Namespace: HelmChartNamespace, Name: app.Spec.Release.ReleaseName}
 	}
 	return nil
-}
-
-func (r *Reconciler) reconcileConfigMaps(ctx context.Context, app *applicationv1.OneKSApplication) (bool, error) {
-	for _, resource := range app.Spec.Resources {
-		desired := desiredConfigMap(app, resource)
-		current := &corev1.ConfigMap{}
-		err := r.authoritativeReader().Get(ctx, client.ObjectKeyFromObject(desired), current)
-		if apierrors.IsNotFound(err) {
-			ctrl.LoggerFrom(ctx).V(1).Info(
-				"applying managed resource",
-				"action", "create", "apiVersion", "v1", "kind", "ConfigMap",
-				"resourceNamespace", desired.Namespace, "name", desired.Name,
-			)
-			if err := r.Create(ctx, desired, client.FieldOwner(applicationv1.FieldManager)); err != nil {
-				if apierrors.IsAlreadyExists(err) {
-					return false, &OwnershipConflictError{Kind: "ConfigMap", Namespace: desired.Namespace, Name: desired.Name}
-				}
-				return false, fmt.Errorf("create ConfigMap %s/%s: %w", desired.Namespace, desired.Name, err)
-			}
-			ctrl.LoggerFrom(ctx).Info(
-				"managed resource created",
-				"apiVersion", "v1", "kind", "ConfigMap",
-				"resourceNamespace", desired.Namespace, "name", desired.Name,
-			)
-			r.event(app, corev1.EventTypeNormal, "ResourceCreated", fmt.Sprintf("ConfigMap %s/%s created", desired.Namespace, desired.Name))
-			return false, nil
-		}
-		if err != nil {
-			return false, fmt.Errorf("get ConfigMap %s/%s: %w", desired.Namespace, desired.Name, err)
-		}
-		if !ownershipMatches(app, current) {
-			return false, &OwnershipConflictError{Kind: "ConfigMap", Namespace: desired.Namespace, Name: desired.Name}
-		}
-		if configMapNeedsApply(current, desired) {
-			// SSA honors resourceVersion as an optimistic precondition.
-			desired.ResourceVersion = current.ResourceVersion
-			ctrl.LoggerFrom(ctx).V(1).Info(
-				"applying managed resource",
-				"action", "update", "apiVersion", "v1", "kind", "ConfigMap",
-				"resourceNamespace", desired.Namespace, "name", desired.Name,
-			)
-			if err := r.Patch(ctx, desired, client.Apply, client.FieldOwner(applicationv1.FieldManager)); err != nil {
-				return false, fmt.Errorf("apply ConfigMap %s/%s: %w", desired.Namespace, desired.Name, err)
-			}
-			ctrl.LoggerFrom(ctx).Info(
-				"managed resource applied",
-				"apiVersion", "v1", "kind", "ConfigMap",
-				"resourceNamespace", desired.Namespace, "name", desired.Name,
-			)
-			r.event(app, corev1.EventTypeNormal, "ResourceApplied", fmt.Sprintf("ConfigMap %s/%s applied", desired.Namespace, desired.Name))
-		}
-	}
-	return true, nil
 }
 
 func (r *Reconciler) reconcileHelmChart(ctx context.Context, app *applicationv1.OneKSApplication) error {
@@ -518,17 +444,6 @@ func (r *Reconciler) reconcileHelmChart(ctx context.Context, app *applicationv1.
 	return nil
 }
 
-func desiredConfigMap(app *applicationv1.OneKSApplication, resource applicationv1.ResourceSpec) *corev1.ConfigMap {
-	return &corev1.ConfigMap{
-		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"},
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: resource.Namespace, Name: resource.Name,
-			Labels: ownershipLabels(app),
-		},
-		Data: copyStringMap(resource.Data),
-	}
-}
-
 func desiredHelmChart(app *applicationv1.OneKSApplication) *unstructured.Unstructured {
 	object := helmChartObject(app.Spec.Release.ReleaseName)
 	object.SetLabels(ownershipLabels(app))
@@ -554,10 +469,6 @@ func helmChartObject(name string) *unstructured.Unstructured {
 	object.SetNamespace(HelmChartNamespace)
 	object.SetName(name)
 	return object
-}
-
-func configMapNeedsApply(current, desired *corev1.ConfigMap) bool {
-	return !reflect.DeepEqual(current.Data, desired.Data) || !ownedLabelsEqual(current.Labels, desired.Labels)
 }
 
 func helmChartNeedsApply(current, desired *unstructured.Unstructured) bool {
@@ -608,7 +519,7 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 	}
 	resourceCondition := metav1.ConditionFalse
 	resourcesReady := observed.allResources
-	if usesManagedResources(app) {
+	if isRootApplication(app) {
 		resourcesReady = observed.managedResourcesReady
 	}
 	if resourcesReady {
@@ -616,8 +527,8 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 	}
 	resourceReason := conditionReason(resourceCondition, "ResourcesReady", "ResourcesPending")
 	resourceMessage := conditionMessage(resourceCondition, "All managed resources are ready", "Managed resources are not ready")
-	if !usesManagedResources(app) {
-		resourceMessage = conditionMessage(resourceCondition, "All ConfigMaps are ready", "ConfigMaps are not ready")
+	if !isRootApplication(app) {
+		resourceMessage = conditionMessage(resourceCondition, "Dependency has no managed resources", "Dependency resources are not ready")
 	} else if observed.resourcesFailed {
 		resourceReason = observed.resourcesReason
 		resourceMessage = observed.resourcesMessage
@@ -700,7 +611,7 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 }
 
 func (r *Reconciler) observe(ctx context.Context, app *applicationv1.OneKSApplication, managedReadinessEnabled bool) (observation, error) {
-	if usesManagedResources(app) {
+	if isRootApplication(app) {
 		result, err := r.observeManagedResources(ctx, app, managedReadinessEnabled)
 		if err != nil {
 			return result, err
@@ -725,36 +636,6 @@ func (r *Reconciler) observe(ctx context.Context, app *applicationv1.OneKSApplic
 		return r.observeHelm(ctx, app, result)
 	}
 	result := observation{allResources: true, current: app.Spec.Release.ReleaseName}
-	for _, resource := range app.Spec.Resources {
-		object := &corev1.ConfigMap{}
-		err := r.authoritativeReader().Get(ctx, types.NamespacedName{Namespace: resource.Namespace, Name: resource.Name}, object)
-		status := applicationv1.ResourceStatus{ID: resource.ID, Phase: "Pending", Reason: "NotFound", Message: "ConfigMap is absent"}
-		if err == nil {
-			status.ResourceVersion = object.ResourceVersion
-			if reflect.DeepEqual(object.Data, resource.Data) {
-				status.Phase = "Ready"
-				status.Reason = "Applied"
-				status.Message = "ConfigMap is ready"
-				result.completed++
-			} else {
-				status.Reason = "DataDrift"
-				status.Message = "ConfigMap data differs from the compiled plan"
-				result.allResources = false
-				if result.current == app.Spec.Release.ReleaseName {
-					result.current = resource.ID
-				}
-			}
-		} else if !apierrors.IsNotFound(err) {
-			return result, fmt.Errorf("observe ConfigMap %s/%s: %w", resource.Namespace, resource.Name, err)
-		} else {
-			result.allResources = false
-			if result.current == app.Spec.Release.ReleaseName {
-				result.current = resource.ID
-			}
-		}
-		result.resources = append(result.resources, status)
-	}
-
 	return r.observeHelm(ctx, app, result)
 }
 
@@ -852,7 +733,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 	status := baseStatus(app, r.ControllerVersion)
 	status.Phase = applicationv1.PhaseDeleting
 	status.Progress = applicationv1.ApplicationProgress{Total: applicationProgressTotal(app), Current: app.Spec.Release.ReleaseName}
-	if usesManagedResources(app) {
+	if isRootApplication(app) {
 		status.Resources = deletingManagedResourceStatuses(app)
 		if usesProtectedSecrets(app) {
 			status.Resources = append(status.Resources, deletingProtectedSecretStatuses(app)...)
@@ -924,7 +805,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 		}
 	}
 
-	if usesManagedResources(app) {
+	if isRootApplication(app) {
 		deleted, deleteErr := r.reconcileDeleteManagedResources(ctx, app)
 		if deleteErr != nil {
 			var conflict *OwnershipConflictError
@@ -934,43 +815,6 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 			return ctrl.Result{}, deleteErr
 		}
 		if deleted {
-			return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
-		}
-	} else {
-		for index := len(app.Spec.Resources) - 1; index >= 0; index-- {
-			resource := app.Spec.Resources[index]
-			object := &corev1.ConfigMap{}
-			err := r.authoritativeReader().Get(ctx, types.NamespacedName{Namespace: resource.Namespace, Name: resource.Name}, object)
-			if apierrors.IsNotFound(err) {
-				continue
-			}
-			if err != nil {
-				return ctrl.Result{}, fmt.Errorf("get deleting ConfigMap %s/%s: %w", resource.Namespace, resource.Name, err)
-			}
-			if resource.DeletionPolicy == applicationv1.DeletionPolicyRetain {
-				continue
-			}
-			if !ownershipMatches(app, object) {
-				conflict := (&OwnershipConflictError{Kind: "ConfigMap", Namespace: object.Namespace, Name: object.Name}).Error()
-				return r.recordTerminal(ctx, app, "OwnershipConflict", conflict, true)
-			}
-			ctrl.LoggerFrom(ctx).V(1).Info(
-				"deleting managed resource",
-				"apiVersion", "v1", "kind", "ConfigMap",
-				"resourceNamespace", object.Namespace, "name", object.Name,
-			)
-			deleteErr := r.Delete(ctx, object, deletePreconditions(object)...)
-			if deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
-				return ctrl.Result{}, fmt.Errorf("delete ConfigMap %s/%s: %w", resource.Namespace, resource.Name, deleteErr)
-			}
-			if deleteErr == nil {
-				ctrl.LoggerFrom(ctx).Info(
-					"managed resource deletion requested",
-					"apiVersion", "v1", "kind", "ConfigMap",
-					"resourceNamespace", object.Namespace, "name", object.Name,
-				)
-			}
-			r.event(app, corev1.EventTypeNormal, "ResourceDeleted", fmt.Sprintf("ConfigMap %s/%s deletion requested", resource.Namespace, resource.Name))
 			return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
 		}
 	}
@@ -1073,12 +917,10 @@ func (r *Reconciler) recordTerminal(ctx context.Context, app *applicationv1.OneK
 		planCondition = metav1.ConditionFalse
 	}
 	setCondition(&status, app.Generation, ConditionPlanValid, planCondition, reason, message)
-	if app.Spec.PlanVersion == applicationv1.PlanVersion {
-		if len(app.Spec.Dependencies) == 0 {
-			setCondition(&status, app.Generation, ConditionDependenciesReady, metav1.ConditionTrue, "NoDependencies", "Application has no direct dependencies")
-		} else {
-			setCondition(&status, app.Generation, ConditionDependenciesReady, metav1.ConditionFalse, "DependenciesPending", "Direct dependencies have not been evaluated")
-		}
+	if len(app.Spec.Dependencies) == 0 {
+		setCondition(&status, app.Generation, ConditionDependenciesReady, metav1.ConditionTrue, "NoDependencies", "Application has no direct dependencies")
+	} else {
+		setCondition(&status, app.Generation, ConditionDependenciesReady, metav1.ConditionFalse, "DependenciesPending", "Direct dependencies have not been evaluated")
 	}
 	if usesProtectedSecrets(app) {
 		setCondition(&status, app.Generation, ConditionProtectedSecretsReady, metav1.ConditionFalse, reason, message)

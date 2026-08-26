@@ -50,7 +50,6 @@ func TestManagedResourcePlanRootMaterializesUnchangedCurrentDependencyChild(t *t
 	plan := dependencyPlanForTest("dependency", "dependency-chart", nil)
 	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 	root.Spec.PlanVersion = applicationv1.PlanVersion
-	root.Spec.Resources = nil
 	root.Spec.ManagedResources = []applicationv1.ManagedResourceSpec{managedConfigMap("settings", "runai", "settings", nil)}
 	refreshManagedPlan(t, root)
 
@@ -595,7 +594,6 @@ func validManagedRootPlan(t *testing.T) *applicationv1.OneKSApplication {
 	app := goldenApplication(t)
 	app.Spec.PlanVersion = applicationv1.PlanVersion
 	app.Spec.Role = applicationv1.ApplicationRoleRoot
-	app.Spec.Resources = nil
 	app.Spec.ManagedResources = []applicationv1.ManagedResourceSpec{managedConfigMap("settings", "runai", "settings", nil)}
 	refreshManagedPlan(t, app)
 	return app

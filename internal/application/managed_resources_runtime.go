@@ -43,12 +43,12 @@ const (
 	managedAPIsMayBeUnavailable
 )
 
-func usesManagedResources(app *applicationv1.OneKSApplication) bool {
-	return app.Spec.PlanVersion == applicationv1.PlanVersion && app.Spec.Role == applicationv1.ApplicationRoleRoot
+func isRootApplication(app *applicationv1.OneKSApplication) bool {
+	return app.Spec.Role == applicationv1.ApplicationRoleRoot
 }
 
 func managesTargetNamespace(app *applicationv1.OneKSApplication) bool {
-	if !usesManagedResources(app) {
+	if !isRootApplication(app) {
 		return false
 	}
 	matches := 0
@@ -88,7 +88,7 @@ func emptyManagedResource(resource applicationv1.ManagedResourceSpec) *unstructu
 }
 
 func (r *Reconciler) preflightManagedOwnership(ctx context.Context, app *applicationv1.OneKSApplication, deleting bool, managedAPIs managedAPIPreflightMode) error {
-	if !usesManagedResources(app) {
+	if !isRootApplication(app) {
 		return nil
 	}
 	reader := r.authoritativeReader()
