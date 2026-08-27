@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha1"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
 	"github.com/go-logr/logr/funcr"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -371,10 +371,4 @@ func assertNotFound(t *testing.T, ctx context.Context, kubeClient client.Client,
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("expected %T %s to be absent, got %v", object, client.ObjectKeyFromObject(object), err)
 	}
-}
-
-func setHelmCondition(chart *unstructured.Unstructured, conditionType, status, reason, message string) {
-	chart.Object["status"] = map[string]any{"conditions": []any{map[string]any{
-		"type": conditionType, "status": status, "reason": reason, "message": message,
-	}}}
 }

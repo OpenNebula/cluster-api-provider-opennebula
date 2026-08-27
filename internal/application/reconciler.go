@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha1"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -475,17 +475,8 @@ func helmChartNeedsApply(current, desired *unstructured.Unstructured) bool {
 	currentSpec, _, _ := unstructured.NestedMap(current.Object, "spec")
 	desiredSpec, _, _ := unstructured.NestedMap(desired.Object, "spec")
 	return !reflect.DeepEqual(currentSpec, desiredSpec) ||
-		!ownedLabelsEqual(current.GetLabels(), desired.GetLabels()) ||
+		!labelSubsetMatches(current.GetLabels(), desired.GetLabels()) ||
 		current.GetAnnotations()[ChartIDAnnotation] != desired.GetAnnotations()[ChartIDAnnotation]
-}
-
-func ownedLabelsEqual(actual, expected map[string]string) bool {
-	for key, value := range expected {
-		if actual[key] != value {
-			return false
-		}
-	}
-	return true
 }
 
 func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.OneKSApplication, observeOnly bool, dependencies dependencyObservation) (ctrl.Result, error) {
@@ -525,10 +516,10 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 	if resourcesReady {
 		resourceCondition = metav1.ConditionTrue
 	}
-	resourceReason := conditionReason(resourceCondition, "ResourcesReady", "ResourcesPending")
-	resourceMessage := conditionMessage(resourceCondition, "All managed resources are ready", "Managed resources are not ready")
+	resourceReason := conditionText(resourceCondition, "ResourcesReady", "ResourcesPending")
+	resourceMessage := conditionText(resourceCondition, "All managed resources are ready", "Managed resources are not ready")
 	if !isRootApplication(app) {
-		resourceMessage = conditionMessage(resourceCondition, "Dependency has no managed resources", "Dependency resources are not ready")
+		resourceMessage = conditionText(resourceCondition, "Dependency has no managed resources", "Dependency resources are not ready")
 	} else if observed.resourcesFailed {
 		resourceReason = observed.resourcesReason
 		resourceMessage = observed.resourcesMessage
@@ -545,16 +536,16 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 		}
 		setCondition(
 			&status, app.Generation, ConditionProtectedSecretsReady, protectedCondition,
-			conditionReason(protectedCondition, "ProtectedSecretsReady", observed.protectedSecretsReason),
-			conditionMessage(protectedCondition, "All protected Secrets are ready", observed.protectedSecretsMessage),
+			conditionText(protectedCondition, "ProtectedSecretsReady", observed.protectedSecretsReason),
+			conditionText(protectedCondition, "All protected Secrets are ready", observed.protectedSecretsMessage),
 		)
 	}
 	helmCondition := metav1.ConditionFalse
 	if observed.helmReady {
 		helmCondition = metav1.ConditionTrue
 	}
-	helmReason := conditionReason(helmCondition, "HelmReleaseReady", observed.helmReason)
-	helmMessage := conditionMessage(helmCondition, "Helm release is ready", observed.helmMessage)
+	helmReason := conditionText(helmCondition, "HelmReleaseReady", observed.helmReason)
+	helmMessage := conditionText(helmCondition, "Helm release is ready", observed.helmMessage)
 	if observed.helmReady && observed.helmReason == "ExternalDependencyReady" {
 		helmReason = observed.helmReason
 		helmMessage = observed.helmMessage
@@ -582,7 +573,7 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 		readyReason = dependencies.reason
 		readyMessage = dependencies.message
 	}
-	setCondition(&status, app.Generation, ConditionReady, readyCondition, conditionReason(readyCondition, "ApplicationReady", readyReason), conditionMessage(readyCondition, "Application resources and Helm release are ready", readyMessage))
+	setCondition(&status, app.Generation, ConditionReady, readyCondition, conditionText(readyCondition, "ApplicationReady", readyReason), conditionText(readyCondition, "Application resources and Helm release are ready", readyMessage))
 	clearLastError(&status)
 
 	if observeOnly {
@@ -1047,14 +1038,7 @@ func chartConditionMessage(chart *unstructured.Unstructured, conditionType, fall
 	return fallback
 }
 
-func conditionReason(status metav1.ConditionStatus, positive, negative string) string {
-	if status == metav1.ConditionTrue {
-		return positive
-	}
-	return firstNonEmpty(negative, "Pending")
-}
-
-func conditionMessage(status metav1.ConditionStatus, positive, negative string) string {
+func conditionText(status metav1.ConditionStatus, positive, negative string) string {
 	if status == metav1.ConditionTrue {
 		return positive
 	}
@@ -1089,14 +1073,6 @@ func removeString(values []string, removed string) []string {
 		if value != removed {
 			result = append(result, value)
 		}
-	}
-	return result
-}
-
-func copyStringMap(source map[string]string) map[string]string {
-	result := make(map[string]string, len(source))
-	for key, value := range source {
-		result[key] = value
 	}
 	return result
 }

@@ -19,7 +19,7 @@ package application
 import (
 	"testing"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha1"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
 )
 
 func TestValidateNonSensitiveValuesAllowsSecretReferenceMetadata(t *testing.T) {

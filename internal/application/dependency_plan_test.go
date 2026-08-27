@@ -25,7 +25,7 @@ import (
 	"strings"
 	"testing"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha1"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
 	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsvalidation "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/validation"
@@ -73,7 +73,7 @@ func TestGeneratedCRDUsesOnlyCurrentPlanVersion(t *testing.T) {
 	if err := apiextensionsv1.Convert_v1_CustomResourceDefinition_To_apiextensions_CustomResourceDefinition(external, internal, nil); err != nil {
 		t.Fatalf("convert generated OneKSApplication CRD: %v", err)
 	}
-	internal.Status.StoredVersions = []string{"v1alpha1"}
+	internal.Status.StoredVersions = []string{"v1alpha5"}
 	if errors := apiextensionsvalidation.ValidateCustomResourceDefinition(context.Background(), internal); len(errors) != 0 {
 		t.Fatalf("generated OneKSApplication CRD is invalid: %v", errors.ToAggregate())
 	}

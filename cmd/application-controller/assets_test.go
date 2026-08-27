@@ -25,7 +25,7 @@ import (
 )
 
 func TestHelmClusterIDValueContract(t *testing.T) {
-	payload, err := os.ReadFile("../../helm/v1alpha1/oneks-application-controller/values.schema.json")
+	payload, err := os.ReadFile("../../helm/v1alpha5/oneks-application-controller/values.schema.json")
 	if err != nil {
 		t.Fatalf("read Helm values schema: %v", err)
 	}
@@ -45,14 +45,14 @@ func TestHelmClusterIDValueContract(t *testing.T) {
 	if !exists || !containsValue(schema.Required, "clusterID") || clusterID.Type != "string" || clusterID.MinLength != 1 || clusterID.MaxLength != 63 || clusterID.Pattern == "" {
 		t.Fatalf("clusterID is not a required bounded label value: %#v", clusterID)
 	}
-	template, err := os.ReadFile("../../helm/v1alpha1/oneks-application-controller/templates/configmap.yaml")
+	template, err := os.ReadFile("../../helm/v1alpha5/oneks-application-controller/templates/configmap.yaml")
 	if err != nil {
 		t.Fatalf("read Helm ConfigMap template: %v", err)
 	}
 	if !strings.Contains(string(template), `required "clusterID is required" .Values.clusterID`) {
 		t.Fatal("Helm ConfigMap does not fail rendering when clusterID is absent")
 	}
-	base, err := os.ReadFile("../../kustomize/v1alpha1/application-controller/configmap.yaml")
+	base, err := os.ReadFile("../../kustomize/v1alpha5/application-controller/configmap.yaml")
 	if err != nil {
 		t.Fatalf("read kustomize ConfigMap: %v", err)
 	}
@@ -62,11 +62,11 @@ func TestHelmClusterIDValueContract(t *testing.T) {
 }
 
 func TestHelmAndKustomizeUseTheSameGeneratedCRD(t *testing.T) {
-	kustomizeCRD, err := os.ReadFile("../../kustomize/v1alpha1/application-controller/crd/oneks.opennebula.io_oneksapplications.yaml")
+	kustomizeCRD, err := os.ReadFile("../../kustomize/v1alpha5/application-controller/crd/oneks.opennebula.io_oneksapplications.yaml")
 	if err != nil {
 		t.Fatalf("read kustomize CRD: %v", err)
 	}
-	helmCRD, err := os.ReadFile("../../helm/v1alpha1/oneks-application-controller/crds/oneks.opennebula.io_oneksapplications.yaml")
+	helmCRD, err := os.ReadFile("../../helm/v1alpha5/oneks-application-controller/crds/oneks.opennebula.io_oneksapplications.yaml")
 	if err != nil {
 		t.Fatalf("read Helm CRD: %v", err)
 	}
@@ -77,15 +77,15 @@ func TestHelmAndKustomizeUseTheSameGeneratedCRD(t *testing.T) {
 
 func TestPackagesDoNotCreateSharedWorkloadNamespaces(t *testing.T) {
 	for _, path := range []string{
-		"../../helm/v1alpha1/oneks-application-controller/templates/namespaces.yaml",
-		"../../kustomize/v1alpha1/application-controller/namespace_workloads.yaml",
+		"../../helm/v1alpha5/oneks-application-controller/templates/namespaces.yaml",
+		"../../kustomize/v1alpha5/application-controller/namespace_workloads.yaml",
 	} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("obsolete Namespace manifest %s still exists: %v", path, err)
 		}
 	}
 
-	payload, err := os.ReadFile("../../kustomize/v1alpha1/application-controller/kustomization.yaml")
+	payload, err := os.ReadFile("../../kustomize/v1alpha5/application-controller/kustomization.yaml")
 	if err != nil {
 		t.Fatalf("read application-controller kustomization: %v", err)
 	}
@@ -100,8 +100,8 @@ func TestPackagesDoNotCreateSharedWorkloadNamespaces(t *testing.T) {
 
 func TestNamespacePermissionSupportsManagedClusterResources(t *testing.T) {
 	for _, path := range []string{
-		"../../kustomize/v1alpha1/application-controller/role_configmap.yaml",
-		"../../helm/v1alpha1/oneks-application-controller/templates/rbac.yaml",
+		"../../kustomize/v1alpha5/application-controller/role_configmap.yaml",
+		"../../helm/v1alpha5/oneks-application-controller/templates/rbac.yaml",
 	} {
 		payload, err := os.ReadFile(path)
 		if err != nil {
@@ -120,8 +120,8 @@ func TestNamespacePermissionSupportsManagedClusterResources(t *testing.T) {
 func TestManagedResourceBindingUsesUpgradeSafeIdentity(t *testing.T) {
 	want := "kind: ClusterRoleBinding\nmetadata:\n  name: oneks-application-controller-managed-resources\nroleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRole\n  name: oneks-application-controller-managed-resources"
 	for _, path := range []string{
-		"../../kustomize/v1alpha1/application-controller/role_binding_configmap.yaml",
-		"../../helm/v1alpha1/oneks-application-controller/templates/rbac.yaml",
+		"../../kustomize/v1alpha5/application-controller/role_binding_configmap.yaml",
+		"../../helm/v1alpha5/oneks-application-controller/templates/rbac.yaml",
 	} {
 		payload, err := os.ReadFile(path)
 		if err != nil {

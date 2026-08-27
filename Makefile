@@ -281,7 +281,7 @@ $(MONITOR_CHART_PACKAGE): $(MONITOR_CHART_SOURCES) $(HELM)
 APPLICATION_CONTROLLER_RELEASE_TAG ?= application-controller-v$(APPLICATION_CONTROLLER_VERSION)
 APPLICATION_CONTROLLER_CHART_PACKAGE := $(CHARTS_DIR)/$(APPLICATION_CONTROLLER_RELEASE_TAG)/oneks-application-controller-$(APPLICATION_CONTROLLER_VERSION).tgz
 APPLICATION_CONTROLLER_CHART_DIR     := $(CHARTS_DIR)/$(APPLICATION_CONTROLLER_RELEASE_TAG)/oneks-application-controller
-APPLICATION_CONTROLLER_CHART_SOURCES := $(shell find helm/v1alpha1/oneks-application-controller -type f)
+APPLICATION_CONTROLLER_CHART_SOURCES := $(shell find helm/v1alpha5/oneks-application-controller -type f)
 
 .PHONY: application-controller-chart application-controller-package-check
 
@@ -289,7 +289,7 @@ application-controller-chart: $(APPLICATION_CONTROLLER_CHART_PACKAGE)
 
 $(APPLICATION_CONTROLLER_CHART_DIR): $(APPLICATION_CONTROLLER_CHART_SOURCES)
 	install -m u=rwx,go=rx -d $(APPLICATION_CONTROLLER_CHART_DIR)
-	cp -rf helm/v1alpha1/oneks-application-controller/. $(APPLICATION_CONTROLLER_CHART_DIR)/.
+	cp -rf helm/v1alpha5/oneks-application-controller/. $(APPLICATION_CONTROLLER_CHART_DIR)/.
 
 $(APPLICATION_CONTROLLER_CHART_PACKAGE): $(APPLICATION_CONTROLLER_CHART_DIR) $(APPLICATION_CONTROLLER_CHART_SOURCES) $(HELM)
 	$(HELM) package -d $(CHARTS_DIR)/$(APPLICATION_CONTROLLER_RELEASE_TAG) \
@@ -298,18 +298,18 @@ $(APPLICATION_CONTROLLER_CHART_PACKAGE): $(APPLICATION_CONTROLLER_CHART_DIR) $(A
 		$(APPLICATION_CONTROLLER_CHART_DIR)
 
 application-controller-package-check: $(HELM) $(KUSTOMIZE)
-	$(HELM) lint helm/v1alpha1/oneks-application-controller \
+	$(HELM) lint helm/v1alpha5/oneks-application-controller \
 		--set-string clusterID=packaging-check
 	$(HELM) template oneks-application-controller \
-		helm/v1alpha1/oneks-application-controller --include-crds \
+		helm/v1alpha5/oneks-application-controller --include-crds \
 		--set-string clusterID=packaging-check >/dev/null
 	test "$$($(HELM) template oneks-application-controller \
-		helm/v1alpha1/oneks-application-controller \
+		helm/v1alpha5/oneks-application-controller \
 		--set-string clusterID=packaging-check \
 		| grep -c '^kind: Namespace$$')" -eq 0
-	test "$$($(KUSTOMIZE) build kustomize/v1alpha1/application-controller \
+	test "$$($(KUSTOMIZE) build kustomize/v1alpha5/application-controller \
 		| grep -c '^kind: Namespace$$')" -eq 1
-	$(KUSTOMIZE) build kustomize/v1alpha1/application-controller >/dev/null
+	$(KUSTOMIZE) build kustomize/v1alpha5/application-controller >/dev/null
 
 # Deployment
 

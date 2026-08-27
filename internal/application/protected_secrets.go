@@ -24,7 +24,7 @@ import (
 	"reflect"
 	"sort"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha1"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -39,7 +39,6 @@ const (
 	maxProtectedUsername   = 1024
 	maxProtectedRegistry   = 2048
 	maxProtectedEmail      = 320
-	maxSecretInputUID      = 128
 )
 
 type InputSecretValidationError struct {
@@ -429,7 +428,7 @@ func (r *Reconciler) updateProtectedSecret(ctx context.Context, current, desired
 }
 
 func protectedSecretNeedsUpdate(current, desired *corev1.Secret) bool {
-	return current.Type != desired.Type || !reflect.DeepEqual(current.Data, desired.Data) || !ownedLabelsEqual(current.Labels, desired.Labels)
+	return current.Type != desired.Type || !reflect.DeepEqual(current.Data, desired.Data) || !labelSubsetMatches(current.Labels, desired.Labels)
 }
 
 func copySecretData(source map[string][]byte) map[string][]byte {

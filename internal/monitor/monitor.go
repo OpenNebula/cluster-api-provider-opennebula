@@ -30,7 +30,7 @@ import (
 
 const applicationSelector = "app.kubernetes.io/managed-by=oneks,applications.oneks.opennebula.io/producer=oneks-server"
 
-var applicationGVR = schema.GroupVersionResource{Group: "oneks.opennebula.io", Version: "v1alpha1", Resource: "oneksapplications"}
+var applicationGVR = schema.GroupVersionResource{Group: "oneks.opennebula.io", Version: "v1alpha5", Resource: "oneksapplications"}
 
 type Monitor struct {
 	nodeFactory        informers.SharedInformerFactory

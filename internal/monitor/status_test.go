@@ -89,7 +89,7 @@ func TestApplicationReportUsesEmptyStatusBeforeFirstReconcile(t *testing.T) {
 
 func applicationObject() *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "oneks.opennebula.io/v1alpha1", "kind": "OneKSApplication",
+		"apiVersion": "oneks.opennebula.io/v1alpha5", "kind": "OneKSApplication",
 		"metadata": map[string]any{
 			"name": "runai", "namespace": "oneks-system", "uid": "app-uid",
 			"resourceVersion": "17", "generation": int64(1),

@@ -19,7 +19,7 @@ package application
 import (
 	"fmt"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha1"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -65,13 +65,7 @@ func producerLabels(app *applicationv1.OneKSApplication) map[string]string {
 }
 
 func producerLabelsMatch(app *applicationv1.OneKSApplication) bool {
-	actual := app.GetLabels()
-	for key, expected := range producerLabels(app) {
-		if actual[key] != expected {
-			return false
-		}
-	}
-	return true
+	return labelSubsetMatches(app.GetLabels(), producerLabels(app))
 }
 
 func ownershipLabels(app *applicationv1.OneKSApplication) map[string]string {
@@ -86,9 +80,12 @@ func ownershipLabels(app *applicationv1.OneKSApplication) map[string]string {
 }
 
 func ownershipMatches(app *applicationv1.OneKSApplication, object metav1.Object) bool {
-	actual := object.GetLabels()
-	for key, expected := range ownershipLabels(app) {
-		if actual[key] != expected {
+	return labelSubsetMatches(object.GetLabels(), ownershipLabels(app))
+}
+
+func labelSubsetMatches(actual, expected map[string]string) bool {
+	for key, value := range expected {
+		if actual[key] != value {
 			return false
 		}
 	}

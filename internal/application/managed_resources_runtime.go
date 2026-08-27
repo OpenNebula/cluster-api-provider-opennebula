@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha1"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -217,7 +217,7 @@ func managedResourceNeedsApply(current, desired *unstructured.Unstructured) bool
 			return true
 		}
 	}
-	if !ownedLabelsEqual(current.GetLabels(), desired.GetLabels()) {
+	if !labelSubsetMatches(current.GetLabels(), desired.GetLabels()) {
 		return true
 	}
 	for key, value := range desired.GetAnnotations() {

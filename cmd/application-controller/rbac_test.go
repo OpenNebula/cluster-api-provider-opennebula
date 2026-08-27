@@ -28,7 +28,7 @@ import (
 )
 
 func TestApplicationRoleHasOnlyRequiredApplicationWrites(t *testing.T) {
-	payload, err := os.ReadFile("../../kustomize/v1alpha1/application-controller/role_application.yaml")
+	payload, err := os.ReadFile("../../kustomize/v1alpha5/application-controller/role_application.yaml")
 	if err != nil {
 		t.Fatalf("read application Role: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestApplicationRoleHasOnlyRequiredApplicationWrites(t *testing.T) {
 		t.Fatalf("OneKSApplication verbs = %#v across %d rules, want exactly %#v", applicationVerbs, applicationRules, wantApplicationVerbs)
 	}
 
-	helmRBAC, err := os.ReadFile("../../helm/v1alpha1/oneks-application-controller/templates/rbac.yaml")
+	helmRBAC, err := os.ReadFile("../../helm/v1alpha5/oneks-application-controller/templates/rbac.yaml")
 	if err != nil {
 		t.Fatalf("read Helm RBAC template: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestApplicationRoleHasOnlyRequiredApplicationWrites(t *testing.T) {
 }
 
 func TestManagedResourceRBACIsKindAndVerbBounded(t *testing.T) {
-	payload, err := os.ReadFile("../../kustomize/v1alpha1/application-controller/role_configmap.yaml")
+	payload, err := os.ReadFile("../../kustomize/v1alpha5/application-controller/role_configmap.yaml")
 	if err != nil {
 		t.Fatalf("read managed-resource ClusterRole: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestManagedResourceRBACIsKindAndVerbBounded(t *testing.T) {
 		}
 	}
 
-	helmPayload, err := os.ReadFile("../../helm/v1alpha1/oneks-application-controller/templates/rbac.yaml")
+	helmPayload, err := os.ReadFile("../../helm/v1alpha5/oneks-application-controller/templates/rbac.yaml")
 	if err != nil {
 		t.Fatalf("read Helm RBAC: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestManagedResourceRBACIsKindAndVerbBounded(t *testing.T) {
 		t.Fatal("Helm managed-resource RBAC contains a wildcard permission")
 	}
 
-	bindingPayload, err := os.ReadFile("../../kustomize/v1alpha1/application-controller/role_binding_configmap.yaml")
+	bindingPayload, err := os.ReadFile("../../kustomize/v1alpha5/application-controller/role_binding_configmap.yaml")
 	if err != nil {
 		t.Fatalf("read managed-resource ClusterRoleBinding: %v", err)
 	}
