@@ -19,17 +19,22 @@ func TestMonitorDockerfileIncludesMonitorPackageBeforeBuild(t *testing.T) {
 		t.Fatalf("read Dockerfile.monitor: %v", err)
 	}
 	content := string(dockerfile)
-	copyStep := "COPY internal/monitor/ internal/monitor/"
+	copySteps := []string{
+		"COPY internal/monitor/ internal/monitor/",
+		"COPY internal/resourceobserver/ internal/resourceobserver/",
+	}
 	buildStep := "go build -a -o monitor ./cmd/monitor"
-	copyIndex := strings.Index(content, copyStep)
 	buildIndex := strings.Index(content, buildStep)
-	if copyIndex < 0 {
-		t.Fatalf("Dockerfile.monitor does not include %q", copyStep)
+	for _, copyStep := range copySteps {
+		copyIndex := strings.Index(content, copyStep)
+		if copyIndex < 0 {
+			t.Fatalf("Dockerfile.monitor does not include %q", copyStep)
+		}
+		if buildIndex >= 0 && copyIndex > buildIndex {
+			t.Fatalf("Dockerfile.monitor copies package after building the monitor: %q", copyStep)
+		}
 	}
 	if buildIndex < 0 {
 		t.Fatalf("Dockerfile.monitor does not include monitor build step %q", buildStep)
-	}
-	if copyIndex > buildIndex {
-		t.Fatal("Dockerfile.monitor copies internal/monitor after building the monitor")
 	}
 }

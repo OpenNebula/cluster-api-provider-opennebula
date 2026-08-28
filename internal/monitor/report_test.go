@@ -21,6 +21,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/OpenNebula/cluster-api-provider-opennebula/internal/resourceobserver"
 )
 
 func TestExistingNodeReportJSONIsStable(t *testing.T) {
@@ -87,6 +89,33 @@ func TestHTTPEncryptedSender(t *testing.T) {
 	wantBody := `{"kind":"Node","name":"worker-1","resourceVersion":"42","event":"Updated"}`
 	if decrypted := decryptEnvelope(t, body, key); decrypted != wantBody {
 		t.Fatalf("unexpected decrypted body:\n got: %s\nwant: %s", decrypted, wantBody)
+	}
+}
+
+func TestHTTPEncryptedSenderEncryptsResourceValue(t *testing.T) {
+	var body string
+	sender := newTestEncryptedSender(t, "http://monitor.example/api/v1", bytes.Repeat([]byte{0x42}, 32))
+	sender.client.Transport = roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		payload, _ := io.ReadAll(request.Body)
+		body = string(payload)
+		return &http.Response{StatusCode: http.StatusNoContent, Status: "204 No Content",
+			Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
+	})
+	value := resourceobserver.ResourceValue{
+		Kind: "ResourceValue", ID: "deployment-ready",
+		APIVersion: "apps/v1", Resource: "deployments", Namespace: "payments",
+		Name: "api", Path: "status.readyReplicas", Value: int64(3),
+		ObservedAt: "2026-08-28T12:00:00Z",
+	}
+	if err := sender.Send(context.Background(), value); err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(decryptEnvelope(t, body, bytes.Repeat([]byte{0x42}, 32))), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["kind"] != "ResourceValue" || decoded["id"] != "deployment-ready" || decoded["value"] != float64(3) {
+		t.Fatalf("unexpected decrypted resource value: %#v", decoded)
 	}
 }
 

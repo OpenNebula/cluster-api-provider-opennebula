@@ -88,6 +88,12 @@ func (m *Monitor) Run(ctx context.Context) error {
 
 func (m *Monitor) Ready() bool { return m.ready.Load() }
 
+// EnqueueCallback adds a payload to the monitor's bounded, rate-limited,
+// coalescing delivery queue.
+func (m *Monitor) EnqueueCallback(identity string, payload CallbackPayload) bool {
+	return m.reports.Add(identity, payload)
+}
+
 func (m *Monitor) onNode(obj any, event string) {
 	node, ok := objectFromEvent[*corev1.Node](obj)
 	if !ok {

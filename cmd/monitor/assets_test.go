@@ -47,6 +47,12 @@ func TestMonitorHelmConfigRequiresRuntimeValues(t *testing.T) {
 			t.Fatalf("monitor ConfigMap template does not contain %q", required)
 		}
 	}
+	if strings.Contains(text, "MONITOR_RESOURCE_ALLOWLIST") {
+		t.Fatal("monitor ConfigMap still configures an application-level resource allowlist")
+	}
+	if !strings.Contains(text, "MONITOR_RESOURCE_POLL_INTERVAL") {
+		t.Fatal("monitor ConfigMap does not configure the resource poll interval")
+	}
 }
 
 func TestMonitorHelmValuesAndTemplateConfigureAuthenticationProjection(t *testing.T) {
@@ -64,6 +70,9 @@ func TestMonitorHelmValuesAndTemplateConfigureAuthenticationProjection(t *testin
 	}
 	if monitorValues["authSecretName"] != "" || monitorValues["authSecretKey"] != "ONE_AUTH" {
 		t.Fatalf("unexpected authentication Helm values: %#v", monitorValues)
+	}
+	if monitorValues["resourcePollInterval"] != "30s" {
+		t.Fatalf("unexpected resource poll interval Helm value: %#v", monitorValues)
 	}
 
 	template, err := os.ReadFile("../../helm/v1beta1/capone-monitor/templates/deployment.yaml")
@@ -116,7 +125,10 @@ func TestGeneratedMonitorChartRendersSecretFileAuthentication(t *testing.T) {
 
 	var deployment *appsv1.Deployment
 	var monitorSecret *corev1.Secret
+	resourceConfigMap := false
 	rbacObjects := 0
+	observedResources := map[string]bool{}
+	viewBinding := false
 	for _, object := range decodeManifestObjects(t, rendered) {
 		switch object.GetKind() {
 		case "Deployment":
@@ -135,6 +147,9 @@ func TestGeneratedMonitorChartRendersSecretFileAuthentication(t *testing.T) {
 		case "ConfigMap":
 			candidate := &corev1.ConfigMap{}
 			convertManifestObject(t, object, candidate)
+			if candidate.Name == "capone-resource-monitor" {
+				_, resourceConfigMap = candidate.Data["monitor.yaml"]
+			}
 			for key := range candidate.Data {
 				if key == "MONITOR_AUTH" || key == "ONE_AUTH" {
 					t.Fatalf("rendered ConfigMap %s contains authentication key %s", candidate.Name, key)
@@ -154,6 +169,20 @@ func TestGeneratedMonitorChartRendersSecretFileAuthentication(t *testing.T) {
 			candidate := &rbacv1.ClusterRole{}
 			convertManifestObject(t, object, candidate)
 			assertNoSecretRules(t, candidate.Name, candidate.Rules)
+			if candidate.Name == "capone-cluster-monitor" {
+				for _, rule := range candidate.Rules {
+					for _, resource := range rule.Resources {
+						observedResources[resource] = true
+					}
+				}
+			}
+			rbacObjects++
+		case "ClusterRoleBinding":
+			candidate := &rbacv1.ClusterRoleBinding{}
+			convertManifestObject(t, object, candidate)
+			if candidate.Name == "capone-cluster-monitor-view" && candidate.RoleRef.Name == "view" {
+				viewBinding = true
+			}
 			rbacObjects++
 		}
 	}
@@ -166,8 +195,14 @@ func TestGeneratedMonitorChartRendersSecretFileAuthentication(t *testing.T) {
 		monitorSecret.StringData["MONITOR_KEY"] == "" {
 		t.Fatalf("rendered monitor-owned Secret must contain only MONITOR_KEY: %#v", monitorSecret)
 	}
+	if !resourceConfigMap {
+		t.Fatal("generated monitor chart did not render the administrator-editable resource ConfigMap")
+	}
 	if rbacObjects == 0 {
 		t.Fatal("generated monitor chart did not render RBAC objects")
+	}
+	if !observedResources["nodes"] || !viewBinding {
+		t.Fatalf("generated monitor RBAC is missing view or Nodes access: resources=%#v view=%t", observedResources, viewBinding)
 	}
 }
 
@@ -280,11 +315,20 @@ func assertNoSecretRules(t *testing.T, name string, rules []rbacv1.PolicyRule) {
 	t.Helper()
 	for _, rule := range rules {
 		for _, resource := range rule.Resources {
-			if resource == "secrets" || resource == "*" {
+			if resource == "secrets" || resource == "*" && grantsCoreAPI(rule.APIGroups) {
 				t.Fatalf("rendered RBAC %s grants Secret API access: %#v", name, rule)
 			}
 		}
 	}
+}
+
+func grantsCoreAPI(groups []string) bool {
+	for _, group := range groups {
+		if group == "" || group == "*" {
+			return true
+		}
+	}
+	return false
 }
 
 func assertNoRenderedAuthKeys(t *testing.T, name string, data map[string][]byte, stringData map[string]string) {

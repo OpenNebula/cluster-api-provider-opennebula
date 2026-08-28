@@ -11,6 +11,7 @@ You may obtain a copy of the License at
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/OpenNebula/cluster-api-provider-opennebula/internal/monitor"
+	"github.com/OpenNebula/cluster-api-provider-opennebula/internal/resourceobserver"
 )
 
 func main() {
@@ -59,16 +61,32 @@ func main() {
 		klog.ErrorS(err, "unable to create monitor")
 		os.Exit(1)
 	}
+	resourcePoller, err := resourceobserver.NewResourceValuePoller(
+		client, dynamicClient,
+		resourceobserver.PollerOptions{
+			ConfigNamespace: config.ResourceConfigNamespace,
+			ConfigName:      config.ResourceConfigName,
+			PollInterval:    config.ResourcePollInterval,
+		},
+		func(identity string, value resourceobserver.ResourceValue) bool {
+			return watcher.EnqueueCallback(identity, value)
+		},
+	)
+	if err != nil {
+		klog.ErrorS(err, "unable to create resource value poller")
+		os.Exit(1)
+	}
 
 	ctx := ctrl.SetupSignalHandler()
 	health := &http.Server{
 		Addr:    config.HealthAddress,
-		Handler: healthHandler(watcher),
+		Handler: healthHandler(watcher, resourcePoller),
 	}
 	go func() {
 		<-ctx.Done()
 		_ = health.Close()
 	}()
+	go resourcePoller.Run(ctx)
 	go func() {
 		klog.InfoS("starting health server", "address", config.HealthAddress)
 		if err := health.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -82,7 +100,7 @@ func main() {
 	}
 }
 
-func healthHandler(watcher *monitor.Monitor) http.Handler {
+func healthHandler(watcher *monitor.Monitor, pollers ...*resourceobserver.ResourceValuePoller) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprintln(w, "ok")
@@ -93,6 +111,14 @@ func healthHandler(watcher *monitor.Monitor) http.Handler {
 			return
 		}
 		_, _ = fmt.Fprintln(w, "ok")
+	})
+	mux.HandleFunc("/configz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if len(pollers) == 0 || pollers[0] == nil {
+			_ = json.NewEncoder(w).Encode(resourceobserver.ConfigStatus{})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(pollers[0].Status())
 	})
 	return mux
 }

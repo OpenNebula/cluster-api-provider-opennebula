@@ -13,3 +13,11 @@ monitor:
   applicationNamespace: oneks-system
   httpTimeout: 10s
   healthAddress: ":8081"
+  resourceConfigNamespace: kube-system
+  resourceConfigName: capone-resource-monitor
+  resourcePollInterval: 30s
+
+resourceConfig:
+  # Create an empty live configuration that cluster administrators can edit.
+  create: true
+  monitorYaml: ""

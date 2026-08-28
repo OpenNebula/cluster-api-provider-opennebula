@@ -36,4 +36,10 @@ func TestHealthHandlerPreservesHealthAndReadinessEndpoints(t *testing.T) {
 	if metrics.Code != http.StatusNotFound {
 		t.Fatalf("health listener exposed metrics with status %d", metrics.Code)
 	}
+
+	config := httptest.NewRecorder()
+	handler.ServeHTTP(config, httptest.NewRequest(http.MethodGet, "/configz", nil))
+	if config.Code != http.StatusOK || config.Body.String() != "{\"configMap\":\"\",\"digest\":\"\",\"active\":false}\n" {
+		t.Fatalf("unexpected config status response: %d %q", config.Code, config.Body.String())
+	}
 }

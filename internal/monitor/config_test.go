@@ -39,6 +39,26 @@ func TestConfigLoadsExplicitValues(t *testing.T) {
 	if config.HealthAddress != ":8081" || config.ApplicationNamespace != "oneks-system" || config.HTTPTimeout.String() != "10s" {
 		t.Fatalf("unexpected configuration: %#v", config)
 	}
+	if config.ResourceConfigNamespace != "kube-system" || config.ResourceConfigName != "capone-resource-monitor" {
+		t.Fatalf("unexpected dynamic resource defaults: %#v", config)
+	}
+	if config.ResourcePollInterval.String() != "30s" {
+		t.Fatalf("unexpected resource poll interval: %s", config.ResourcePollInterval)
+	}
+}
+
+func TestConfigLoadsDynamicResourceOverrides(t *testing.T) {
+	setRequiredMonitorEnv(t, "http://oneks.example/api/v1", "42")
+	t.Setenv("MONITOR_RESOURCE_CONFIG_NAMESPACE", "monitoring")
+	t.Setenv("MONITOR_RESOURCE_CONFIG_NAME", "custom-observer")
+	t.Setenv("MONITOR_RESOURCE_POLL_INTERVAL", "45s")
+	config, err := ConfigFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.ResourceConfigNamespace != "monitoring" || config.ResourceConfigName != "custom-observer" || config.ResourcePollInterval.String() != "45s" {
+		t.Fatalf("dynamic resource overrides were lost: %#v", config)
+	}
 }
 
 func TestConfigRequiresRuntimeValues(t *testing.T) {
@@ -81,6 +101,14 @@ func TestConfigRejectsInvalidTimeout(t *testing.T) {
 	t.Setenv("MONITOR_HTTP_TIMEOUT", "0s")
 	if _, err := ConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "positive duration") {
 		t.Fatalf("expected timeout validation error, got %v", err)
+	}
+}
+
+func TestConfigRejectsInvalidResourcePollInterval(t *testing.T) {
+	setRequiredMonitorEnv(t, "https://oneks.example/api/v1", "42")
+	t.Setenv("MONITOR_RESOURCE_POLL_INTERVAL", "0s")
+	if _, err := ConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "MONITOR_RESOURCE_POLL_INTERVAL") {
+		t.Fatalf("expected resource poll interval validation error, got %v", err)
 	}
 }
 

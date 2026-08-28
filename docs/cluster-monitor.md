@@ -1,10 +1,12 @@
 # In-cluster status monitor
 
 `cmd/monitor` is a separate binary intended to run in each workload cluster.
-It uses Kubernetes shared informers (`List` followed by `Watch`) for Nodes and
-root `oneks.opennebula.io/v1alpha5` OneKSApplications. The application
+It uses Kubernetes shared informers (`List` followed by `Watch`) for Nodes,
+root `oneks.opennebula.io/v1alpha5` OneKSApplications, and an optional set of
+resources selected by a live ConfigMap. The application
 controller remains the only component that executes application plans; the
-monitor only projects their status to OneKS.
+monitor only projects selected scalar values to OneKS. It does not evaluate
+those values as alerts, health checks, or policy decisions.
 
 The monitor does not access Kubernetes Secrets through the Kubernetes API or
 read Helm release storage. Kubelet projects the configured authentication
@@ -26,12 +28,112 @@ projected Secret file named by `MONITOR_AUTH_FILE`.
 | `MONITOR_APPLICATION_NAMESPACE` | yes | `oneks-system` (Helm) | Namespace containing root OneKSApplications |
 | `MONITOR_HTTP_TIMEOUT` | yes | `10s` (Helm) | Timeout for one report attempt |
 | `MONITOR_HEALTH_ADDRESS` | yes | `:8081` (Helm) | Health and readiness listener |
+| `MONITOR_RESOURCE_CONFIG_NAMESPACE` | no | `kube-system` | Namespace of the dynamic configuration ConfigMap |
+| `MONITOR_RESOURCE_CONFIG_NAME` | no | `capone-resource-monitor` | Name of the dynamic configuration ConfigMap |
+| `MONITOR_RESOURCE_ALLOWLIST` | no | conservative built-in list | Comma-separated allowed `group/version/resource` entries; core resources use `version/resource` |
 
 The monitor binary requires every variable in the table. The defaults shown
 above are supplied by the Helm chart and are not defaults in the binary.
 
-The health listener exposes `/healthz` and `/readyz`. Readiness becomes true
-after the Node and OneKSApplication informer caches have synchronized.
+The health listener exposes `/healthz`, `/readyz`, and `/configz`. Readiness
+becomes true after the essential Node and OneKSApplication informer caches
+have synchronized. A missing or invalid dynamic ConfigMap never changes that
+readiness. `/configz` reveals only the ConfigMap identity, active digest,
+active rule count, and a bounded sanitized error.
+
+## Dynamic resource observations
+
+The optional ConfigMap contains one strict YAML document in `monitor.yaml`:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: capone-resource-monitor
+  namespace: kube-system
+data:
+  monitor.yaml: |
+    apiVersion: monitoring.oneks.opennebula.io/v1alpha1
+    kind: ResourceMonitorConfig
+    spec:
+      resources:
+        - id: payments-api
+          target:
+            apiVersion: apps/v1
+            resource: deployments
+            namespace: payments
+            name: api
+          values:
+            - key: desiredReplicas
+              fieldPath: spec.replicas
+            - key: readyReplicas
+              fieldPath: status.readyReplicas
+            - key: available
+              condition:
+                type: Available
+                field: status
+        - id: import-jobs
+          target:
+            apiVersion: batch/v1
+            resource: jobs
+            namespace: imports
+            labelSelector: app.kubernetes.io/managed-by=oneks
+            maxObjects: 25
+          values:
+            - key: active
+              fieldPath: status.active
+            - key: complete
+              condition:
+                type: Complete
+                field: status
+```
+
+Each target must use either `name` or `labelSelector`; selectors also require
+`maxObjects` (1–100). Field paths are simple dot-separated object keys, not
+JSONPath or an expression language. Conditions select an entry by `type` from
+`status.conditions` and may project only `status`, `reason`, or `message`.
+Missing fields become JSON `null`; maps and arrays are rejected.
+
+The parser rejects unknown or duplicate YAML fields, aliases, multiple
+documents, oversized input, duplicate IDs/keys, excessive field depth and
+cardinality, and targets outside the runtime allowlist. A valid update starts
+and synchronizes all new watches, atomically becomes active, and only then
+cancels the old watches. An invalid update leaves the last valid set running.
+Deleting the ConfigMap stops only these dynamic watches and does not synthesize
+resource deletion events.
+
+An observation sent through the existing encrypted callback is:
+
+```json
+{
+  "kind": "ResourceObservation",
+  "config": "capone-resource-monitor",
+  "configRevision": "sha256-...",
+  "resourceID": "payments-api",
+  "apiVersion": "apps/v1",
+  "resource": "deployments",
+  "namespace": "payments",
+  "name": "api",
+  "uid": "resource-uid",
+  "resourceVersion": "98127",
+  "event": "Updated",
+  "observedAt": "2026-08-26T12:30:00Z",
+  "values": {"desiredReplicas": 3, "readyReplicas": 2, "available": "False"}
+}
+```
+
+Updates are emitted only when selected values, UID, or resource identity
+changes. Deletes contain `values: {}` and preserve the last identity. Queue
+coalescing uses the configuration revision, rule ID, GVR, namespace, name and
+UID; `resourceVersion` is deliberately excluded.
+
+The Helm `resourceAllowlist` value is rendered both as runtime GVR allowlist
+and `get/list/watch` RBAC. Its conservative defaults cover Deployments,
+StatefulSets, DaemonSets, Jobs, Pods and PVCs. Add a CRD with, for example,
+`apiVersion: run.ai/v1` and its plural resource. Secrets, token/credential
+resources, authorization reviews and all subresources remain forbidden even
+if entered in values. The monitor never mutates watched resources or writes
+the ConfigMap.
 
 ## Installation
 
@@ -135,6 +237,15 @@ credential in its environment or copy it into the monitor-owned Secret.
 
 The monitor sends reports to `/clusters/<clusterID>/status`. Absolute HTTP and
 HTTPS endpoints are accepted, and redirects are rejected.
+
+OneKS persists each accepted `ResourceObservation` as a dedicated internal ODS
+document keyed by cluster and resource identity, rather than adding arbitrary
+keys to the Cluster document. At most 512 identities are retained per cluster;
+a later report replaces the payload for the same identity. `Deleted` uses
+physical-delete semantics, so it removes the stored identity and does not
+appear in `GET /clusters/<clusterID>/observations`. That endpoint first applies
+normal Cluster authorization and returns only callback payloads, never ODS
+document IDs, storage names, ownership metadata, or monitor keys.
 
 ## Delivery semantics
 

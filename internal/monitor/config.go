@@ -20,22 +20,33 @@ import (
 )
 
 type Config struct {
-	Endpoint             string
-	ClusterID            string
-	Key                  []byte
-	AuthFile             string
-	HTTPTimeout          time.Duration
-	HealthAddress        string
-	ApplicationNamespace string
+	Endpoint                string
+	ClusterID               string
+	Key                     []byte
+	AuthFile                string
+	HTTPTimeout             time.Duration
+	HealthAddress           string
+	ApplicationNamespace    string
+	ResourceConfigNamespace string
+	ResourceConfigName      string
+	ResourcePollInterval    time.Duration
 }
 
 func ConfigFromEnv() (Config, error) {
 	c := Config{
-		Endpoint:             strings.TrimSpace(os.Getenv("MONITOR_ENDPOINT")),
-		ClusterID:            strings.TrimSpace(os.Getenv("MONITOR_CLUSTER_ID")),
-		AuthFile:             strings.TrimSpace(os.Getenv("MONITOR_AUTH_FILE")),
-		HealthAddress:        strings.TrimSpace(os.Getenv("MONITOR_HEALTH_ADDRESS")),
-		ApplicationNamespace: strings.TrimSpace(os.Getenv("MONITOR_APPLICATION_NAMESPACE")),
+		Endpoint:                strings.TrimSpace(os.Getenv("MONITOR_ENDPOINT")),
+		ClusterID:               strings.TrimSpace(os.Getenv("MONITOR_CLUSTER_ID")),
+		AuthFile:                strings.TrimSpace(os.Getenv("MONITOR_AUTH_FILE")),
+		HealthAddress:           strings.TrimSpace(os.Getenv("MONITOR_HEALTH_ADDRESS")),
+		ApplicationNamespace:    strings.TrimSpace(os.Getenv("MONITOR_APPLICATION_NAMESPACE")),
+		ResourceConfigNamespace: strings.TrimSpace(os.Getenv("MONITOR_RESOURCE_CONFIG_NAMESPACE")),
+		ResourceConfigName:      strings.TrimSpace(os.Getenv("MONITOR_RESOURCE_CONFIG_NAME")),
+	}
+	if c.ResourceConfigNamespace == "" {
+		c.ResourceConfigNamespace = "kube-system"
+	}
+	if c.ResourceConfigName == "" {
+		c.ResourceConfigName = "capone-resource-monitor"
 	}
 	if c.Endpoint == "" {
 		return Config{}, fmt.Errorf("MONITOR_ENDPOINT is required")
@@ -79,6 +90,15 @@ func ConfigFromEnv() (Config, error) {
 	c.HTTPTimeout, err = time.ParseDuration(timeout)
 	if err != nil || c.HTTPTimeout <= 0 {
 		return Config{}, fmt.Errorf("MONITOR_HTTP_TIMEOUT must be a positive duration: %q", timeout)
+	}
+
+	pollInterval := strings.TrimSpace(os.Getenv("MONITOR_RESOURCE_POLL_INTERVAL"))
+	if pollInterval == "" {
+		pollInterval = "30s"
+	}
+	c.ResourcePollInterval, err = time.ParseDuration(pollInterval)
+	if err != nil || c.ResourcePollInterval <= 0 {
+		return Config{}, fmt.Errorf("MONITOR_RESOURCE_POLL_INTERVAL must be a positive duration: %q", pollInterval)
 	}
 
 	return c, nil

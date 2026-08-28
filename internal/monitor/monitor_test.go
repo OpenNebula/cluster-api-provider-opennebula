@@ -28,18 +28,22 @@ import (
 )
 
 type recordingSender struct {
-	reports []Report
-	err     error
+	reports  []Report
+	payloads []CallbackPayload
+	err      error
 }
 
-func (s *recordingSender) Send(_ context.Context, report Report) error {
-	s.reports = append(s.reports, report)
+func (s *recordingSender) Send(_ context.Context, payload CallbackPayload) error {
+	s.payloads = append(s.payloads, payload)
+	if report, ok := payload.(Report); ok {
+		s.reports = append(s.reports, report)
+	}
 	return s.err
 }
 
-type senderFunc func(context.Context, Report) error
+type senderFunc func(context.Context, CallbackPayload) error
 
-func (f senderFunc) Send(ctx context.Context, report Report) error { return f(ctx, report) }
+func (f senderFunc) Send(ctx context.Context, report CallbackPayload) error { return f(ctx, report) }
 
 func TestEnqueueKeepsLatestReportForExistingKey(t *testing.T) {
 	queue := newReportQueue(&recordingSender{})
@@ -51,8 +55,25 @@ func TestEnqueueKeepsLatestReportForExistingKey(t *testing.T) {
 	if len(queue.pending) != 1 {
 		t.Fatalf("expected one pending key, got %d", len(queue.pending))
 	}
-	if got := queue.pending["Node/worker-1"].Event; got != "Updated" {
+	if got := queue.pending["Node/worker-1"].value.(Report).Event; got != "Updated" {
 		t.Fatalf("expected latest event, got %q", got)
+	}
+}
+
+type testCallback struct {
+	Kind  string `json:"kind"`
+	Value int    `json:"value"`
+}
+
+func (callback testCallback) CallbackKind() string { return callback.Kind }
+
+func TestEnqueueCoalescesLatestGenericCallback(t *testing.T) {
+	queue := newReportQueue(&recordingSender{})
+	defer queue.queue.ShutDown()
+	queue.Add("resource-value/stable", testCallback{Kind: "ResourceValue", Value: 1})
+	queue.Add("resource-value/stable", testCallback{Kind: "ResourceValue", Value: 2})
+	if got := queue.pending["resource-value/stable"].value.(testCallback).Value; got != 2 {
+		t.Fatalf("coalesced value = %d, want 2", got)
 	}
 }
 
@@ -76,7 +97,8 @@ func TestFailedCallbackRemainsPendingAndIsRateLimited(t *testing.T) {
 func TestReportAddedDuringSendRemainsPending(t *testing.T) {
 	var queue *reportQueue
 	sent := make([]Report, 0, 2)
-	queue = newReportQueue(senderFunc(func(_ context.Context, report Report) error {
+	queue = newReportQueue(senderFunc(func(_ context.Context, payload CallbackPayload) error {
+		report := payload.(Report)
 		sent = append(sent, report)
 		if report.Event == "Added" {
 			queue.Add("Node/worker-1", Report{Kind: "Node", Name: "worker-1", Event: "Updated"})
@@ -89,7 +111,7 @@ func TestReportAddedDuringSendRemainsPending(t *testing.T) {
 	if !queue.processNext(context.Background()) {
 		t.Fatal("worker stopped after successful send")
 	}
-	if pending := queue.pending["Node/worker-1"]; pending == nil || pending.Event != "Updated" {
+	if pending := queue.pending["Node/worker-1"]; pending == nil || pending.value.(Report).Event != "Updated" {
 		t.Fatalf("new report was not retained: %#v", pending)
 	}
 
@@ -109,8 +131,8 @@ func TestPendingCallbackIdentitiesAreGloballyBounded(t *testing.T) {
 	defer queue.queue.ShutDown()
 	for index := 0; index < maxPendingReports; index++ {
 		key := fmt.Sprintf("Node/worker-%d", index)
-		report := &Report{Kind: "Node", Name: key}
-		queue.pending[key] = report
+		report := Report{Kind: "Node", Name: key}
+		queue.pending[key] = &queuedPayload{value: report}
 	}
 	if queue.Add("Node/overflow", Report{Kind: "Node", Name: "overflow"}) {
 		t.Fatal("new callback identity exceeded the global bound")
@@ -144,11 +166,12 @@ func TestInitialNodeSynchronizationQueuesOneReportPerNode(t *testing.T) {
 	if len(queue.pending) != 2 {
 		t.Fatalf("expected one report per Node, got %#v", queue.pending)
 	}
-	if queue.pending["Node/node-1"].Status["ready"] != false ||
-		queue.pending["Node/node-2"].Status["ready"] != true {
+	if queue.pending["Node/node-1"].value.(Report).Status["ready"] != false ||
+		queue.pending["Node/node-2"].value.(Report).Status["ready"] != true {
 		t.Fatalf("initial reports do not contain independent readiness: %#v", queue.pending)
 	}
-	for _, report := range queue.pending {
+	for _, queued := range queue.pending {
+		report := queued.value.(Report)
 		if _, exists := report.Status["readyProviderIDs"]; exists {
 			t.Fatalf("initial report contains readiness snapshot: %#v", report.Status)
 		}

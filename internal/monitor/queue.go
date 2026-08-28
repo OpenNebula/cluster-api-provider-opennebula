@@ -26,7 +26,11 @@ type reportQueue struct {
 	queue  workqueue.TypedRateLimitingInterface[string]
 
 	mu      sync.Mutex
-	pending map[string]*Report
+	pending map[string]*queuedPayload
+}
+
+type queuedPayload struct {
+	value CallbackPayload
 }
 
 func newReportQueue(sender Sender) *reportQueue {
@@ -35,7 +39,7 @@ func newReportQueue(sender Sender) *reportQueue {
 		queue: workqueue.NewTypedRateLimitingQueue(
 			workqueue.DefaultTypedControllerRateLimiter[string](),
 		),
-		pending: map[string]*Report{},
+		pending: map[string]*queuedPayload{},
 	}
 }
 
@@ -49,7 +53,7 @@ func (q *reportQueue) Run(ctx context.Context) {
 	}
 }
 
-func (q *reportQueue) Add(key string, report Report) bool {
+func (q *reportQueue) Add(key string, report CallbackPayload) bool {
 	q.mu.Lock()
 	if _, exists := q.pending[key]; !exists && len(q.pending) >= maxPendingReports {
 		q.mu.Unlock()
@@ -59,7 +63,7 @@ func (q *reportQueue) Add(key string, report Report) bool {
 		)
 		return false
 	}
-	q.pending[key] = &report
+	q.pending[key] = &queuedPayload{value: report}
 	q.mu.Unlock()
 
 	q.queue.Add(key)
@@ -81,7 +85,7 @@ func (q *reportQueue) processNext(ctx context.Context) bool {
 		return true
 	}
 
-	if err := q.sender.Send(ctx, *report); err != nil {
+	if err := q.sender.Send(ctx, report.value); err != nil {
 		klog.ErrorS(err, "unable to report resource status", "key", key)
 		q.queue.AddRateLimited(key)
 		return true
