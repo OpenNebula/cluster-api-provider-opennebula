@@ -39,7 +39,7 @@ func TestHealthHandlerPreservesHealthAndReadinessEndpoints(t *testing.T) {
 
 	config := httptest.NewRecorder()
 	handler.ServeHTTP(config, httptest.NewRequest(http.MethodGet, "/configz", nil))
-	if config.Code != http.StatusOK || config.Body.String() != "{\"configMap\":\"\",\"digest\":\"\",\"active\":false}\n" {
-		t.Fatalf("unexpected config status response: %d %q", config.Code, config.Body.String())
+	if config.Code != http.StatusNotFound {
+		t.Fatalf("health listener exposed config status with status %d", config.Code)
 	}
 }

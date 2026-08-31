@@ -11,7 +11,7 @@ data:
   MONITOR_HEALTH_ADDRESS: {{ required "monitor.healthAddress is required" .Values.monitor.healthAddress | quote }}
   MONITOR_RESOURCE_CONFIG_NAMESPACE: {{ .Values.monitor.resourceConfigNamespace | default "kube-system" | quote }}
   MONITOR_RESOURCE_CONFIG_NAME: {{ .Values.monitor.resourceConfigName | default "capone-resource-monitor" | quote }}
-  MONITOR_RESOURCE_POLL_INTERVAL: {{ .Values.monitor.resourcePollInterval | default "30s" | quote }}
+  MONITOR_RESOURCE_POLL_INTERVAL: {{ .Values.monitor.resourcePollInterval | default "10s" | quote }}
 {{- if .Values.resourceConfig.create }}
 ---
 apiVersion: v1

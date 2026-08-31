@@ -10,8 +10,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+)
+
+const (
+	MaxExtractedString   = 512
+	MaxResourceValueSize = 32 * 1024
 )
 
 type ResourceValue struct {
@@ -48,4 +56,30 @@ func (value ResourceValue) Identity() string {
 	parts := []string{value.ID, value.APIVersion, value.Resource, value.Namespace, value.Name, value.Path}
 	digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return "ResourceValue/" + hex.EncodeToString(digest[:])
+}
+
+func ExtractScalar(object *unstructured.Unstructured, path string) (any, error) {
+	value, found, err := unstructured.NestedFieldNoCopy(object.Object, strings.Split(path, ".")...)
+	if err != nil {
+		return nil, fmt.Errorf("extract path %q: invalid object shape", path)
+	}
+	if !found {
+		return nil, nil
+	}
+	switch typed := value.(type) {
+	case nil, bool, int64:
+		return typed, nil
+	case string:
+		if len(typed) > MaxExtractedString {
+			return nil, fmt.Errorf("string exceeds %d bytes", MaxExtractedString)
+		}
+		return typed, nil
+	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) {
+			return nil, fmt.Errorf("number is not finite")
+		}
+		return typed, nil
+	default:
+		return nil, fmt.Errorf("value is not scalar")
+	}
 }

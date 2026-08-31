@@ -94,7 +94,7 @@ func ConfigFromEnv() (Config, error) {
 
 	pollInterval := strings.TrimSpace(os.Getenv("MONITOR_RESOURCE_POLL_INTERVAL"))
 	if pollInterval == "" {
-		pollInterval = "30s"
+		pollInterval = "10s"
 	}
 	c.ResourcePollInterval, err = time.ParseDuration(pollInterval)
 	if err != nil || c.ResourcePollInterval <= 0 {

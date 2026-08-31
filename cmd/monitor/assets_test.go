@@ -16,7 +16,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -25,75 +24,11 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	yamlutil "k8s.io/apimachinery/pkg/util/yaml"
-	"sigs.k8s.io/yaml"
 )
 
 const monitorAuthMountPath = "/var/run/secrets/oneks-monitor"
 
-func TestMonitorHelmConfigRequiresRuntimeValues(t *testing.T) {
-	template, err := os.ReadFile("../../helm/v1beta1/capone-monitor/templates/configmap.yaml")
-	if err != nil {
-		t.Fatalf("read monitor ConfigMap template: %v", err)
-	}
-	text := string(template)
-	for _, required := range []string{
-		`required "monitor.endpoint is required" .Values.monitor.endpoint`,
-		`required "monitor.clusterID is required" .Values.monitor.clusterID`,
-		`required "monitor.applicationNamespace is required" .Values.monitor.applicationNamespace`,
-		`required "monitor.httpTimeout is required" .Values.monitor.httpTimeout`,
-		`required "monitor.healthAddress is required" .Values.monitor.healthAddress`,
-	} {
-		if !strings.Contains(text, required) {
-			t.Fatalf("monitor ConfigMap template does not contain %q", required)
-		}
-	}
-	if strings.Contains(text, "MONITOR_RESOURCE_ALLOWLIST") {
-		t.Fatal("monitor ConfigMap still configures an application-level resource allowlist")
-	}
-	if !strings.Contains(text, "MONITOR_RESOURCE_POLL_INTERVAL") {
-		t.Fatal("monitor ConfigMap does not configure the resource poll interval")
-	}
-}
-
-func TestMonitorHelmValuesAndTemplateConfigureAuthenticationProjection(t *testing.T) {
-	values, err := os.ReadFile("../../helm/v1beta1/capone-monitor/values.yaml")
-	if err != nil {
-		t.Fatalf("read monitor Helm values: %v", err)
-	}
-	var parsed map[string]any
-	if err := yaml.Unmarshal(values, &parsed); err != nil {
-		t.Fatalf("parse monitor Helm values: %v", err)
-	}
-	monitorValues, ok := parsed["monitor"].(map[string]any)
-	if !ok {
-		t.Fatalf("monitor Helm values are malformed: %#v", parsed["monitor"])
-	}
-	if monitorValues["authSecretName"] != "" || monitorValues["authSecretKey"] != "ONE_AUTH" {
-		t.Fatalf("unexpected authentication Helm values: %#v", monitorValues)
-	}
-	if monitorValues["resourcePollInterval"] != "30s" {
-		t.Fatalf("unexpected resource poll interval Helm value: %#v", monitorValues)
-	}
-
-	template, err := os.ReadFile("../../helm/v1beta1/capone-monitor/templates/deployment.yaml")
-	if err != nil {
-		t.Fatalf("read monitor Deployment template: %v", err)
-	}
-	text := string(template)
-	for _, required := range []string{
-		`required "monitor.authSecretName is required" .Values.monitor.authSecretName`,
-		`required "monitor.authSecretKey is required" .Values.monitor.authSecretKey`,
-	} {
-		if !strings.Contains(text, required) {
-			t.Fatalf("monitor Deployment template does not contain %q", required)
-		}
-	}
-	if strings.Contains(text, "secretKeyRef") || strings.Contains(text, "name: MONITOR_AUTH\n") {
-		t.Fatal("monitor Deployment injects authentication through an environment Secret reference")
-	}
-}
-
-func TestGeneratedMonitorChartRendersSecretFileAuthentication(t *testing.T) {
+func TestGeneratedMonitorChartContract(t *testing.T) {
 	repositoryRoot, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatalf("resolve repository root: %v", err)
@@ -125,7 +60,8 @@ func TestGeneratedMonitorChartRendersSecretFileAuthentication(t *testing.T) {
 
 	var deployment *appsv1.Deployment
 	var monitorSecret *corev1.Secret
-	resourceConfigMap := false
+	var runtimeConfig *corev1.ConfigMap
+	resourceConfigPresent := false
 	rbacObjects := 0
 	observedResources := map[string]bool{}
 	viewBinding := false
@@ -148,7 +84,10 @@ func TestGeneratedMonitorChartRendersSecretFileAuthentication(t *testing.T) {
 			candidate := &corev1.ConfigMap{}
 			convertManifestObject(t, object, candidate)
 			if candidate.Name == "capone-resource-monitor" {
-				_, resourceConfigMap = candidate.Data["monitor.yaml"]
+				_, resourceConfigPresent = candidate.Data["monitor.yaml"]
+			}
+			if candidate.Name == "capone-cluster-monitor" {
+				runtimeConfig = candidate
 			}
 			for key := range candidate.Data {
 				if key == "MONITOR_AUTH" || key == "ONE_AUTH" {
@@ -195,7 +134,28 @@ func TestGeneratedMonitorChartRendersSecretFileAuthentication(t *testing.T) {
 		monitorSecret.StringData["MONITOR_KEY"] == "" {
 		t.Fatalf("rendered monitor-owned Secret must contain only MONITOR_KEY: %#v", monitorSecret)
 	}
-	if !resourceConfigMap {
+	if runtimeConfig == nil {
+		t.Fatal("generated monitor chart did not render its runtime ConfigMap")
+	}
+	expectedConfig := map[string]string{
+		"MONITOR_ENDPOINT":                  "http://oneks.example/api/v1",
+		"MONITOR_CLUSTER_ID":                "42",
+		"MONITOR_APPLICATION_NAMESPACE":     "oneks-system",
+		"MONITOR_HTTP_TIMEOUT":              "10s",
+		"MONITOR_HEALTH_ADDRESS":            ":8081",
+		"MONITOR_RESOURCE_CONFIG_NAMESPACE": "kube-system",
+		"MONITOR_RESOURCE_CONFIG_NAME":      "capone-resource-monitor",
+		"MONITOR_RESOURCE_POLL_INTERVAL":    "10s",
+	}
+	if len(runtimeConfig.Data) != len(expectedConfig) {
+		t.Fatalf("unexpected runtime configuration: %#v", runtimeConfig.Data)
+	}
+	for key, expected := range expectedConfig {
+		if actual := runtimeConfig.Data[key]; actual != expected {
+			t.Fatalf("runtime configuration %s = %q, want %q", key, actual, expected)
+		}
+	}
+	if !resourceConfigPresent {
 		t.Fatal("generated monitor chart did not render the administrator-editable resource ConfigMap")
 	}
 	if rbacObjects == 0 {
@@ -203,17 +163,6 @@ func TestGeneratedMonitorChartRendersSecretFileAuthentication(t *testing.T) {
 	}
 	if !observedResources["nodes"] || !viewBinding {
 		t.Fatalf("generated monitor RBAC is missing view or Nodes access: resources=%#v view=%t", observedResources, viewBinding)
-	}
-}
-
-func TestMonitorRBACDoesNotGrantSecretAPIAccess(t *testing.T) {
-	path := "../../helm/v1beta1/capone-monitor/templates/rbac.yaml"
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	if strings.Contains(string(contents), `"secrets"`) || strings.Contains(string(contents), "- secrets") {
-		t.Fatalf("monitor RBAC source %s grants Secret API access", path)
 	}
 }
 

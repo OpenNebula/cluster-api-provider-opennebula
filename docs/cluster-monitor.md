@@ -30,20 +30,21 @@ projected Secret file named by `MONITOR_AUTH_FILE`.
 | `MONITOR_HEALTH_ADDRESS` | yes | `:8081` (Helm) | Health and readiness listener |
 | `MONITOR_RESOURCE_CONFIG_NAMESPACE` | no | `kube-system` | Namespace of the dynamic configuration ConfigMap |
 | `MONITOR_RESOURCE_CONFIG_NAME` | no | `capone-resource-monitor` | Name of the dynamic configuration ConfigMap |
-| `MONITOR_RESOURCE_ALLOWLIST` | no | conservative built-in list | Comma-separated allowed `group/version/resource` entries; core resources use `version/resource` |
+| `MONITOR_RESOURCE_POLL_INTERVAL` | no | `10s` | Interval between configuration refreshes and resource snapshots |
 
-The monitor binary requires every variable in the table. The defaults shown
-above are supplied by the Helm chart and are not defaults in the binary.
+The monitor binary requires the variables marked as required. Optional values
+use the defaults shown when they are omitted.
 
-The health listener exposes `/healthz`, `/readyz`, and `/configz`. Readiness
-becomes true after the essential Node and OneKSApplication informer caches
-have synchronized. A missing or invalid dynamic ConfigMap never changes that
-readiness. `/configz` reveals only the ConfigMap identity, active digest,
-active rule count, and a bounded sanitized error.
+The health listener exposes `/healthz` and `/readyz`. Readiness becomes true
+after the essential Node and OneKSApplication informer caches have synchronized.
+A missing or invalid dynamic ConfigMap never changes that readiness.
 
 ## Dynamic resource observations
 
-The optional ConfigMap contains one strict YAML document in `monitor.yaml`:
+The optional ConfigMap contains a YAML resource list in `monitor.yaml`:
+
+Every polling cycle reports a fresh snapshot of every configured value, even
+when the value has not changed since the previous cycle.
 
 ```yaml
 apiVersion: v1
@@ -53,87 +54,40 @@ metadata:
   namespace: kube-system
 data:
   monitor.yaml: |
-    apiVersion: monitoring.oneks.opennebula.io/v1alpha1
-    kind: ResourceMonitorConfig
-    spec:
-      resources:
-        - id: payments-api
-          target:
-            apiVersion: apps/v1
-            resource: deployments
-            namespace: payments
-            name: api
-          values:
-            - key: desiredReplicas
-              fieldPath: spec.replicas
-            - key: readyReplicas
-              fieldPath: status.readyReplicas
-            - key: available
-              condition:
-                type: Available
-                field: status
-        - id: import-jobs
-          target:
-            apiVersion: batch/v1
-            resource: jobs
-            namespace: imports
-            labelSelector: app.kubernetes.io/managed-by=oneks
-            maxObjects: 25
-          values:
-            - key: active
-              fieldPath: status.active
-            - key: complete
-              condition:
-                type: Complete
-                field: status
+    - id: payments-api-ready
+      apiVersion: apps/v1
+      resource: deployments
+      namespace: payments
+      name: api
+      path: status.readyReplicas
 ```
 
-Each target must use either `name` or `labelSelector`; selectors also require
-`maxObjects` (1–100). Field paths are simple dot-separated object keys, not
-JSONPath or an expression language. Conditions select an entry by `type` from
-`status.conditions` and may project only `status`, `reason`, or `message`.
-Missing fields become JSON `null`; maps and arrays are rejected.
-
-The parser rejects unknown or duplicate YAML fields, aliases, multiple
-documents, oversized input, duplicate IDs/keys, excessive field depth and
-cardinality, and targets outside the runtime allowlist. A valid update starts
-and synchronizes all new watches, atomically becomes active, and only then
-cancels the old watches. An invalid update leaves the last valid set running.
-Deleting the ConfigMap stops only these dynamic watches and does not synthesize
-resource deletion events.
+`id`, `apiVersion`, `resource`, `name`, and `path` are required. `namespace` is
+optional for cluster-scoped resources. Paths are dot-separated object keys,
+not JSONPath expressions. Missing resources and fields become JSON `null`;
+maps and arrays are rejected. An invalid update leaves the last valid
+configuration active. Deleting the ConfigMap or using an empty list disables
+resource polling.
 
 An observation sent through the existing encrypted callback is:
 
 ```json
 {
-  "kind": "ResourceObservation",
-  "config": "capone-resource-monitor",
-  "configRevision": "sha256-...",
-  "resourceID": "payments-api",
+  "kind": "ResourceValue",
+  "id": "payments-api-ready",
   "apiVersion": "apps/v1",
   "resource": "deployments",
   "namespace": "payments",
   "name": "api",
-  "uid": "resource-uid",
-  "resourceVersion": "98127",
-  "event": "Updated",
-  "observedAt": "2026-08-26T12:30:00Z",
-  "values": {"desiredReplicas": 3, "readyReplicas": 2, "available": "False"}
+  "path": "status.readyReplicas",
+  "value": 2,
+  "observedAt": "2026-08-26T12:30:00Z"
 }
 ```
 
-Updates are emitted only when selected values, UID, or resource identity
-changes. Deletes contain `values: {}` and preserve the last identity. Queue
-coalescing uses the configuration revision, rule ID, GVR, namespace, name and
-UID; `resourceVersion` is deliberately excluded.
-
-The Helm `resourceAllowlist` value is rendered both as runtime GVR allowlist
-and `get/list/watch` RBAC. Its conservative defaults cover Deployments,
-StatefulSets, DaemonSets, Jobs, Pods and PVCs. Add a CRD with, for example,
-`apiVersion: run.ai/v1` and its plural resource. Secrets, token/credential
-resources, authorization reviews and all subresources remain forbidden even
-if entered in values. The monitor never mutates watched resources or writes
-the ConfigMap.
+The monitor reads each configured object and reports its current value every
+polling cycle. Kubernetes RBAC determines which resources it can read. The
+monitor never mutates observed resources or writes the ConfigMap.
 
 ## Installation
 

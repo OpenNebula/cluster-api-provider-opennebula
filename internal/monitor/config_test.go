@@ -42,7 +42,7 @@ func TestConfigLoadsExplicitValues(t *testing.T) {
 	if config.ResourceConfigNamespace != "kube-system" || config.ResourceConfigName != "capone-resource-monitor" {
 		t.Fatalf("unexpected dynamic resource defaults: %#v", config)
 	}
-	if config.ResourcePollInterval.String() != "30s" {
+	if config.ResourcePollInterval.String() != "10s" {
 		t.Fatalf("unexpected resource poll interval: %s", config.ResourcePollInterval)
 	}
 }

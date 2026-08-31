@@ -11,7 +11,6 @@ You may obtain a copy of the License at
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -61,9 +60,9 @@ func main() {
 		klog.ErrorS(err, "unable to create monitor")
 		os.Exit(1)
 	}
-	resourcePoller, err := resourceobserver.NewResourceValuePoller(
+	resourcePoller, err := resourceobserver.NewPoller(
 		client, dynamicClient,
-		resourceobserver.PollerOptions{
+		resourceobserver.Options{
 			ConfigNamespace: config.ResourceConfigNamespace,
 			ConfigName:      config.ResourceConfigName,
 			PollInterval:    config.ResourcePollInterval,
@@ -80,7 +79,7 @@ func main() {
 	ctx := ctrl.SetupSignalHandler()
 	health := &http.Server{
 		Addr:    config.HealthAddress,
-		Handler: healthHandler(watcher, resourcePoller),
+		Handler: healthHandler(watcher),
 	}
 	go func() {
 		<-ctx.Done()
@@ -100,7 +99,7 @@ func main() {
 	}
 }
 
-func healthHandler(watcher *monitor.Monitor, pollers ...*resourceobserver.ResourceValuePoller) http.Handler {
+func healthHandler(watcher *monitor.Monitor) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprintln(w, "ok")
@@ -111,14 +110,6 @@ func healthHandler(watcher *monitor.Monitor, pollers ...*resourceobserver.Resour
 			return
 		}
 		_, _ = fmt.Fprintln(w, "ok")
-	})
-	mux.HandleFunc("/configz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if len(pollers) == 0 || pollers[0] == nil {
-			_ = json.NewEncoder(w).Encode(resourceobserver.ConfigStatus{})
-			return
-		}
-		_ = json.NewEncoder(w).Encode(pollers[0].Status())
 	})
 	return mux
 }

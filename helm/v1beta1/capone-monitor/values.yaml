@@ -15,7 +15,7 @@ monitor:
   healthAddress: ":8081"
   resourceConfigNamespace: kube-system
   resourceConfigName: capone-resource-monitor
-  resourcePollInterval: 30s
+  resourcePollInterval: 10s
 
 resourceConfig:
   # Create an empty live configuration that cluster administrators can edit.

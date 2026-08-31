@@ -30,7 +30,7 @@ func TestPollerReadsEveryConfiguredResource(t *testing.T) {
 	second.SetName("api-two")
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), deployment(1), second)
 	values := make(chan ResourceValue, 2)
-	poller, err := NewResourceValuePoller(fake.NewSimpleClientset(), dynamicClient, PollerOptions{}, func(_ string, value ResourceValue) bool {
+	poller, err := NewPoller(fake.NewSimpleClientset(), dynamicClient, Options{}, func(_ string, value ResourceValue) bool {
 		values <- value
 		return true
 	})
@@ -39,12 +39,14 @@ func TestPollerReadsEveryConfiguredResource(t *testing.T) {
 	}
 	secondConfig := strings.ReplaceAll(validConfig, "deployment-ready", "deployment-two-ready")
 	secondConfig = strings.Replace(secondConfig, "name: api\n", "name: api-two\n", 1)
-	config, _, err := ParseConfig([]byte(validConfig + secondConfig))
+	config, err := ParseConfig([]byte(validConfig + secondConfig))
 	if err != nil {
 		t.Fatal(err)
 	}
-	poller.active = &activeConfig{config: config, revision: "sha256-test"}
-	poller.poll(context.Background())
+	poller.active = config
+	for _, spec := range config {
+		_ = poller.pollResource(context.Background(), spec)
+	}
 	got := map[string]any{}
 	for range 2 {
 		value := receiveValue(t, values)
@@ -55,33 +57,27 @@ func TestPollerReadsEveryConfiguredResource(t *testing.T) {
 	}
 }
 
-func TestPollerReadsCurrentValueAndOnlyReportsChanges(t *testing.T) {
-	typedClient := fake.NewSimpleClientset()
+func TestPollerReportsCurrentValueEveryTime(t *testing.T) {
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), deployment(1))
 	values := make(chan ResourceValue, 4)
-	poller, err := NewResourceValuePoller(typedClient, dynamicClient, PollerOptions{}, func(_ string, value ResourceValue) bool {
+	poller, err := NewPoller(fake.NewSimpleClientset(), dynamicClient, Options{}, func(_ string, value ResourceValue) bool {
 		values <- value
 		return true
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go poller.Run(ctx)
-	_, err = typedClient.CoreV1().ConfigMaps("kube-system").Create(ctx, &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: "capone-resource-monitor", Namespace: "kube-system"},
-		Data:       map[string]string{ConfigDataKey: validConfig},
-	}, metav1.CreateOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	poller.active = mustConfig(t)
+	ctx := context.Background()
+	_ = poller.pollResource(ctx, poller.active[0])
 	first := receiveValue(t, values)
 	if first.Value != int64(1) || first.Path != "status.readyReplicas" {
 		t.Fatalf("unexpected initial value: %#v", first)
 	}
-	poller.poll(ctx)
-	assertNoValue(t, values)
+	_ = poller.pollResource(ctx, poller.active[0])
+	if repeated := receiveValue(t, values); repeated.Value != int64(1) {
+		t.Fatalf("unchanged value was not reported: %#v", repeated)
+	}
 
 	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	object, _ := dynamicClient.Resource(gvr).Namespace("payments").Get(ctx, "api", metav1.GetOptions{})
@@ -89,23 +85,24 @@ func TestPollerReadsCurrentValueAndOnlyReportsChanges(t *testing.T) {
 	if _, err := dynamicClient.Resource(gvr).Namespace("payments").Update(ctx, object, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	poller.poll(ctx)
+	_ = poller.pollResource(ctx, poller.active[0])
 	if updated := receiveValue(t, values); updated.Value != int64(2) {
 		t.Fatalf("updated value was not reported: %#v", updated)
 	}
 }
 
-func TestPollerHotReloadsAndEmptyConfigDisablesPolling(t *testing.T) {
+func TestPollerHotReloadsConfig(t *testing.T) {
 	typedClient := fake.NewSimpleClientset()
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), deployment(1))
 	values := make(chan ResourceValue, 4)
-	poller, err := NewResourceValuePoller(typedClient, dynamicClient, PollerOptions{}, func(_ string, value ResourceValue) bool {
+	poller, err := NewPoller(typedClient, dynamicClient, Options{}, func(_ string, value ResourceValue) bool {
 		values <- value
 		return true
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	poller.options.PollInterval = 10 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go poller.Run(ctx)
@@ -125,66 +122,71 @@ func TestPollerHotReloadsAndEmptyConfigDisablesPolling(t *testing.T) {
 	if value := receiveValue(t, values); value.Path != "status.availableReplicas" || value.Value != nil {
 		t.Fatalf("updated configuration was not applied: %#v", value)
 	}
+}
 
-	configMap, err = typedClient.CoreV1().ConfigMaps("kube-system").Get(ctx, configMap.Name, metav1.GetOptions{})
+func TestPollerEmptyConfigDisablesPolling(t *testing.T) {
+	typedClient := fake.NewSimpleClientset(&corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "capone-resource-monitor", Namespace: "kube-system"},
+		Data:       map[string]string{ConfigDataKey: "[]\n"},
+	})
+	poller, err := NewPoller(typedClient, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), Options{}, func(string, ResourceValue) bool { return true })
 	if err != nil {
 		t.Fatal(err)
 	}
-	configMap.Data[ConfigDataKey] = "[]\n"
-	if _, err := typedClient.CoreV1().ConfigMaps("kube-system").Update(ctx, configMap, metav1.UpdateOptions{}); err != nil {
-		t.Fatal(err)
+	poller.active = mustConfig(t)
+	poller.refreshConfig(context.Background())
+	if len(poller.active) != 0 {
+		t.Fatal("empty configuration remained active")
 	}
-	waitPollerStatus(t, poller, func(status ConfigStatus) bool { return !status.Active })
 }
 
 func TestPollerReportsNilForMissingObject(t *testing.T) {
 	typedClient := fake.NewSimpleClientset()
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
 	values := make(chan ResourceValue, 1)
-	poller, err := NewResourceValuePoller(typedClient, dynamicClient, PollerOptions{}, func(_ string, value ResourceValue) bool {
+	poller, err := NewPoller(typedClient, dynamicClient, Options{}, func(_ string, value ResourceValue) bool {
 		values <- value
 		return true
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	poller.active = &activeConfig{config: mustConfig(t), revision: "sha256-test"}
-	poller.poll(context.Background())
+	poller.active = mustConfig(t)
+	_ = poller.pollResource(context.Background(), poller.active[0])
 	if value := receiveValue(t, values); value.Value != nil {
 		t.Fatalf("missing object did not produce null: %#v", value)
 	}
 }
 
-func TestPollerReportsPermissionErrorsWithoutDroppingConfig(t *testing.T) {
+func TestPollerRetainsConfigOnPermissionErrors(t *testing.T) {
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
 	dynamicClient.PrependReactor("get", "deployments", func(clienttesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "apps", Resource: "deployments"}, "api", nil)
 	})
-	poller, err := NewResourceValuePoller(fake.NewSimpleClientset(), dynamicClient, PollerOptions{}, func(string, ResourceValue) bool { return true })
+	poller, err := NewPoller(fake.NewSimpleClientset(), dynamicClient, Options{}, func(string, ResourceValue) bool { return true })
 	if err != nil {
 		t.Fatal(err)
 	}
-	poller.active = &activeConfig{config: mustConfig(t), revision: "sha256-test"}
-	poller.poll(context.Background())
-	status := poller.Status()
-	if !status.Active || !strings.Contains(status.LastError, "forbidden") {
-		t.Fatalf("permission error was not exposed while retaining config: %#v", status)
+	poller.active = mustConfig(t)
+	_ = poller.pollResource(context.Background(), poller.active[0])
+	if poller.active == nil {
+		t.Fatal("permission error dropped the active configuration")
 	}
 }
 
 func TestPollerRetriesWhenDeliveryQueueRejectsValue(t *testing.T) {
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), deployment(1))
 	attempts := 0
-	poller, err := NewResourceValuePoller(fake.NewSimpleClientset(), dynamicClient, PollerOptions{}, func(string, ResourceValue) bool {
+	poller, err := NewPoller(fake.NewSimpleClientset(), dynamicClient, Options{}, func(string, ResourceValue) bool {
 		attempts++
 		return attempts > 1
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	poller.active = &activeConfig{config: mustConfig(t), revision: "sha256-test"}
-	poller.poll(context.Background())
-	poller.poll(context.Background())
+	poller.active = mustConfig(t)
+	_ = poller.pollResource(context.Background(), poller.active[0])
+	_ = poller.pollResource(context.Background(), poller.active[0])
 	if attempts != 2 {
 		t.Fatalf("rejected value was not retried: attempts=%d", attempts)
 	}
@@ -192,7 +194,7 @@ func TestPollerRetriesWhenDeliveryQueueRejectsValue(t *testing.T) {
 
 func mustConfig(t *testing.T) Config {
 	t.Helper()
-	config, _, err := ParseConfig([]byte(validConfig))
+	config, err := ParseConfig([]byte(validConfig))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,25 +210,4 @@ func receiveValue(t *testing.T, values <-chan ResourceValue) ResourceValue {
 		t.Fatal("timed out waiting for resource value")
 		return ResourceValue{}
 	}
-}
-
-func assertNoValue(t *testing.T, values <-chan ResourceValue) {
-	t.Helper()
-	select {
-	case value := <-values:
-		t.Fatalf("unexpected resource value: %#v", value)
-	case <-time.After(100 * time.Millisecond):
-	}
-}
-
-func waitPollerStatus(t *testing.T, poller *ResourceValuePoller, predicate func(ConfigStatus) bool) {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if predicate(poller.Status()) {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("poller status condition was not reached: %#v", poller.Status())
 }
