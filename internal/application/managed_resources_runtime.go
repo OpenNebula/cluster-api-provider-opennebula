@@ -128,6 +128,7 @@ func (r *Reconciler) reconcileManagedResources(ctx context.Context, app *applica
 		}
 		current := emptyManagedResource(resource)
 		err = reader.Get(ctx, client.ObjectKeyFromObject(current), current)
+		raced := false
 		if apierrors.IsNotFound(err) {
 			ctrl.LoggerFrom(ctx).V(1).Info(
 				"applying managed resource",
@@ -135,50 +136,30 @@ func (r *Reconciler) reconcileManagedResources(ctx context.Context, app *applica
 				"apiVersion", resource.APIVersion, "kind", resource.Kind,
 				"resourceNamespace", resource.Namespace, "name", resource.Name,
 			)
-			if createErr := r.Create(ctx, desired, client.FieldOwner(applicationv1.FieldManager)); createErr != nil {
-				if apierrors.IsAlreadyExists(createErr) {
-					current = emptyManagedResource(resource)
-					if rereadErr := reader.Get(ctx, client.ObjectKeyFromObject(current), current); rereadErr != nil {
-						if apierrors.IsNotFound(rereadErr) {
-							return false, nil
-						}
-						return false, fmt.Errorf("re-read raced managed %s %s/%s: %w", resource.Kind, resource.Namespace, resource.Name, rereadErr)
-					}
-					if !ownershipMatches(app, current) {
-						return false, &OwnershipConflictError{Kind: resource.Kind, Namespace: resource.Namespace, Name: resource.Name}
-					}
-					if managedResourceNeedsApply(current, desired) {
-						desired.SetResourceVersion(current.GetResourceVersion())
-						ctrl.LoggerFrom(ctx).V(1).Info(
-							"applying managed resource",
-							"action", "update", "resourceID", resource.ID,
-							"apiVersion", resource.APIVersion, "kind", resource.Kind,
-							"resourceNamespace", resource.Namespace, "name", resource.Name,
-						)
-						if patchErr := r.Patch(ctx, desired, client.Apply, client.FieldOwner(applicationv1.FieldManager)); patchErr != nil {
-							return false, fmt.Errorf("apply raced managed %s %s/%s: %w", resource.Kind, resource.Namespace, resource.Name, patchErr)
-						}
-						ctrl.LoggerFrom(ctx).Info(
-							"managed resource applied",
-							"resourceID", resource.ID,
-							"apiVersion", resource.APIVersion, "kind", resource.Kind,
-							"resourceNamespace", resource.Namespace, "name", resource.Name,
-						)
-					}
-					continue
-				}
+			createErr := r.Create(ctx, desired, client.FieldOwner(applicationv1.FieldManager))
+			if createErr != nil && !apierrors.IsAlreadyExists(createErr) {
 				return false, fmt.Errorf("create managed %s %s/%s: %w", resource.Kind, resource.Namespace, resource.Name, createErr)
 			}
-			ctrl.LoggerFrom(ctx).Info(
-				"managed resource created",
-				"resourceID", resource.ID,
-				"apiVersion", resource.APIVersion, "kind", resource.Kind,
-				"resourceNamespace", resource.Namespace, "name", resource.Name,
-			)
-			r.event(app, corev1.EventTypeNormal, "ResourceCreated", fmt.Sprintf("%s %s/%s created", resource.Kind, resource.Namespace, resource.Name))
-			continue
+			if createErr == nil {
+				ctrl.LoggerFrom(ctx).Info(
+					"managed resource created",
+					"resourceID", resource.ID,
+					"apiVersion", resource.APIVersion, "kind", resource.Kind,
+					"resourceNamespace", resource.Namespace, "name", resource.Name,
+				)
+				r.event(app, corev1.EventTypeNormal, "ResourceCreated", fmt.Sprintf("%s %s/%s created", resource.Kind, resource.Namespace, resource.Name))
+				continue
+			}
+			raced = true
+			current = emptyManagedResource(resource)
+			if rereadErr := reader.Get(ctx, client.ObjectKeyFromObject(current), current); rereadErr != nil {
+				if apierrors.IsNotFound(rereadErr) {
+					return false, nil
+				}
+				return false, fmt.Errorf("re-read raced managed %s %s/%s: %w", resource.Kind, resource.Namespace, resource.Name, rereadErr)
+			}
 		}
-		if err != nil {
+		if err != nil && !raced {
 			return false, fmt.Errorf("get managed %s %s/%s: %w", resource.Kind, resource.Namespace, resource.Name, err)
 		}
 		if !ownershipMatches(app, current) {
@@ -193,7 +174,11 @@ func (r *Reconciler) reconcileManagedResources(ctx context.Context, app *applica
 				"resourceNamespace", resource.Namespace, "name", resource.Name,
 			)
 			if err := r.Patch(ctx, desired, client.Apply, client.FieldOwner(applicationv1.FieldManager)); err != nil {
-				return false, fmt.Errorf("apply managed %s %s/%s: %w", resource.Kind, resource.Namespace, resource.Name, err)
+				operation := "apply managed"
+				if raced {
+					operation = "apply raced managed"
+				}
+				return false, fmt.Errorf("%s %s %s/%s: %w", operation, resource.Kind, resource.Namespace, resource.Name, err)
 			}
 			ctrl.LoggerFrom(ctx).Info(
 				"managed resource applied",
@@ -201,7 +186,9 @@ func (r *Reconciler) reconcileManagedResources(ctx context.Context, app *applica
 				"apiVersion", resource.APIVersion, "kind", resource.Kind,
 				"resourceNamespace", resource.Namespace, "name", resource.Name,
 			)
-			r.event(app, corev1.EventTypeNormal, "ResourceApplied", fmt.Sprintf("%s %s/%s applied", resource.Kind, resource.Namespace, resource.Name))
+			if !raced {
+				r.event(app, corev1.EventTypeNormal, "ResourceApplied", fmt.Sprintf("%s %s/%s applied", resource.Kind, resource.Namespace, resource.Name))
+			}
 		}
 	}
 	observed, err := r.observeManagedResources(ctx, app, true)

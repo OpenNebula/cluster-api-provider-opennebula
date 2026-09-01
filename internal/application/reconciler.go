@@ -51,14 +51,12 @@ var helmChartGVK = schema.GroupVersionKind{
 
 type Reconciler struct {
 	client.Client
-	APIReader         client.Reader
-	Scheme            *runtime.Scheme
-	Recorder          record.EventRecorder
-	ClusterID         string
-	ControllerVersion string
-	RequeueAfter      time.Duration
-	DNSLookup         func(context.Context, string) ([]string, error)
-	Now               func() time.Time
+	APIReader    client.Reader
+	Recorder     record.EventRecorder
+	ClusterID    string
+	RequeueAfter time.Duration
+	DNSLookup    func(context.Context, string) ([]string, error)
+	Now          func() time.Time
 }
 
 type observation struct {
@@ -196,11 +194,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (resul
 			return ctrl.Result{}, nil
 		}
 		if err := r.preflightOwnership(ctx, app, true, managedAPIsRequired); err != nil {
-			var conflict *OwnershipConflictError
-			if errors.As(err, &conflict) {
-				return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
-			}
-			return ctrl.Result{}, err
+			return r.handleOwnershipError(ctx, app, err)
 		}
 		return r.reconcileDelete(ctx, app)
 	}
@@ -211,37 +205,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (resul
 			return ctrl.Result{}, err
 		}
 		if err := r.preflightOwnership(ctx, app, false, managedAPIsRequired); err != nil {
-			var conflict *OwnershipConflictError
-			if errors.As(err, &conflict) {
-				return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
-			}
-			return ctrl.Result{}, err
+			return r.handleOwnershipError(ctx, app, err)
 		}
 		return r.reconcileStatus(ctx, app, true, dependencies)
 	}
 
 	if externalMode != ExternalSelectionExternal && externalSelectionToPersist != ExternalSelectionExternal {
 		if err := r.preflightOwnership(ctx, app, false, managedAPIsMayBeUnavailable); err != nil {
-			var conflict *OwnershipConflictError
-			if errors.As(err, &conflict) {
-				return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
-			}
-			return ctrl.Result{}, err
+			return r.handleOwnershipError(ctx, app, err)
 		}
 	}
 
-	if !containsString(app.Finalizers, applicationv1.ApplicationFinalizer) {
-		finalizers := append([]string(nil), app.Finalizers...)
-		updated, err := r.patchApplicationFinalizers(
-			ctx, app, append(finalizers, applicationv1.ApplicationFinalizer),
-		)
-		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("add application finalizer: %w", err)
-		}
-		ctrl.LoggerFrom(ctx).Info("application finalizer acquired")
-		r.event(updated, corev1.EventTypeNormal, "FinalizerAdded", "Application cleanup finalizer added")
-		return ctrl.Result{Requeue: true}, nil
-	}
 	if externalSelectionToPersist != "" {
 		updated, err := r.patchExternalSelection(ctx, app, externalSelectionToPersist)
 		if err != nil {
@@ -293,11 +267,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (resul
 	}
 	if isRootApplication(app) {
 		if err := r.preflightOwnership(ctx, app, false, managedAPIsRequired); err != nil {
-			var conflict *OwnershipConflictError
-			if errors.As(err, &conflict) {
-				return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
-			}
-			return ctrl.Result{}, err
+			return r.handleOwnershipError(ctx, app, err)
 		}
 	}
 
@@ -306,11 +276,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (resul
 		resourcesReady, err = r.reconcileManagedResources(ctx, app)
 	}
 	if err != nil {
-		var conflict *OwnershipConflictError
-		if errors.As(err, &conflict) {
-			return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
-		}
-		return ctrl.Result{}, err
+		return r.handleOwnershipError(ctx, app, err)
 	}
 	if !resourcesReady {
 		return r.reconcileStatus(ctx, app, false, dependencies)
@@ -320,7 +286,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (resul
 		if protectedErr != nil {
 			var conflict *OwnershipConflictError
 			if errors.As(protectedErr, &conflict) {
-				return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
+				return r.handleOwnershipError(ctx, app, protectedErr)
 			}
 			var invalidInput *InputSecretValidationError
 			if errors.As(protectedErr, &invalidInput) {
@@ -334,13 +300,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (resul
 	}
 
 	if err := r.reconcileHelmChart(ctx, app); err != nil {
-		var conflict *OwnershipConflictError
-		if errors.As(err, &conflict) {
-			return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
-		}
-		return ctrl.Result{}, err
+		return r.handleOwnershipError(ctx, app, err)
 	}
 	return r.reconcileStatus(ctx, app, false, dependencies)
+}
+
+func (r *Reconciler) handleOwnershipError(
+	ctx context.Context,
+	app *applicationv1.OneKSApplication,
+	err error,
+) (ctrl.Result, error) {
+	var conflict *OwnershipConflictError
+	if errors.As(err, &conflict) {
+		return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
+	}
+	return ctrl.Result{}, err
 }
 
 func (r *Reconciler) checkTargetNamespace(ctx context.Context, targetNamespace string) error {
@@ -485,7 +459,7 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	status := baseStatus(app, r.ControllerVersion)
+	status := baseStatus(app)
 	status.Resources = observed.resources
 	status.Progress = applicationv1.ApplicationProgress{
 		Completed: observed.completed + dependencies.completed, Total: applicationProgressTotal(app), Current: observed.current,
@@ -669,10 +643,10 @@ func (r *Reconciler) observeHelm(ctx context.Context, app *applicationv1.OneKSAp
 		return result, fmt.Errorf("observe HelmChart %s/%s: %w", HelmChartNamespace, app.Spec.Release.ReleaseName, err)
 	}
 	result.helm = helm
-	if chartConditionTrue(helm, "Failed") {
+	if failed, message := chartCondition(helm, "Failed", "HelmChart reported failure"); failed {
 		result.helmFailed = true
 		result.helmReason = "HelmChartFailed"
-		result.helmMessage = chartConditionMessage(helm, "Failed", "HelmChart reported failure")
+		result.helmMessage = message
 		return result, nil
 	}
 
@@ -698,22 +672,27 @@ func (r *Reconciler) observeHelm(ctx context.Context, app *applicationv1.OneKSAp
 		}
 		return result, fmt.Errorf("observe Helm installer Job %s/%s: %w", helm.GetNamespace(), jobName, err)
 	}
+	completed := false
 	for _, condition := range job.Status.Conditions {
-		if condition.Status == corev1.ConditionTrue && condition.Type == batchv1.JobFailed {
+		if condition.Status != corev1.ConditionTrue {
+			continue
+		}
+		if condition.Type == batchv1.JobFailed {
 			result.helmFailed = true
 			result.helmReason = "InstallerJobFailed"
 			result.helmMessage = firstNonEmpty(condition.Message, condition.Reason, "Helm installer Job failed")
 			return result, nil
 		}
-	}
-	for _, condition := range job.Status.Conditions {
-		if condition.Status == corev1.ConditionTrue && condition.Type == batchv1.JobComplete {
-			result.helmReady = true
-			result.completed++
-			result.helmReason = "InstallerJobComplete"
-			result.helmMessage = "Helm installer Job completed"
-			return result, nil
+		if condition.Type == batchv1.JobComplete {
+			completed = true
 		}
+	}
+	if completed {
+		result.helmReady = true
+		result.completed++
+		result.helmReason = "InstallerJobComplete"
+		result.helmMessage = "Helm installer Job completed"
+		return result, nil
 	}
 	result.helmReason = "InstallerJobPending"
 	result.helmMessage = "Helm installer Job is pending"
@@ -721,7 +700,7 @@ func (r *Reconciler) observeHelm(ctx context.Context, app *applicationv1.OneKSAp
 }
 
 func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.OneKSApplication) (ctrl.Result, error) {
-	status := baseStatus(app, r.ControllerVersion)
+	status := baseStatus(app)
 	status.Phase = applicationv1.PhaseDeleting
 	status.Progress = applicationv1.ApplicationProgress{Total: applicationProgressTotal(app), Current: app.Spec.Release.ReleaseName}
 	if isRootApplication(app) {
@@ -778,11 +757,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 	if usesProtectedSecrets(app) {
 		pending, protectedErr := r.reconcileDeleteProtectedSecrets(ctx, app)
 		if protectedErr != nil {
-			var conflict *OwnershipConflictError
-			if errors.As(protectedErr, &conflict) {
-				return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
-			}
-			return ctrl.Result{}, protectedErr
+			return r.handleOwnershipError(ctx, app, protectedErr)
 		}
 		if pending {
 			return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
@@ -799,11 +774,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 	if isRootApplication(app) {
 		deleted, deleteErr := r.reconcileDeleteManagedResources(ctx, app)
 		if deleteErr != nil {
-			var conflict *OwnershipConflictError
-			if errors.As(deleteErr, &conflict) {
-				return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
-			}
-			return ctrl.Result{}, deleteErr
+			return r.handleOwnershipError(ctx, app, deleteErr)
 		}
 		if deleted {
 			return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
@@ -898,7 +869,7 @@ func (r *Reconciler) patchApplicationFinalizers(
 }
 
 func (r *Reconciler) recordTerminal(ctx context.Context, app *applicationv1.OneKSApplication, reason, message string, ownershipConflict bool) (ctrl.Result, error) {
-	status := baseStatus(app, r.ControllerVersion)
+	status := baseStatus(app)
 	status.Phase = applicationv1.PhaseFailed
 	status.Progress = applicationv1.ApplicationProgress{Total: applicationProgressTotal(app)}
 	setLastError(&status, reason, message)
@@ -939,7 +910,6 @@ func (r *Reconciler) updateStatus(ctx context.Context, app *applicationv1.OneKSA
 		)
 		return nil
 	}
-	previous := *app.Status.DeepCopy()
 	updated := app.DeepCopy()
 	updated.Status = status
 	if err := r.Status().Update(ctx, updated); err != nil {
@@ -947,7 +917,14 @@ func (r *Reconciler) updateStatus(ctx context.Context, app *applicationv1.OneKSA
 	}
 	app.Status = status
 	app.ResourceVersion = updated.ResourceVersion
-	logStatusTransitions(ctx, app, previous, status)
+	ctrl.LoggerFrom(ctx).Info(
+		"application status updated",
+		"phase", status.Phase,
+		"observedGeneration", status.ObservedGeneration,
+		"completed", status.Progress.Completed,
+		"total", status.Progress.Total,
+		"current", status.Progress.Current,
+	)
 	return nil
 }
 
@@ -1012,30 +989,18 @@ func (r *Reconciler) requestsForJob(ctx context.Context, _ client.Object) []ctrl
 	return requests
 }
 
-func chartConditionTrue(chart *unstructured.Unstructured, conditionType string) bool {
+func chartCondition(chart *unstructured.Unstructured, conditionType, fallback string) (bool, string) {
 	conditions, found, _ := unstructured.NestedSlice(chart.Object, "status", "conditions")
 	if !found {
-		return false
+		return false, ""
 	}
 	for _, item := range conditions {
 		condition, ok := item.(map[string]any)
 		if ok && condition["type"] == conditionType && condition["status"] == string(corev1.ConditionTrue) {
-			return true
+			return true, firstNonEmpty(fmt.Sprint(condition["message"]), fmt.Sprint(condition["reason"]), fallback)
 		}
 	}
-	return false
-}
-
-func chartConditionMessage(chart *unstructured.Unstructured, conditionType, fallback string) string {
-	conditions, _, _ := unstructured.NestedSlice(chart.Object, "status", "conditions")
-	for _, item := range conditions {
-		condition, ok := item.(map[string]any)
-		if !ok || condition["type"] != conditionType || condition["status"] != string(corev1.ConditionTrue) {
-			continue
-		}
-		return firstNonEmpty(fmt.Sprint(condition["message"]), fmt.Sprint(condition["reason"]), fallback)
-	}
-	return fallback
+	return false, ""
 }
 
 func conditionText(status metav1.ConditionStatus, positive, negative string) string {

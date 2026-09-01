@@ -23,18 +23,15 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func TestExternalDetectionMaterializesAndChangesCanonicalDigests(t *testing.T) {
@@ -120,17 +117,17 @@ func TestUsableExternalSelectionIsRestartStableAndNeverCreatesHelm(t *testing.T)
 	objects := append([]client.Object{app}, usableCertManagerObjects()...)
 	reconciler, recorder := externalTestReconciler(t, objects...)
 
-	reconcileExternalOnce(t, ctx, reconciler, app)
+	reconcileOnce(t, ctx, reconciler, app)
 	stored := getApplication(t, ctx, reconciler.Client, app)
 	if !containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) || stored.Annotations[ExternalSelectionAnnotation] != "" {
 		t.Fatalf("selection was persisted before cleanup finalizer: finalizers=%#v annotations=%#v", stored.Finalizers, stored.Annotations)
 	}
-	reconcileExternalOnce(t, ctx, reconciler, app)
+	reconcileOnce(t, ctx, reconciler, app)
 	stored = getApplication(t, ctx, reconciler.Client, app)
 	if got := stored.Annotations[ExternalSelectionAnnotation]; got != ExternalSelectionExternal {
 		t.Fatalf("selection = %q, want External", got)
 	}
-	reconcileExternalOnce(t, ctx, reconciler, app)
+	reconcileOnce(t, ctx, reconciler, app)
 	stored = getApplication(t, ctx, reconciler.Client, app)
 	if stored.Status.Phase != applicationv1.PhaseReady || stored.Status.HelmChartRef != nil ||
 		stored.Status.Progress.Completed != 1 || stored.Status.Progress.Total != 1 {
@@ -148,7 +145,7 @@ func TestUsableExternalSelectionIsRestartStableAndNeverCreatesHelm(t *testing.T)
 
 	// A fresh reconciler adopts the persisted selection and still creates no HelmChart.
 	restarted, restartedRecorder := externalTestReconciler(t, append([]client.Object{stored}, usableCertManagerObjects()...)...)
-	reconcileExternalOnce(t, ctx, restarted, stored)
+	reconcileOnce(t, ctx, restarted, stored)
 	if got := getApplication(t, ctx, restarted.Client, stored).Annotations[ExternalSelectionAnnotation]; got != ExternalSelectionExternal {
 		t.Fatalf("restart changed External selection to %q", got)
 	}
@@ -162,7 +159,7 @@ func TestAbsentExternalSelectsManagedFallbackAndStaysManaged(t *testing.T) {
 	app := externalDependencyApplication(t)
 	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	reconciler, _ := externalTestReconciler(t, app)
-	reconcileExternalOnce(t, ctx, reconciler, app)
+	reconcileOnce(t, ctx, reconciler, app)
 	stored := getApplication(t, ctx, reconciler.Client, app)
 	if got := stored.Annotations[ExternalSelectionAnnotation]; got != ExternalSelectionManaged {
 		t.Fatalf("selection = %q, want Managed", got)
@@ -172,7 +169,7 @@ func TestAbsentExternalSelectsManagedFallbackAndStaysManaged(t *testing.T) {
 	// the normal managed lifecycle selected before the restart.
 	restartedObjects := append([]client.Object{stored}, usableCertManagerObjects()...)
 	restarted, restartedRecorder := externalTestReconciler(t, restartedObjects...)
-	reconcileExternalOnce(t, ctx, restarted, stored)
+	reconcileOnce(t, ctx, restarted, stored)
 	restartedStored := getApplication(t, ctx, restarted.Client, stored)
 	if got := restartedStored.Annotations[ExternalSelectionAnnotation]; got != ExternalSelectionManaged {
 		t.Fatalf("Managed selection switched to %q", got)
@@ -190,7 +187,7 @@ func TestCorruptPersistedExternalSelectionFailsClosed(t *testing.T) {
 	app.Annotations = map[string]string{ExternalSelectionAnnotation: "Corrupt"}
 	reconciler, recorder := externalTestReconciler(t, app)
 
-	reconcileExternalOnce(t, ctx, reconciler, app)
+	reconcileOnce(t, ctx, reconciler, app)
 	stored := getApplication(t, ctx, reconciler.Client, app)
 	if stored.Status.LastError == nil || stored.Status.LastError.Reason != "ExternalSelectionInvalid" {
 		t.Fatalf("corrupt selection status = %#v", stored.Status)
@@ -211,7 +208,7 @@ func TestPresentButUnusableExternalFailsWithoutOwnedEffects(t *testing.T) {
 	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	crd := establishedCRD(certManagerCRDNames[0])
 	reconciler, recorder := externalTestReconciler(t, app, crd)
-	result := reconcileExternalOnce(t, ctx, reconciler, app)
+	result := reconcileOnce(t, ctx, reconciler, app)
 	if result.RequeueAfter == 0 {
 		t.Fatal("present-but-unusable detection did not request retry")
 	}
@@ -246,7 +243,7 @@ func TestExternallySelectedPrerequisiteLossNeverFallsBack(t *testing.T) {
 	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	app.Annotations = map[string]string{ExternalSelectionAnnotation: ExternalSelectionExternal}
 	reconciler, recorder := externalTestReconciler(t, app)
-	reconcileExternalOnce(t, ctx, reconciler, app)
+	reconcileOnce(t, ctx, reconciler, app)
 	stored := getApplication(t, ctx, reconciler.Client, app)
 	if stored.Status.LastError == nil || stored.Status.LastError.Reason != "ExternalDependencyLost" || stored.Status.Phase != applicationv1.PhaseFailed {
 		t.Fatalf("external loss status = %#v", stored.Status)
@@ -271,7 +268,7 @@ func TestExternalDependencyDeletionNeverTouchesExternalInstallation(t *testing.T
 	app.Annotations = map[string]string{ExternalSelectionAnnotation: ExternalSelectionExternal}
 	objects := append([]client.Object{app}, usableCertManagerObjects()...)
 	reconciler, recorder := externalTestReconciler(t, objects...)
-	reconcileExternalOnce(t, ctx, reconciler, app)
+	reconcileOnce(t, ctx, reconciler, app)
 	if containsWrite(recorder.childWrites, "HelmChart") || containsWrite(recorder.childWrites, "Deployment") || containsWrite(recorder.childWrites, "Pod") {
 		t.Fatalf("external deletion touched external installation: %#v", recorder.childWrites)
 	}
@@ -363,19 +360,7 @@ func externalDependencyApplication(t *testing.T) *applicationv1.OneKSApplication
 
 func externalTestReconciler(t *testing.T, objects ...client.Object) (*Reconciler, *recordingClient) {
 	t.Helper()
-	scheme := runtime.NewScheme()
-	for name, add := range map[string]func(*runtime.Scheme) error{
-		"core": corev1.AddToScheme, "apps": appsv1.AddToScheme,
-		"apiextensions": apiextensionsv1.AddToScheme, "application": applicationv1.AddToScheme,
-	} {
-		if err := add(scheme); err != nil {
-			t.Fatalf("add %s scheme: %v", name, err)
-		}
-	}
-	base := fake.NewClientBuilder().WithScheme(scheme).
-		WithStatusSubresource(&applicationv1.OneKSApplication{}).WithObjects(objects...).Build()
-	recorder := &recordingClient{Client: base}
-	return &Reconciler{Client: recorder, Scheme: scheme, ClusterID: "42", ControllerVersion: "test", RequeueAfter: time.Millisecond}, recorder
+	return testReconciler(t, objects...)
 }
 
 func usableCertManagerObjects() []client.Object {
@@ -401,15 +386,6 @@ func usableCertManagerObjects() []client.Object {
 
 func establishedCRD(name string) *apiextensionsv1.CustomResourceDefinition {
 	return &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: name}, Status: apiextensionsv1.CustomResourceDefinitionStatus{Conditions: []apiextensionsv1.CustomResourceDefinitionCondition{{Type: apiextensionsv1.Established, Status: apiextensionsv1.ConditionTrue}}}}
-}
-
-func reconcileExternalOnce(t *testing.T, ctx context.Context, reconciler *Reconciler, app *applicationv1.OneKSApplication) ctrl.Result {
-	t.Helper()
-	result, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(app)})
-	if err != nil {
-		t.Fatalf("reconcile external dependency: %v", err)
-	}
-	return result
 }
 
 func assertExternalCondition(t *testing.T, app *applicationv1.OneKSApplication, conditionType string, status metav1.ConditionStatus, reason string) {

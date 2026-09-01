@@ -18,9 +18,7 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -104,11 +102,7 @@ func TestLonghornDependencyChildDigestMatchesOneKSCompiler(t *testing.T) {
 }
 
 func TestGeneratedCRDBoundsDependencyUninstallActions(t *testing.T) {
-	payload, err := os.ReadFile("../../config/crd/bases/oneks.opennebula.io_oneksapplications.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(payload)
+	text := string(generatedApplicationCRD(t))
 	for _, required := range []string{
 		"top-level uninstall is permitted only for Dependency applications",
 		"dependency plans do not permit release.authSecret",
@@ -140,7 +134,7 @@ func TestDependencyUninstallActionsAffectChildAndRootDigestsInOrder(t *testing.T
 		},
 	}
 	for index, mutate := range mutations {
-		changed := cloneDependencyPlan(t, base)
+		changed := cloneJSON(t, base)
 		mutate(&changed)
 		refreshDependencyPlanDigestForTest("42", &changed)
 		changedRoot := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(changed)}, []applicationv1.DependencyPlan{changed})
@@ -374,19 +368,6 @@ func longhornUninstall() *applicationv1.UninstallSpec {
 		},
 		PatchType: applicationv1.KubernetesPatchTypeMerge, PatchJSON: `{"value":"true"}`,
 	}}}
-}
-
-func cloneDependencyPlan(t *testing.T, plan applicationv1.DependencyPlan) applicationv1.DependencyPlan {
-	t.Helper()
-	payload, err := json.Marshal(plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var cloned applicationv1.DependencyPlan
-	if err := json.Unmarshal(payload, &cloned); err != nil {
-		t.Fatal(err)
-	}
-	return cloned
 }
 
 func deletingLonghornDependency(t *testing.T, policy applicationv1.DeletionPolicy) (*applicationv1.OneKSApplication, *unstructured.Unstructured, *unstructured.Unstructured) {

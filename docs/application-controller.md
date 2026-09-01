@@ -17,9 +17,7 @@ helm upgrade --install oneks-application-controller \
 
 OneKS must pass the actual workload cluster ID as the Helm value `clusterID`.
 Releases contain only the Helm chart; no standalone manifest containing a
-placeholder cluster ID is published. The static Kustomize base deliberately
-retains `replace-me` as a development template and is not deployable until its
-ConfigMap is replaced with the actual workload cluster ID.
+placeholder cluster ID is published.
 
 Before uninstalling the controller, delete every `OneKSApplication` in
 `oneks-system` and wait for its controller finalizer and managed children to be
@@ -53,7 +51,7 @@ make application-controller-release APPLICATION_CONTROLLER_VERSION=X.Y.Z
 make docker-release-application-controller APPLICATION_CONTROLLER_VERSION=X.Y.Z
 ```
 
-`application-controller-package-check` performs Helm lint/render and Kustomize
-render checks without publishing an image or artifact. The release workflow is
+`application-controller-package-check` performs Helm lint/render checks without
+publishing an image or artifact. The release workflow is
 triggered only by `application-controller-v*.*.*` tags and does not invoke or
 retag the monitor image.

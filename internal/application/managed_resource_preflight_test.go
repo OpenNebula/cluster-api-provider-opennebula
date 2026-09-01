@@ -157,7 +157,7 @@ func dependencyProvidedManagedRoot(t *testing.T) (*applicationv1.OneKSApplicatio
 		},
 		DeletionPolicy: applicationv1.DeletionPolicyDelete,
 	}}
-	refreshProtectedPlan(t, root)
+	refreshOwnedPlan(t, root)
 	return root, plan
 }
 

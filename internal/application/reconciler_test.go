@@ -25,8 +25,10 @@ import (
 
 	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
 	"github.com/go-logr/logr/funcr"
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -87,7 +89,8 @@ func TestExecuteCreatesManagedResourceBeforeHelmChartAndBecomesReady(t *testing.
 		"application reconciliation started",
 		"managed resource created",
 		"Helm release created",
-		"application ready",
+		"application status updated",
+		`"phase"="Ready"`,
 		"application reconciliation completed",
 		`"releaseName"="oneks-prometheus"`,
 		`"targetNamespace"="catalogue-workloads"`,
@@ -325,6 +328,12 @@ func testReconciler(t *testing.T, objects ...client.Object) (*Reconciler, *recor
 	if err := batchv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add batch scheme: %v", err)
 	}
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add apps scheme: %v", err)
+	}
+	if err := apiextensionsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add apiextensions scheme: %v", err)
+	}
 	if err := applicationv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add application scheme: %v", err)
 	}
@@ -335,8 +344,8 @@ func testReconciler(t *testing.T, objects ...client.Object) (*Reconciler, *recor
 		})...).Build()
 	recorder := &recordingClient{Client: base}
 	return &Reconciler{
-		Client: recorder, Scheme: scheme, ClusterID: "42",
-		ControllerVersion: "test", RequeueAfter: time.Millisecond,
+		Client: recorder, ClusterID: "42",
+		RequeueAfter: time.Millisecond,
 	}, recorder
 }
 

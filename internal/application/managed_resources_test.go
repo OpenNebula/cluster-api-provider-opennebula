@@ -51,7 +51,7 @@ func TestManagedResourcePlanRootMaterializesUnchangedCurrentDependencyChild(t *t
 	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 	root.Spec.PlanVersion = applicationv1.PlanVersion
 	root.Spec.ManagedResources = []applicationv1.ManagedResourceSpec{managedConfigMap("settings", "runai", "settings", nil)}
-	refreshManagedPlan(t, root)
+	refreshOwnedPlan(t, root)
 
 	reconciler, _ := testReconciler(t, root)
 	raced, terminating, conflict, err := reconciler.materializeRootDependencies(context.Background(), root)
@@ -115,7 +115,7 @@ func TestManagedResourcePlanManagedFieldsAffectDigest(t *testing.T) {
 	}
 	for name, mutate := range mutations {
 		t.Run(name, func(t *testing.T) {
-			copy := clonePlanSpec(t, base)
+			copy := cloneJSON(t, base)
 			mutate(&copy.ManagedResources[0])
 			if got := digestSpec(t, copy); got == baseDigest {
 				t.Fatalf("changing %s did not change digest", name)
@@ -161,7 +161,7 @@ func TestManagedResourcePlanRejectsInvalidManagedContracts(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			app := validManagedRootPlan(t)
 			test.mutate(app)
-			refreshManagedPlan(t, app)
+			refreshOwnedPlan(t, app)
 			err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID})
 			if err == nil || err.Reason != test.reason {
 				t.Fatalf("error = %#v, want %s", err, test.reason)
@@ -178,7 +178,7 @@ func TestManagedResourcePlanRejectsControllerOwnedManifestMetadata(t *testing.T)
 		t.Run(field, func(t *testing.T) {
 			app := validManagedRootPlan(t)
 			app.Spec.ManagedResources[0].ManifestJSON = `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"namespace":"runai","name":"settings","` + field + `":[]}}`
-			refreshManagedPlan(t, app)
+			refreshOwnedPlan(t, app)
 			err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID})
 			if err == nil || err.Reason != "UnsupportedManagedManifestField" {
 				t.Fatalf("metadata.%s error = %#v", field, err)
@@ -194,7 +194,7 @@ func TestManagedResourcePlanSupportsNamespacedAndClusterScopedResources(t *testi
 		ManifestJSON: `{"apiVersion":"v1","kind":"Namespace","metadata":{"name":"runai-extra"}}`,
 		Readiness:    applicationv1.ManagedResourceReadiness{TimeoutSeconds: 60}, DeletionPolicy: applicationv1.DeletionPolicyDelete,
 	})
-	refreshManagedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
 		t.Fatalf("mixed scopes rejected: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestManagedResourcePlanCreatesInTopologicalOrderAndGatesHelm(t *testing.T) 
 		managedConfigMap("second", "runai", "second", []string{"first"}),
 		managedConfigMap("first", "runai", "first", nil),
 	}
-	refreshManagedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	reconciler, recorder := testReconciler(t, app)
 	reconcileOnce(t, ctx, reconciler, app)
 	if got := strings.Join(recorder.childWrites, ","); got != "create:ConfigMap,create:ConfigMap,create:HelmChart" {
@@ -218,7 +218,7 @@ func TestManagedResourcePlanCreatesInTopologicalOrderAndGatesHelm(t *testing.T) 
 	blocked := validManagedRootPlan(t)
 	blocked.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	blocked.Spec.ManagedResources[0].Readiness.Conditions = []applicationv1.ManagedResourceCondition{{Type: "Ready", Status: "True"}}
-	refreshManagedPlan(t, blocked)
+	refreshOwnedPlan(t, blocked)
 	object, _ := desiredManagedResource(blocked, blocked.Spec.ManagedResources[0])
 	object.Object["status"] = map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "False"}}}
 	reconciler, recorder = testReconciler(t, blocked, object)
@@ -233,7 +233,7 @@ func TestManagedResourcePlanOwnershipPreflightAndObserveAreWriteSafe(t *testing.
 	app := validManagedRootPlan(t)
 	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	app.Spec.ManagedResources = append(app.Spec.ManagedResources, managedConfigMap("foreign", "runai", "foreign", nil))
-	refreshManagedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	foreign := emptyManagedResource(app.Spec.ManagedResources[1])
 	foreign.Object["data"] = map[string]any{"x": "y"}
 	reconciler, recorder := testReconciler(t, app, foreign)
@@ -244,7 +244,7 @@ func TestManagedResourcePlanOwnershipPreflightAndObserveAreWriteSafe(t *testing.
 
 	observe := validManagedRootPlan(t)
 	observe.Spec.ExecutionMode = applicationv1.ExecutionModeObserve
-	refreshManagedPlan(t, observe)
+	refreshOwnedPlan(t, observe)
 	reconciler, recorder = testReconciler(t, observe)
 	reconcileOnce(t, ctx, reconciler, observe)
 	if len(recorder.childWrites) != 0 {
@@ -257,7 +257,7 @@ func TestManagedResourcePlanRepairsOwnedDriftWithNonForcedSSA(t *testing.T) {
 	app := validManagedRootPlan(t)
 	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	app.Spec.ManagedResources[0].ManifestJSON = `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"namespace":"runai","name":"settings","labels":{"catalogue":"desired"},"annotations":{"catalogue.example/value":"desired"}},"data":{"value":"desired"}}`
-	refreshManagedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	object, _ := desiredManagedResource(app, app.Spec.ManagedResources[0])
 	object.Object["data"] = map[string]any{"drifted": "true"}
 	labels := object.GetLabels()
@@ -288,7 +288,7 @@ func TestManagedResourcePlanRequiredSecretAndDNSGateHelm(t *testing.T) {
 	resource := &app.Spec.ManagedResources[0]
 	resource.Readiness.RequiredResources = []applicationv1.ManagedResourceReference{{APIVersion: "v1", Kind: "Secret", Namespace: "runai", Name: "license"}}
 	resource.Readiness.Checks = []applicationv1.ManagedResourceCheck{{Type: "DNSMatchesService", Hostname: "backend.runai.svc", Service: applicationv1.ManagedResourceServiceReference{Namespace: "runai", Name: "backend"}}}
-	refreshManagedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	object, _ := desiredManagedResource(app, *resource)
 	service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "runai", Name: "backend"}, Spec: corev1.ServiceSpec{ClusterIP: "10.0.0.8", ClusterIPs: []string{"10.0.0.8"}}}
 	reconciler, recorder := testReconciler(t, app, object, service)
@@ -388,7 +388,7 @@ func TestManagedResourcePlanReadinessTimeoutSurvivesStoredStatus(t *testing.T) {
 	app := validManagedRootPlan(t)
 	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	app.Spec.ManagedResources[0].Readiness.Conditions = []applicationv1.ManagedResourceCondition{{Type: "Ready", Status: "True"}}
-	refreshManagedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	started := metav1.NewTime(fixedNow.Add(-2 * time.Minute))
 	app.Status.Resources = []applicationv1.ResourceStatus{{
 		ID: app.Spec.ManagedResources[0].ID, Phase: "Applying", Reason: "ConditionPending", ReadinessStartedAt: &started,
@@ -440,7 +440,7 @@ func TestManagedReadinessOriginRoundTripAndReasonChanges(t *testing.T) {
 		Type: applicationv1.ManagedResourceCheckDNSMatchesService, Hostname: "backend.runai.svc",
 		Service: applicationv1.ManagedResourceServiceReference{Namespace: "runai", Name: "backend"},
 	}}
-	refreshManagedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	object, _ := desiredManagedResource(app, *resource)
 	service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "runai", Name: "backend"}, Spec: corev1.ServiceSpec{ClusterIP: "10.0.0.8", ClusterIPs: []string{"10.0.0.8"}}}
 	reconciler, _ := testReconciler(t, app, object, service)
@@ -482,7 +482,7 @@ func TestManagedReadinessTimeoutsAreIndependent(t *testing.T) {
 	for index := range app.Spec.ManagedResources {
 		app.Spec.ManagedResources[index].Readiness.Conditions = []applicationv1.ManagedResourceCondition{{Type: "Ready", Status: "True"}}
 	}
-	refreshManagedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	started := metav1.NewTime(now.Add(-20 * time.Second))
 	app.Status.Resources = []applicationv1.ResourceStatus{
 		{ID: "short", Phase: "Applying", ReadinessStartedAt: &started},
@@ -503,7 +503,7 @@ func TestManagedReadinessReadyRegressionStartsNewIntervalAndDependencyWaitDoesNo
 	now := time.Date(2026, 8, 13, 10, 0, 0, 0, time.UTC)
 	app := validManagedRootPlan(t)
 	app.Spec.ManagedResources[0].Readiness.Conditions = []applicationv1.ManagedResourceCondition{{Type: "Ready", Status: "True"}}
-	refreshManagedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	app.Status.Resources = []applicationv1.ResourceStatus{{ID: "settings", Phase: "Ready", Reason: "ReadinessSatisfied"}}
 	object, _ := desiredManagedResource(app, app.Spec.ManagedResources[0])
 	object.Object["status"] = map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "False"}}}
@@ -538,7 +538,7 @@ func TestManagedResourcePlanDeletionIsReverseTopologicalAndRetainSafe(t *testing
 		managedConfigMap("retained", "runai", "retained", nil),
 	}
 	app.Spec.ManagedResources[2].DeletionPolicy = applicationv1.DeletionPolicyRetain
-	refreshManagedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	now := metav1.Now()
 	app.DeletionTimestamp = &now
 	first, _ := desiredManagedResource(app, app.Spec.ManagedResources[1])
@@ -562,7 +562,7 @@ func TestManagedResourcePlanDeletionConflictDeletesNothing(t *testing.T) {
 	app := validManagedRootPlan(t)
 	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	app.Spec.ManagedResources = append(app.Spec.ManagedResources, managedConfigMap("foreign", "runai", "foreign", nil))
-	refreshManagedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	now := metav1.Now()
 	app.DeletionTimestamp = &now
 	owned, _ := desiredManagedResource(app, app.Spec.ManagedResources[0])
@@ -581,7 +581,7 @@ func TestManagedResourcePlanDependenciesGateManagedEffects(t *testing.T) {
 	app.Spec.PlanVersion = applicationv1.PlanVersion
 	app.Spec.ManagedResources = []applicationv1.ManagedResourceSpec{managedConfigMap("settings", "runai", "settings", nil)}
 	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
-	refreshManagedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	reconciler, recorder := testReconciler(t, app)
 	reconcileOnce(t, context.Background(), reconciler, app)
 	if len(recorder.childWrites) != 0 {
@@ -595,7 +595,7 @@ func validManagedRootPlan(t *testing.T) *applicationv1.OneKSApplication {
 	app.Spec.PlanVersion = applicationv1.PlanVersion
 	app.Spec.Role = applicationv1.ApplicationRoleRoot
 	app.Spec.ManagedResources = []applicationv1.ManagedResourceSpec{managedConfigMap("settings", "runai", "settings", nil)}
-	refreshManagedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	return app
 }
 
@@ -611,7 +611,7 @@ func managedConfigMapManifest(namespace, name string) string {
 	return `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"namespace":"` + namespace + `","name":"` + name + `"},"data":{"token-shaped-name-is-allowed":"trusted"}}`
 }
 
-func refreshManagedPlan(t *testing.T, app *applicationv1.OneKSApplication) {
+func refreshOwnedPlan(t *testing.T, app *applicationv1.OneKSApplication) {
 	t.Helper()
 	refreshDigest(t, app)
 	app.Labels = producerLabels(app)
@@ -626,17 +626,17 @@ func digestSpec(t *testing.T, spec applicationv1.OneKSApplicationSpec) string {
 	return Digest(canonical)
 }
 
-func clonePlanSpec(t *testing.T, spec applicationv1.OneKSApplicationSpec) applicationv1.OneKSApplicationSpec {
+func cloneJSON[T any](t *testing.T, value T) T {
 	t.Helper()
-	payload, err := json.Marshal(spec)
+	payload, err := json.Marshal(value)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var copy applicationv1.OneKSApplicationSpec
-	if err := json.Unmarshal(payload, &copy); err != nil {
+	var cloned T
+	if err := json.Unmarshal(payload, &cloned); err != nil {
 		t.Fatal(err)
 	}
-	return copy
+	return cloned
 }
 
 type metadataSecretReader struct {

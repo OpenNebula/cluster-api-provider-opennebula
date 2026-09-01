@@ -86,7 +86,7 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 	if len(app.OwnerReferences) != 0 {
 		return invalid("InvalidOwnerReferences", "application ownerReferences are not permitted")
 	}
-	if !validApplicationFinalizers(app.Finalizers) {
+	if len(app.Finalizers) > 1 || (len(app.Finalizers) == 1 && app.Finalizers[0] != applicationv1.ApplicationFinalizer) {
 		return invalid("InvalidFinalizers", "application finalizers may contain only the OneKS application finalizer")
 	}
 	if app.Spec.ExecutionMode == applicationv1.ExecutionModeObserve && len(app.Finalizers) != 0 {
@@ -848,7 +848,7 @@ func containsSensitiveValue(value any, sensitivity valuesSensitivity) bool {
 			switch {
 			case sensitivity == valuesSensitivityReference:
 				nestedSensitivity = valuesSensitivityReference
-			case isValuesNeutralContainer(key):
+			case strings.EqualFold(key, "secretTargets"):
 				nestedSensitivity = valuesSensitivityNormal
 			case isValuesReferenceContainer(key):
 				nestedSensitivity = valuesSensitivityReference
@@ -895,10 +895,6 @@ func isValuesReferenceContainer(key string) bool {
 	}
 }
 
-func isValuesNeutralContainer(key string) bool {
-	return strings.EqualFold(key, "secretTargets")
-}
-
 func isScalarValue(value any) bool {
 	switch value.(type) {
 	case map[string]any, []any:
@@ -911,10 +907,6 @@ func isScalarValue(value any) bool {
 func validUTF8Bytes(value string, minimum, maximum int) bool {
 	length := len([]byte(value))
 	return utf8.ValidString(value) && length >= minimum && length <= maximum
-}
-
-func validApplicationFinalizers(finalizers []string) bool {
-	return len(finalizers) == 0 || (len(finalizers) == 1 && finalizers[0] == applicationv1.ApplicationFinalizer)
 }
 
 func validDeletionPolicy(policy applicationv1.DeletionPolicy) bool {

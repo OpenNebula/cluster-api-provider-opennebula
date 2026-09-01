@@ -35,7 +35,7 @@ func TestSparseCurrentPlanApplicationFinalizersUseMetadataPatches(t *testing.T) 
 	app.Spec.Dependencies = []applicationv1.DependencyReference{}
 	app.Spec.DependencyPlans = []applicationv1.DependencyPlan{}
 	app.Spec.ManagedResources = []applicationv1.ManagedResourceSpec{}
-	refreshProtectedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	wantSpec := app.DeepCopy().Spec
 	wantSpecJSON, err := json.Marshal(wantSpec)
 	if err != nil {
@@ -97,63 +97,47 @@ func TestRemoveApplicationFinalizerNormally(t *testing.T) {
 	}
 }
 
-func TestRemoveApplicationFinalizerTreatsAuthoritativeNotFoundAsComplete(t *testing.T) {
-	ctx := context.Background()
-	reconciler, stored, patchErr := finalizerErrorReconciler(t)
-	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Scheme).Build()
+func TestRemoveApplicationFinalizerHandlesPatchConflictAuthoritatively(t *testing.T) {
+	for _, test := range []struct {
+		name, authoritative string
+		wantPatchError      bool
+	}{
+		{"not found", "missing", false},
+		{"replacement UID", "replacement", false},
+		{"same UID", "same", true},
+		{"reader failure", "error", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			reconciler, stored, patchErr := finalizerErrorReconciler(t)
+			scheme := reconciler.Client.Scheme()
+			switch test.authoritative {
+			case "missing":
+				reconciler.APIReader = fake.NewClientBuilder().WithScheme(scheme).Build()
+			case "replacement":
+				replacement := stored.DeepCopy()
+				replacement.UID = types.UID("replacement-uid")
+				replacement.ResourceVersion = ""
+				reconciler.APIReader = fake.NewClientBuilder().WithScheme(scheme).WithObjects(replacement).Build()
+			case "same":
+				authoritative := stored.DeepCopy()
+				authoritative.ResourceVersion = ""
+				reconciler.APIReader = fake.NewClientBuilder().WithScheme(scheme).WithObjects(authoritative).Build()
+			case "error":
+				reconciler.APIReader = &applicationFinalizerGetErrorReader{Reader: reconciler.Client, err: errors.New("simulated authoritative read failure")}
+			}
 
-	if err := reconciler.removeApplicationFinalizer(ctx, stored); err != nil {
-		t.Fatalf("authoritative NotFound did not complete finalizer removal after %v: %v", patchErr, err)
-	}
-}
-
-func TestRemoveApplicationFinalizerDoesNotTouchReplacement(t *testing.T) {
-	ctx := context.Background()
-	reconciler, stored, _ := finalizerErrorReconciler(t)
-	replacement := stored.DeepCopy()
-	replacement.UID = types.UID("replacement-uid")
-	replacement.ResourceVersion = ""
-	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Scheme).WithObjects(replacement).Build()
-
-	if err := reconciler.removeApplicationFinalizer(ctx, stored); err != nil {
-		t.Fatalf("replacement UID did not complete original finalizer removal: %v", err)
-	}
-	current := &applicationv1.OneKSApplication{}
-	if err := reconciler.APIReader.Get(ctx, client.ObjectKeyFromObject(replacement), current); err != nil {
-		t.Fatalf("get replacement: %v", err)
-	}
-	if current.UID != replacement.UID || !containsString(current.Finalizers, applicationv1.ApplicationFinalizer) {
-		t.Fatalf("replacement was modified: %#v", current.ObjectMeta)
-	}
-}
-
-func TestRemoveApplicationFinalizerRetriesWhenSameUIDExists(t *testing.T) {
-	ctx := context.Background()
-	reconciler, stored, patchErr := finalizerErrorReconciler(t)
-	authoritative := stored.DeepCopy()
-	authoritative.ResourceVersion = ""
-	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Scheme).WithObjects(authoritative).Build()
-
-	err := reconciler.removeApplicationFinalizer(ctx, stored)
-	if !errors.Is(err, patchErr) {
-		t.Fatalf("same UID error = %v, want original patch error %v", err, patchErr)
-	}
-}
-
-func TestRemoveApplicationFinalizerPreservesPatchErrorWhenAuthoritativeGetFails(t *testing.T) {
-	ctx := context.Background()
-	reconciler, stored, patchErr := finalizerErrorReconciler(t)
-	reconciler.APIReader = &applicationFinalizerGetErrorReader{
-		Reader: reconciler.Client,
-		err:    errors.New("simulated authoritative read failure"),
-	}
-
-	err := reconciler.removeApplicationFinalizer(ctx, stored)
-	if err == nil {
-		t.Fatal("authoritative read failure incorrectly completed finalizer removal")
-	}
-	if !errors.Is(err, patchErr) {
-		t.Fatalf("authoritative read failure error = %v, want preserved patch error %v", err, patchErr)
+			err := reconciler.removeApplicationFinalizer(ctx, stored)
+			if test.wantPatchError != errors.Is(err, patchErr) || !test.wantPatchError && err != nil {
+				t.Fatalf("remove finalizer error = %v, want original patch error: %t", err, test.wantPatchError)
+			}
+			if test.authoritative == "replacement" {
+				current := &applicationv1.OneKSApplication{}
+				if err := reconciler.APIReader.Get(ctx, client.ObjectKeyFromObject(stored), current); err != nil || current.UID != types.UID("replacement-uid") || !containsString(current.Finalizers, applicationv1.ApplicationFinalizer) {
+					t.Fatalf("replacement was modified: %#v, %v", current.ObjectMeta, err)
+				}
+			}
+		})
 	}
 }
 

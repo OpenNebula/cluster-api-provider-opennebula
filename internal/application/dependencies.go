@@ -194,7 +194,7 @@ func (r *Reconciler) observeDependencies(ctx context.Context, app *applicationv1
 		}
 
 		result.ready = false
-		if dependencyStatusFailed(dependency) {
+		if dependencyStatusIsCurrent(dependency) && dependency.Status.Phase == applicationv1.PhaseFailed {
 			if !result.failed {
 				failureReason := "Failed"
 				if dependency.Status.LastError != nil && dependency.Status.LastError.Reason != "" {
@@ -261,10 +261,6 @@ func dependencyStatusReady(dependency *applicationv1.OneKSApplication) bool {
 	}
 	condition := meta.FindStatusCondition(dependency.Status.Conditions, ConditionReady)
 	return condition != nil && condition.Status == metav1.ConditionTrue && condition.ObservedGeneration == dependency.Generation
-}
-
-func dependencyStatusFailed(dependency *applicationv1.OneKSApplication) bool {
-	return dependencyStatusIsCurrent(dependency) && dependency.Status.Phase == applicationv1.PhaseFailed
 }
 
 func dependencyStatusIsCurrent(dependency *applicationv1.OneKSApplication) bool {

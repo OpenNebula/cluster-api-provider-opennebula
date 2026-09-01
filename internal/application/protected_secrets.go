@@ -253,7 +253,7 @@ func (r *Reconciler) bindSecretInput(ctx context.Context, app *applicationv1.One
 	if missing {
 		return true, nil
 	}
-	status := baseStatus(app, r.ControllerVersion)
+	status := baseStatus(app)
 	status.SecretInputUID = string(input.UID)
 	if status.Phase == "" {
 		status.Phase = applicationv1.PhasePending
@@ -311,34 +311,28 @@ func (r *Reconciler) reconcileProtectedSecrets(ctx context.Context, app *applica
 				"action", "create", "resourceID", resource.ID,
 				"resourceNamespace", resource.Namespace, "name", resource.Name,
 			)
-			if createErr := r.Create(ctx, desired); createErr != nil {
-				if !apierrors.IsAlreadyExists(createErr) {
-					return false, &protectedSecretAPIError{operation: "create protected", namespace: resource.Namespace, name: resource.Name, cause: createErr}
-				}
-				current = &corev1.Secret{}
-				if rereadErr := reader.Get(ctx, client.ObjectKeyFromObject(desired), current); rereadErr != nil {
-					if apierrors.IsNotFound(rereadErr) {
-						return false, nil
-					}
-					return false, &protectedSecretAPIError{operation: "re-read protected", namespace: resource.Namespace, name: resource.Name, cause: rereadErr}
-				}
-				if !ownershipMatches(app, current) {
-					return false, &OwnershipConflictError{Kind: "Secret", Namespace: resource.Namespace, Name: resource.Name}
-				}
-				if err := r.updateProtectedSecret(ctx, current, desired, resource); err != nil {
-					return false, err
-				}
+			createErr := r.Create(ctx, desired)
+			if createErr != nil && !apierrors.IsAlreadyExists(createErr) {
+				return false, &protectedSecretAPIError{operation: "create protected", namespace: resource.Namespace, name: resource.Name, cause: createErr}
+			}
+			if createErr == nil {
+				ctrl.LoggerFrom(ctx).Info(
+					"protected Secret created",
+					"resourceID", resource.ID,
+					"resourceNamespace", resource.Namespace, "name", resource.Name,
+				)
+				r.event(app, corev1.EventTypeNormal, "ProtectedSecretCreated", fmt.Sprintf("Protected Secret %s/%s created", resource.Namespace, resource.Name))
 				continue
 			}
-			ctrl.LoggerFrom(ctx).Info(
-				"protected Secret created",
-				"resourceID", resource.ID,
-				"resourceNamespace", resource.Namespace, "name", resource.Name,
-			)
-			r.event(app, corev1.EventTypeNormal, "ProtectedSecretCreated", fmt.Sprintf("Protected Secret %s/%s created", resource.Namespace, resource.Name))
-			continue
+			current = &corev1.Secret{}
+			if rereadErr := reader.Get(ctx, client.ObjectKeyFromObject(desired), current); rereadErr != nil {
+				if apierrors.IsNotFound(rereadErr) {
+					return false, nil
+				}
+				return false, &protectedSecretAPIError{operation: "re-read protected", namespace: resource.Namespace, name: resource.Name, cause: rereadErr}
+			}
 		}
-		if err != nil {
+		if err != nil && !apierrors.IsNotFound(err) {
 			return false, &protectedSecretAPIError{operation: "read protected", namespace: resource.Namespace, name: resource.Name, cause: err}
 		}
 		if !ownershipMatches(app, current) {
@@ -396,7 +390,7 @@ func desiredProtectedSecret(app *applicationv1.OneKSApplication, resource applic
 }
 
 func (r *Reconciler) updateProtectedSecret(ctx context.Context, current, desired *corev1.Secret, resource applicationv1.ProtectedSecretSpec) error {
-	if !protectedSecretNeedsUpdate(current, desired) {
+	if current.Type == desired.Type && reflect.DeepEqual(current.Data, desired.Data) && labelSubsetMatches(current.Labels, desired.Labels) {
 		return nil
 	}
 	updated := current.DeepCopy()
@@ -427,10 +421,6 @@ func (r *Reconciler) updateProtectedSecret(ctx context.Context, current, desired
 	return nil
 }
 
-func protectedSecretNeedsUpdate(current, desired *corev1.Secret) bool {
-	return current.Type != desired.Type || !reflect.DeepEqual(current.Data, desired.Data) || !labelSubsetMatches(current.Labels, desired.Labels)
-}
-
 func copySecretData(source map[string][]byte) map[string][]byte {
 	result := make(map[string][]byte, len(source))
 	for key, value := range source {
@@ -457,57 +447,49 @@ func expectedProtectedSecret(resource applicationv1.ProtectedSecretSpec) (corev1
 	}
 }
 
+func unavailableProtectedSecrets(app *applicationv1.OneKSApplication, phase, reason, message, resourceMessage string, failed bool) protectedSecretsObservation {
+	result := protectedSecretsObservation{ready: false, failed: failed, reason: reason, message: message}
+	result.statuses = make([]applicationv1.ResourceStatus, 0, len(app.Spec.ProtectedSecrets))
+	for _, resource := range app.Spec.ProtectedSecrets {
+		result.statuses = append(result.statuses, applicationv1.ResourceStatus{
+			ID: resource.ID, Phase: phase, Reason: reason, Message: resourceMessage,
+		})
+	}
+	if len(app.Spec.ProtectedSecrets) != 0 {
+		result.current = app.Spec.ProtectedSecrets[0].ID
+	}
+	return result
+}
+
+func (result *protectedSecretsObservation) addStatus(status applicationv1.ResourceStatus) {
+	result.statuses = append(result.statuses, status)
+	if status.Phase == "Ready" {
+		result.completed++
+		return
+	}
+	result.ready = false
+	result.failed = result.failed || status.Phase == "Failed"
+	if result.current == "" {
+		result.current = status.ID
+		result.reason = status.Reason
+		result.message = status.Message
+	}
+}
+
 func (r *Reconciler) observeProtectedSecrets(ctx context.Context, app *applicationv1.OneKSApplication, managedResourcesReady bool) (protectedSecretsObservation, error) {
 	result := protectedSecretsObservation{ready: true}
 	if !managedResourcesReady {
-		result.ready = false
-		result.reason = "ManagedResourcesPending"
-		result.message = "Protected Secrets are gated by managed resources"
-		for _, resource := range app.Spec.ProtectedSecrets {
-			result.statuses = append(result.statuses, applicationv1.ResourceStatus{
-				ID: resource.ID, Phase: "Pending", Reason: result.reason,
-				Message: "Protected Secret is gated by managed resources",
-			})
-		}
-		if len(app.Spec.ProtectedSecrets) != 0 {
-			result.current = app.Spec.ProtectedSecrets[0].ID
-		}
-		return result, nil
+		return unavailableProtectedSecrets(app, "Pending", "ManagedResourcesPending", "Protected Secrets are gated by managed resources", "Protected Secret is gated by managed resources", false), nil
 	}
 	_, missing, err := r.readSecretInput(ctx, app)
 	if err != nil {
 		if _, invalid := err.(*InputSecretValidationError); !invalid {
 			return result, err
 		}
-		result.ready = false
-		result.failed = true
-		result.reason = "InputSecretInvalid"
-		result.message = "Input Secret does not satisfy the compiled contract"
-		for _, resource := range app.Spec.ProtectedSecrets {
-			result.statuses = append(result.statuses, applicationv1.ResourceStatus{
-				ID: resource.ID, Phase: "Failed", Reason: result.reason,
-				Message: "Protected Secret input is invalid",
-			})
-		}
-		if len(app.Spec.ProtectedSecrets) != 0 {
-			result.current = app.Spec.ProtectedSecrets[0].ID
-		}
-		return result, nil
+		return unavailableProtectedSecrets(app, "Failed", "InputSecretInvalid", "Input Secret does not satisfy the compiled contract", "Protected Secret input is invalid", true), nil
 	}
 	if missing {
-		result.ready = false
-		result.reason = "InputSecretMissing"
-		result.message = "Input Secret is absent"
-		for _, resource := range app.Spec.ProtectedSecrets {
-			result.statuses = append(result.statuses, applicationv1.ResourceStatus{
-				ID: resource.ID, Phase: "Pending", Reason: result.reason,
-				Message: "Protected Secret is waiting for input Secret",
-			})
-		}
-		if len(app.Spec.ProtectedSecrets) != 0 {
-			result.current = app.Spec.ProtectedSecrets[0].ID
-		}
-		return result, nil
+		return unavailableProtectedSecrets(app, "Pending", "InputSecretMissing", "Input Secret is absent", "Protected Secret is waiting for input Secret", false), nil
 	}
 
 	for _, resource := range app.Spec.ProtectedSecrets {
@@ -518,13 +500,7 @@ func (r *Reconciler) observeProtectedSecrets(ctx context.Context, app *applicati
 		current := &corev1.Secret{}
 		err := r.authoritativeReader().Get(ctx, types.NamespacedName{Namespace: resource.Namespace, Name: resource.Name}, current)
 		if apierrors.IsNotFound(err) {
-			result.ready = false
-			if result.current == "" {
-				result.current = resource.ID
-				result.reason = status.Reason
-				result.message = status.Message
-			}
-			result.statuses = append(result.statuses, status)
+			result.addStatus(status)
 			continue
 		}
 		if err != nil {
@@ -535,14 +511,7 @@ func (r *Reconciler) observeProtectedSecrets(ctx context.Context, app *applicati
 			status.Phase = "Failed"
 			status.Reason = "OwnershipConflict"
 			status.Message = "Protected Secret does not have exact OneKS ownership"
-			result.ready = false
-			result.failed = true
-			if result.current == "" {
-				result.current = resource.ID
-				result.reason = status.Reason
-				result.message = status.Message
-			}
-			result.statuses = append(result.statuses, status)
+			result.addStatus(status)
 			continue
 		}
 		expectedType, expectedKeys := expectedProtectedSecret(resource)
@@ -556,16 +525,8 @@ func (r *Reconciler) observeProtectedSecrets(ctx context.Context, app *applicati
 			status.Phase = "Ready"
 			status.Reason = "ProtectedSecretReady"
 			status.Message = "Protected Secret is ready"
-			result.completed++
-		} else {
-			result.ready = false
-			if result.current == "" {
-				result.current = resource.ID
-				result.reason = status.Reason
-				result.message = status.Message
-			}
 		}
-		result.statuses = append(result.statuses, status)
+		result.addStatus(status)
 	}
 	if result.ready {
 		result.reason = "ProtectedSecretsReady"

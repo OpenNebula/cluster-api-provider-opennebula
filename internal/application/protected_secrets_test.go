@@ -21,7 +21,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 
@@ -40,7 +39,7 @@ func TestProtectedSecretPlanRejectsCrossCollectionResourceIDCollisions(t *testin
 	t.Run("cross collection", func(t *testing.T) {
 		app := validBoundProtectedRootPlan(t)
 		app.Spec.ProtectedSecrets[0].ID = app.Spec.ManagedResources[0].ID
-		refreshProtectedPlan(t, app)
+		refreshOwnedPlan(t, app)
 		err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID})
 		if err == nil || err.Reason != "ProtectedSecretManagedResourceIDCollision" {
 			t.Fatalf("cross-collection collision error = %#v", err)
@@ -50,7 +49,7 @@ func TestProtectedSecretPlanRejectsCrossCollectionResourceIDCollisions(t *testin
 	t.Run("managed collection", func(t *testing.T) {
 		app := validBoundProtectedRootPlan(t)
 		app.Spec.ManagedResources = append(app.Spec.ManagedResources, app.Spec.ManagedResources[0])
-		refreshProtectedPlan(t, app)
+		refreshOwnedPlan(t, app)
 		err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID})
 		if err == nil || err.Reason != "DuplicateManagedResourceID" {
 			t.Fatalf("managed duplicate error = %#v", err)
@@ -60,7 +59,7 @@ func TestProtectedSecretPlanRejectsCrossCollectionResourceIDCollisions(t *testin
 	t.Run("protected collection", func(t *testing.T) {
 		app := validBoundProtectedRootPlan(t)
 		app.Spec.ProtectedSecrets = append(app.Spec.ProtectedSecrets, app.Spec.ProtectedSecrets[0])
-		refreshProtectedPlan(t, app)
+		refreshOwnedPlan(t, app)
 		err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID})
 		if err == nil || err.Reason != "DuplicateProtectedSecretID" {
 			t.Fatalf("protected duplicate error = %#v", err)
@@ -71,7 +70,7 @@ func TestProtectedSecretPlanRejectsCrossCollectionResourceIDCollisions(t *testin
 func TestManagedTargetNamespaceBootstrapUsesNormalResourceDAG(t *testing.T) {
 	app := validManagedRootPlan(t)
 	app.Spec.ManagedResources = []applicationv1.ManagedResourceSpec{managedTargetNamespaceResource()}
-	refreshManagedPlan(t, app)
+	refreshOwnedPlan(t, app)
 
 	ctx := context.Background()
 	reconciler, recorder := testReconciler(t, app)
@@ -120,7 +119,7 @@ func TestProtectedSecretWaitsForManagedTargetNamespace(t *testing.T) {
 	ctx := context.Background()
 	app := validBoundProtectedRootPlan(t)
 	app.Spec.ManagedResources = []applicationv1.ManagedResourceSpec{managedTargetNamespaceResource()}
-	refreshProtectedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	input := inputSecretFor(app, map[string][]byte{"adminPassword": []byte("SENTINEL_NAMESPACE_BOOTSTRAP")})
 	reconciler, recorder := testReconciler(t, app, input)
 	if err := reconciler.Client.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "catalogue-workloads"}}); err != nil {
@@ -147,7 +146,7 @@ func TestInputSecretInvalidKeepsPlanValid(t *testing.T) {
 	app := validBoundProtectedRootPlan(t)
 	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	app.Spec.ManagedResources = nil
-	refreshProtectedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	input := inputSecretFor(app, map[string][]byte{"adminPassword": []byte("SENTINEL_INVALID_RUNTIME")})
 	input.UID = "replacement-uid"
 	reconciler, _ := testReconciler(t, app, input)
@@ -208,7 +207,7 @@ func TestProtectedSecretPlanValidatesStructuredProtectedSecretContract(t *testin
 		t.Run(test.name, func(t *testing.T) {
 			candidate := validBoundProtectedRootPlan(t)
 			test.mutate(candidate)
-			refreshProtectedPlan(t, candidate)
+			refreshOwnedPlan(t, candidate)
 			err := ValidatePlan(candidate, ValidationConfig{ClusterID: candidate.Spec.ClusterID})
 			if err == nil || err.Reason != test.reason {
 				t.Fatalf("error = %#v, want %s", err, test.reason)
@@ -254,7 +253,7 @@ func TestReleaseAuthSecretValidationBoundaries(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			app := runAIProtectedPlan(t)
 			test.mutate(app)
-			refreshProtectedPlan(t, app)
+			refreshOwnedPlan(t, app)
 			err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID})
 			if err == nil || err.Reason != test.reason {
 				t.Fatalf("authSecret validation error = %#v, want %s", err, test.reason)
@@ -292,7 +291,7 @@ func TestProtectedSecretPlanProtectedFieldsAffectDigestWithoutSorting(t *testing
 		},
 	}
 	for index, mutate := range mutations {
-		copy := clonePlanSpec(t, base)
+		copy := cloneJSON(t, base)
 		mutate(&copy)
 		if got := digestSpec(t, copy); got == baseDigest {
 			t.Fatalf("mutation %d did not affect protected plan digest", index)
@@ -307,7 +306,7 @@ func TestProtectedSecretPlanRootMaterializesUnchangedCurrentDependencyChild(t *t
 	root.Spec.ManagedResources = nil
 	root.Spec.SecretInputRef = &applicationv1.SecretInputReference{Namespace: applicationv1.ApplicationNamespace, Name: "inputs"}
 	root.Spec.ProtectedSecrets = []applicationv1.ProtectedSecretSpec{opaqueProtectedSecret("protected", "catalogue-workloads", "protected")}
-	refreshProtectedPlan(t, root)
+	refreshOwnedPlan(t, root)
 	reconciler, _ := testReconciler(t, root)
 	_, _, conflict, err := reconciler.materializeRootDependencies(context.Background(), root)
 	if err != nil || conflict != nil {
@@ -493,7 +492,7 @@ func TestProtectedSecretPlanRepairsOwnedTargetDriftAndObserveNeverMutates(t *tes
 
 	observe := validBoundProtectedRootPlan(t)
 	observe.Spec.ExecutionMode = applicationv1.ExecutionModeObserve
-	refreshProtectedPlan(t, observe)
+	refreshOwnedPlan(t, observe)
 	observeInput := inputSecretFor(observe, map[string][]byte{"adminPassword": []byte("SENTINEL_OBSERVE")})
 	reconciler, recorder = testReconciler(t, observe, observeInput)
 	reconcileOnce(t, ctx, reconciler, observe)
@@ -508,7 +507,7 @@ func TestProtectedSecretPlanProtectedCreateAlreadyExistsRaceRereadsOwnership(t *
 	app := validBoundProtectedRootPlan(t)
 	app.Spec.ManagedResources = nil
 	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
-	refreshProtectedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	input := inputSecretFor(app, map[string][]byte{"adminPassword": []byte("SENTINEL_RACE")})
 	existing, err := desiredProtectedSecret(app, app.Spec.ProtectedSecrets[0], input)
 	if err != nil {
@@ -535,7 +534,7 @@ func TestProtectedSecretPlanManagedResourcesGateProtectedSecretsAndHelm(t *testi
 	app := validBoundProtectedRootPlan(t)
 	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	app.Spec.ManagedResources[0].Readiness.Conditions = []applicationv1.ManagedResourceCondition{{Type: "Ready", Status: "True"}}
-	refreshProtectedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	managed, _ := desiredManagedResource(app, app.Spec.ManagedResources[0])
 	managed.Object["status"] = map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "False"}}}
 	input := inputSecretFor(app, map[string][]byte{"adminPassword": []byte("SENTINEL_GATED")})
@@ -558,7 +557,7 @@ func TestProtectedSecretPlanDeletionOrdersTargetsSourceManagedAndFinalizer(t *te
 		opaqueProtectedSecret("deleted", "catalogue-workloads", "deleted"),
 	}
 	app.Spec.ProtectedSecrets[0].DeletionPolicy = applicationv1.DeletionPolicyRetain
-	refreshProtectedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	input := inputSecretFor(app, map[string][]byte{"adminPassword": []byte("SENTINEL_DELETE")})
 	retained, _ := desiredProtectedSecret(app, app.Spec.ProtectedSecrets[0], input)
 	deleted, _ := desiredProtectedSecret(app, app.Spec.ProtectedSecrets[1], input)
@@ -594,7 +593,7 @@ func TestProtectedSecretPlanDeletionPreflightsAllTargetsBeforeDeletingAny(t *tes
 		opaqueProtectedSecret("owned", "catalogue-workloads", "owned"),
 		opaqueProtectedSecret("foreign", "catalogue-workloads", "foreign"),
 	}
-	refreshProtectedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	input := inputSecretFor(app, map[string][]byte{"adminPassword": []byte("SENTINEL_DELETE_PREFLIGHT")})
 	owned, _ := desiredProtectedSecret(app, app.Spec.ProtectedSecrets[0], input)
 	foreign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "catalogue-workloads", Name: "foreign"}, Type: corev1.SecretTypeOpaque}
@@ -616,7 +615,7 @@ func TestProtectedSecretPlanDeletionDoesNotDeleteReplacementInputSecret(t *testi
 	app := validBoundProtectedRootPlan(t)
 	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	app.Spec.ManagedResources = nil
-	refreshProtectedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	replacement := inputSecretFor(app, map[string][]byte{"adminPassword": []byte("SENTINEL_REPLACEMENT")})
 	replacement.UID = "replacement-uid"
 	reconciler, _ := testReconciler(t, app, replacement)
@@ -637,7 +636,7 @@ func TestProtectedSecretPlanUsesAuthoritativeInputReader(t *testing.T) {
 	app := validBoundProtectedRootPlan(t)
 	input := inputSecretFor(app, map[string][]byte{"adminPassword": []byte("SENTINEL_AUTHORITATIVE")})
 	reconciler, _ := testReconciler(t, app)
-	authoritative := fake.NewClientBuilder().WithScheme(reconciler.Scheme).WithObjects(input).Build()
+	authoritative := fake.NewClientBuilder().WithScheme(reconciler.Client.Scheme()).WithObjects(input).Build()
 	reconciler.APIReader = authoritative
 	observed, missing, err := reconciler.readSecretInput(context.Background(), app)
 	if err != nil || missing || observed == nil || string(observed.Data["adminPassword"]) != "SENTINEL_AUTHORITATIVE" {
@@ -677,7 +676,7 @@ func TestCurrentPlanBindsInputUIDBeforeExecution(t *testing.T) {
 
 	replacement := input.DeepCopy()
 	replacement.UID = "replacement-uid"
-	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Scheme).WithObjects(replacement).Build()
+	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Client.Scheme()).WithObjects(replacement).Build()
 	if _, _, err := reconciler.readSecretInput(ctx, stored); err == nil || !strings.Contains(err.Error(), "UID") {
 		t.Fatalf("replacement input error = %v", err)
 	}
@@ -689,7 +688,7 @@ func TestCurrentPlanHelmOnlyRootDoesNotRequireProtectedSecrets(t *testing.T) {
 	app.Spec.SecretInputRef = nil
 	app.Spec.ProtectedSecrets = nil
 	app.Spec.ManagedResources = nil
-	refreshProtectedPlan(t, app)
+	refreshOwnedPlan(t, app)
 
 	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
 		t.Fatalf("Helm-only v1alpha5 Root rejected: %v", err)
@@ -713,11 +712,7 @@ func TestCurrentPlanWaitsForInputSecretWithoutExecuting(t *testing.T) {
 }
 
 func TestGeneratedCRDEnforcesPlanV1Alpha5InputBinding(t *testing.T) {
-	payload, err := os.ReadFile("../../config/crd/bases/oneks.opennebula.io_oneksapplications.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(payload)
+	text := string(generatedApplicationCRD(t))
 	for _, required := range []string{
 		"oneks.opennebula.io/plan-v1alpha5",
 		"secretInputUID:",
@@ -749,7 +744,7 @@ func validBoundProtectedRootPlan(t *testing.T) *applicationv1.OneKSApplication {
 		opaqueProtectedSecret("protected", "catalogue-workloads", "protected"),
 	}
 	app.Status.SecretInputUID = "input-uid"
-	refreshProtectedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	return app
 }
 
@@ -799,7 +794,7 @@ keycloakx:
 		dockerProtectedSecret("runai-registry-credentials", "catalogue-workloads", "runai-test-registry-creds"),
 		dockerProtectedSecret("runai-cluster-registry-credentials", "runai", "runai-test-registry-creds"),
 	}
-	refreshProtectedPlan(t, app)
+	refreshOwnedPlan(t, app)
 	return app
 }
 
@@ -847,12 +842,6 @@ func inputSecretFor(app *applicationv1.OneKSApplication, data map[string][]byte)
 		},
 		Type: corev1.SecretTypeOpaque, Immutable: &immutable, Data: data,
 	}
-}
-
-func refreshProtectedPlan(t *testing.T, app *applicationv1.OneKSApplication) {
-	t.Helper()
-	refreshDigest(t, app)
-	app.Labels = producerLabels(app)
 }
 
 func getSecret(t *testing.T, ctx context.Context, kubeClient client.Client, namespace, name string) *corev1.Secret {

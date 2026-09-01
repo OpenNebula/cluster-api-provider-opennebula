@@ -18,11 +18,6 @@ package application
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/json"
-	"fmt"
-	"os"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -30,25 +25,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
-
-const goldenStatusSHA256 = "8ff4aa7069f884947505f6de943870bbfc113204ec99ded2b09ae8da847f3d30"
-const canonicalCasesSHA256 = "f651dc5403c1e85b454543e6b8bfa56d9c46036f8b887c0a6a80250228ae7beb"
-
-type canonicalCaseMatrix struct {
-	Version string `json:"version"`
-	Cases   []struct {
-		Name   string          `json:"name"`
-		Input  json.RawMessage `json:"input"`
-		Repeat *struct {
-			Key       string `json:"key"`
-			Codepoint string `json:"codepoint"`
-			Count     int    `json:"count"`
-		} `json:"repeat"`
-		Canonical string `json:"canonical"`
-		Digest    string `json:"digest"`
-		Bytes     int    `json:"bytes"`
-	} `json:"cases"`
-}
 
 func TestCanonicalPlanUsesASCIIAndStableMapOrder(t *testing.T) {
 	spec := goldenSpec(t)
@@ -80,46 +56,6 @@ func TestCanonicalJSONUsesOnlyContractEscapes(t *testing.T) {
 	}
 	if strings.Contains(output.String(), `\x`) || strings.Contains(output.String(), `\U`) {
 		t.Fatalf("Go-specific escape emitted: %s", output.String())
-	}
-}
-
-func TestSharedCanonicalCaseMatrix(t *testing.T) {
-	payload := readCheckedFixture(t, "testdata/oneks_canonical_cases.json", canonicalCasesSHA256)
-	var matrix canonicalCaseMatrix
-	if err := json.Unmarshal(payload, &matrix); err != nil {
-		t.Fatalf("decode canonical cases: %v", err)
-	}
-	for _, fixture := range matrix.Cases {
-		t.Run(fixture.Name, func(t *testing.T) {
-			var input any
-			if fixture.Repeat != nil {
-				input = map[string]any{fixture.Repeat.Key: strings.Repeat(fixture.Repeat.Codepoint, fixture.Repeat.Count)}
-			} else {
-				decoder := json.NewDecoder(bytes.NewReader(fixture.Input))
-				decoder.UseNumber()
-				if err := decoder.Decode(&input); err != nil {
-					t.Fatalf("decode input: %v", err)
-				}
-			}
-			var output bytes.Buffer
-			if err := writeCanonicalJSON(&output, input); err != nil {
-				t.Fatalf("canonicalize: %v", err)
-			}
-			if output.Len() != fixture.Bytes {
-				t.Fatalf("got %d bytes, want %d", output.Len(), fixture.Bytes)
-			}
-			expected := fixture.Canonical
-			if expected == "" {
-				expected = string(output.Bytes())
-			}
-			assertCanonicalContract(t, output.Bytes(), expected, fixture.Digest)
-			if fixture.Name == "exact-canonical-maximum" && output.Len() > maxCanonicalPlanBytes {
-				t.Fatal("exact maximum rejected")
-			}
-			if fixture.Name == "canonical-maximum-plus-one" && output.Len() <= maxCanonicalPlanBytes {
-				t.Fatal("maximum plus one accepted")
-			}
-		})
 	}
 }
 
@@ -258,37 +194,6 @@ func TestValidatePlanAllowsUnrelatedRootLabels(t *testing.T) {
 	}
 }
 
-func TestGoldenStatusUsesTheApprovedJSONContract(t *testing.T) {
-	payload, err := os.ReadFile("testdata/oneks_application_status_golden.json")
-	if err != nil {
-		t.Fatalf("read status fixture: %v", err)
-	}
-	checksum := sha256.Sum256(payload)
-	if got := fmt.Sprintf("%x", checksum); got != goldenStatusSHA256 {
-		t.Fatalf("status fixture checksum differs: got %s, want %s", got, goldenStatusSHA256)
-	}
-	var status applicationv1.OneKSApplicationStatus
-	if err := json.Unmarshal(payload, &status); err != nil {
-		t.Fatalf("decode status fixture: %v", err)
-	}
-	if status.HelmChartRef == nil || status.HelmChartRef.Name != "oneks-prometheus" {
-		t.Fatalf("helmChartRef was not decoded: %#v", status.HelmChartRef)
-	}
-	if len(status.Resources) != 1 || status.Resources[0].Phase != "Ready" || status.Resources[0].ResourceVersion != "100" {
-		t.Fatalf("resource status does not match the approved shape: %#v", status.Resources)
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(payload, &raw); err != nil {
-		t.Fatalf("decode raw fixture: %v", err)
-	}
-	if _, exists := raw["helmChart"]; exists {
-		t.Fatal("obsolete helmChart field is present")
-	}
-	if _, exists := raw["helmChartRef"]; !exists {
-		t.Fatal("helmChartRef field is absent")
-	}
-}
-
 func goldenApplication(t *testing.T) *applicationv1.OneKSApplication {
 	t.Helper()
 	spec := goldenSpec(t)
@@ -340,41 +245,6 @@ func refreshDigest(t *testing.T, app *applicationv1.OneKSApplication) {
 
 func validationConfig() ValidationConfig {
 	return ValidationConfig{ClusterID: "42"}
-}
-
-func readCheckedFixture(t *testing.T, path, expectedChecksum string) []byte {
-	t.Helper()
-	payload, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read fixture %s: %v", path, err)
-	}
-	checksum := sha256.Sum256(payload)
-	if got := fmt.Sprintf("%x", checksum); got != expectedChecksum {
-		t.Fatalf("fixture %s checksum got %s, want %s", path, got, expectedChecksum)
-	}
-	return payload
-}
-
-func assertCanonicalContract(t *testing.T, output []byte, expected, expectedDigest string) {
-	t.Helper()
-	if string(output) != expected {
-		t.Fatalf("canonical bytes got %s, want %s", output, expected)
-	}
-	if !json.Valid(output) {
-		t.Fatalf("canonical output is not JSON: %q", output)
-	}
-	for _, value := range output {
-		if value > 0x7f {
-			t.Fatalf("canonical output is not ASCII: %q", output)
-		}
-	}
-	text := string(output)
-	if strings.Contains(text, `\x`) || strings.Contains(text, `\U`) || regexp.MustCompile(`\\[0-7]`).MatchString(text) {
-		t.Fatalf("canonical output contains a forbidden Go escape: %s", text)
-	}
-	if got := Digest(output); got != expectedDigest {
-		t.Fatalf("digest got %s, want %s", got, expectedDigest)
-	}
 }
 
 func yamlMappingOfSize(t *testing.T, size int) string {

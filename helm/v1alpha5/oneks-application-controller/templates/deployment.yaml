@@ -6,7 +6,8 @@ metadata:
   labels:
     {{- include "oneks-application-controller.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.replicas }}
+  replicas: 1
+  strategy: {type: Recreate}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "oneks-application-controller.name" . }}
@@ -27,8 +28,6 @@ spec:
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         args:
         - --cluster-id=$(CLUSTER_ID)
-        - --controller-version={{ .Chart.AppVersion }}
-        - --leader-elect=true
         - --metrics-bind-address=0
         - --health-probe-bind-address=:8081
         - --reconciliation-poll={{ .Values.reconciliationPoll }}

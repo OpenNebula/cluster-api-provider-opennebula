@@ -99,6 +99,11 @@ func (m *Monitor) onNode(obj any, event string) {
 	if !ok {
 		return
 	}
+	// Nodes can be observed before the cloud controller has initialized their
+	// provider ID. The subsequent Node update will enqueue a valid report.
+	if node.Spec.ProviderID == "" {
+		return
+	}
 	m.reports.Add("Node/"+node.Name, nodeReport(node, event))
 }
 

@@ -52,85 +52,54 @@ func TestHelmClusterIDValueContract(t *testing.T) {
 	if !strings.Contains(string(template), `required "clusterID is required" .Values.clusterID`) {
 		t.Fatal("Helm ConfigMap does not fail rendering when clusterID is absent")
 	}
-	base, err := os.ReadFile("../../kustomize/v1alpha5/application-controller/configmap.yaml")
-	if err != nil {
-		t.Fatalf("read kustomize ConfigMap: %v", err)
-	}
-	if !strings.Contains(string(base), "cluster-id: replace-me") {
-		t.Fatal("manual kustomize base no longer exposes its replacement marker")
-	}
 }
 
-func TestHelmAndKustomizeUseTheSameGeneratedCRD(t *testing.T) {
-	kustomizeCRD, err := os.ReadFile("../../kustomize/v1alpha5/application-controller/crd/oneks.opennebula.io_oneksapplications.yaml")
+func TestHelmUsesTheGeneratedCRD(t *testing.T) {
+	generatedCRD, err := os.ReadFile("../../config/crd/bases/oneks.opennebula.io_oneksapplications.yaml")
 	if err != nil {
-		t.Fatalf("read kustomize CRD: %v", err)
+		t.Fatalf("read generated CRD: %v", err)
 	}
 	helmCRD, err := os.ReadFile("../../helm/v1alpha5/oneks-application-controller/crds/oneks.opennebula.io_oneksapplications.yaml")
 	if err != nil {
 		t.Fatalf("read Helm CRD: %v", err)
 	}
-	if !bytes.Equal(kustomizeCRD, helmCRD) {
-		t.Fatal("Helm and kustomize CRDs differ")
+	if !bytes.Equal(generatedCRD, helmCRD) {
+		t.Fatal("generated and Helm CRDs differ")
 	}
 }
 
-func TestPackagesDoNotCreateSharedWorkloadNamespaces(t *testing.T) {
-	for _, path := range []string{
-		"../../helm/v1alpha5/oneks-application-controller/templates/namespaces.yaml",
-		"../../kustomize/v1alpha5/application-controller/namespace_workloads.yaml",
-	} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("obsolete Namespace manifest %s still exists: %v", path, err)
-		}
-	}
-
-	payload, err := os.ReadFile("../../kustomize/v1alpha5/application-controller/kustomization.yaml")
-	if err != nil {
-		t.Fatalf("read application-controller kustomization: %v", err)
-	}
-	text := string(payload)
-	if !strings.Contains(text, "- namespace_application.yaml") {
-		t.Fatal("kustomize package no longer creates the controller namespace")
-	}
-	if strings.Contains(text, "namespace_workloads.yaml") {
-		t.Fatal("kustomize package still includes the obsolete workload namespace")
+func TestChartDoesNotCreateSharedWorkloadNamespaces(t *testing.T) {
+	path := "../../helm/v1alpha5/oneks-application-controller/templates/namespaces.yaml"
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("obsolete Namespace manifest %s still exists: %v", path, err)
 	}
 }
 
 func TestNamespacePermissionSupportsManagedClusterResources(t *testing.T) {
-	for _, path := range []string{
-		"../../kustomize/v1alpha5/application-controller/role_configmap.yaml",
-		"../../helm/v1alpha5/oneks-application-controller/templates/rbac.yaml",
-	} {
-		payload, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
-		}
-		text := string(payload)
-		if !strings.Contains(text, "- apiGroups: [\"\"]\n  resources: [\"namespaces\", \"configmaps\"]\n  verbs: [\"get\", \"list\", \"watch\", \"create\", \"patch\", \"update\", \"delete\"]") {
-			t.Fatalf("%s lacks bounded managed Namespace permissions", path)
-		}
-		if strings.Contains(text, `resources: ["*"]`) {
-			t.Fatalf("%s grants wildcard resources", path)
-		}
+	path := "../../helm/v1alpha5/oneks-application-controller/templates/rbac-role-managed-resources.yaml"
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	text := string(payload)
+	if !strings.Contains(text, "- apiGroups: [\"\"]\n  resources: [\"namespaces\", \"configmaps\"]\n  verbs: [\"get\", \"list\", \"watch\", \"create\", \"patch\", \"update\", \"delete\"]") {
+		t.Fatalf("%s lacks bounded managed Namespace permissions", path)
+	}
+	if strings.Contains(text, `resources: ["*"]`) {
+		t.Fatalf("%s grants wildcard resources", path)
 	}
 }
 
 func TestManagedResourceBindingUsesUpgradeSafeIdentity(t *testing.T) {
 	want := "kind: ClusterRoleBinding\nmetadata:\n  name: oneks-application-controller-managed-resources\nroleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRole\n  name: oneks-application-controller-managed-resources"
-	for _, path := range []string{
-		"../../kustomize/v1alpha5/application-controller/role_binding_configmap.yaml",
-		"../../helm/v1alpha5/oneks-application-controller/templates/rbac.yaml",
-	} {
-		payload, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
-		}
-		text := string(payload)
-		if strings.Count(text, "kind: ClusterRoleBinding") != 1 || !strings.Contains(text, want) {
-			t.Fatalf("%s does not define only the upgrade-safe managed-resource binding", path)
-		}
+	path := "../../helm/v1alpha5/oneks-application-controller/templates/rbac-role-binding-managed-resources.yaml"
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	text := string(payload)
+	if strings.Count(text, "kind: ClusterRoleBinding") != 1 || !strings.Contains(text, want) {
+		t.Fatalf("%s does not define only the upgrade-safe managed-resource binding", path)
 	}
 }
 

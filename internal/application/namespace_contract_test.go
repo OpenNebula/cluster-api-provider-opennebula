@@ -18,7 +18,6 @@ package application
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
@@ -92,11 +91,7 @@ func TestDesiredHelmChartPreservesNamespaceContract(t *testing.T) {
 }
 
 func TestGeneratedCRDHasNoFixedWorkloadNamespace(t *testing.T) {
-	payload, err := os.ReadFile("../../config/crd/bases/oneks.opennebula.io_oneksapplications.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	crd := string(payload)
+	crd := string(generatedApplicationCRD(t))
 	if strings.Contains(crd, "self.release.targetNamespace == '") {
 		t.Fatal("generated CRD retains a fixed workload namespace rule")
 	}

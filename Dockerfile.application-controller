@@ -2,7 +2,6 @@
 FROM --platform=$BUILDPLATFORM golang:1.22 AS builder
 ARG TARGETOS
 ARG TARGETARCH
-ARG VERSION=development
 
 WORKDIR /workspace
 COPY go.mod go.mod
@@ -13,8 +12,7 @@ COPY api/application/ api/application/
 COPY cmd/application-controller/ cmd/application-controller/
 COPY internal/application/ internal/application/
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
-    go build -a -ldflags "-X main.version=${VERSION}" \
-    -o application-controller ./cmd/application-controller
+    go build -a -o application-controller ./cmd/application-controller
 
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /

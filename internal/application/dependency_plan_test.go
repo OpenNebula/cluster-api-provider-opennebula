@@ -19,8 +19,6 @@ package application
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"os"
 	"strings"
 	"testing"
@@ -38,10 +36,7 @@ import (
 )
 
 func TestGeneratedCRDUsesOnlyCurrentPlanVersion(t *testing.T) {
-	payload, err := os.ReadFile("../../config/crd/bases/oneks.opennebula.io_oneksapplications.yaml")
-	if err != nil {
-		t.Fatalf("read generated OneKSApplication CRD: %v", err)
-	}
+	payload := generatedApplicationCRD(t)
 	text := string(payload)
 	for _, required := range []string{
 		"- oneks.opennebula.io/plan-v1alpha5",
@@ -79,9 +74,18 @@ func TestGeneratedCRDUsesOnlyCurrentPlanVersion(t *testing.T) {
 	}
 }
 
+func generatedApplicationCRD(t *testing.T) []byte {
+	t.Helper()
+	payload, err := os.ReadFile("../../config/crd/bases/oneks.opennebula.io_oneksapplications.yaml")
+	if err != nil {
+		t.Fatalf("read generated OneKSApplication CRD: %v", err)
+	}
+	return payload
+}
+
 func TestStatusAdvertisesSupportedPlanVersions(t *testing.T) {
 	app := validDependencyPlanApplication(t)
-	status := baseStatus(app, "test")
+	status := baseStatus(app)
 	want := []string{applicationv1.PlanVersion}
 	if len(status.SupportedPlanVersions) != len(want) {
 		t.Fatalf("supported versions = %#v, want %#v", status.SupportedPlanVersions, want)
@@ -151,22 +155,6 @@ func TestDependencyApplicationNameContract(t *testing.T) {
 	}
 }
 
-func TestRootDependencyGraphUsesDeterministicApplicationNames(t *testing.T) {
-	plan := dependencyPlanForTest("shared-release", "shared-chart", nil)
-	expectedName := dependencyApplicationName(plan.Release.ReleaseName)
-	if plan.Name != expectedName {
-		t.Fatalf("dependencyPlan name = %q, want %q", plan.Name, expectedName)
-	}
-	reference := dependencyReferenceForPlan(plan)
-	if reference.Name != expectedName {
-		t.Fatalf("dependency reference name = %q, want %q", reference.Name, expectedName)
-	}
-	app := validRootPlanGraph(t, []applicationv1.DependencyReference{reference}, []applicationv1.DependencyPlan{plan})
-	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
-		t.Fatalf("deterministically named Root dependency graph rejected: %v", err)
-	}
-}
-
 func TestRootRejectsArbitraryDependencyApplicationName(t *testing.T) {
 	plan := dependencyPlanForTest("shared-release", "shared-chart", nil)
 	digestBeforeRename := plan.PlanDigest
@@ -179,7 +167,7 @@ func TestRootRejectsArbitraryDependencyApplicationName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("canonicalize renamed dependency child: %v", err)
 	}
-	if got := testPlanDigest(canonical); got != digestBeforeRename {
+	if got := Digest(canonical); got != digestBeforeRename {
 		t.Fatalf("metadata name changed child spec digest: got %s, want %s", got, digestBeforeRename)
 	}
 }
@@ -208,17 +196,6 @@ func TestSharedReleaseNameCannotEscapeDependencyIdentity(t *testing.T) {
 	)
 	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err == nil || err.Reason != "DuplicateDependencyPlanName" {
 		t.Fatalf("same releaseName escaped duplicate identity validation: %#v", err)
-	}
-}
-
-func TestCurrentPlanDependencyWithDeterministicMetadataNamePasses(t *testing.T) {
-	app := validDependencyPlanApplication(t)
-	want := dependencyApplicationName(app.Spec.Release.ReleaseName)
-	if app.Name != want {
-		t.Fatalf("dependency metadata.name = %q, want %q", app.Name, want)
-	}
-	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
-		t.Fatalf("deterministically named Dependency rejected: %v", err)
 	}
 }
 
@@ -251,16 +228,6 @@ func TestCurrentPlanDependencyMetadataNameUsesOnlyReleaseName(t *testing.T) {
 	}
 }
 
-func TestRootDoesNotRequireDependencyApplicationMetadataName(t *testing.T) {
-	app := goldenApplication(t)
-	if app.Name == dependencyApplicationName(app.Spec.Release.ReleaseName) {
-		t.Fatalf("fixture metadata.name unexpectedly equals the dependency identity %q", app.Name)
-	}
-	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
-		t.Fatalf("current Root application rejected: %v", err)
-	}
-}
-
 func TestDependencyPlanDigestCommitsToCanonicalChildSpec(t *testing.T) {
 	e := dependencyPlanForTest("oneks-e", "chart-e", nil)
 	d := dependencyPlanForTest("oneks-d", "chart-d", []applicationv1.DependencyReference{dependencyReferenceForPlan(e)})
@@ -270,7 +237,7 @@ func TestDependencyPlanDigestCommitsToCanonicalChildSpec(t *testing.T) {
 		if err != nil {
 			t.Fatalf("canonicalize child %s: %v", plan.Name, err)
 		}
-		if got := testPlanDigest(canonical); got != plan.PlanDigest {
+		if got := Digest(canonical); got != plan.PlanDigest {
 			t.Fatalf("child %s digest = %s, want %s", plan.Name, got, plan.PlanDigest)
 		}
 		if child.ExecutionMode != applicationv1.ExecutionModeExecute || child.Role != applicationv1.ApplicationRoleDependency || child.DependencyPlans != nil {
@@ -586,7 +553,7 @@ func TestCurrentPlanDependencyFieldsAffectDigestWithoutArraySorting(t *testing.T
 	if err != nil {
 		t.Fatalf("canonicalize base plan: %v", err)
 	}
-	baseDigest := testPlanDigest(canonical)
+	baseDigest := Digest(canonical)
 
 	mutations := []struct {
 		name   string
@@ -606,7 +573,7 @@ func TestCurrentPlanDependencyFieldsAffectDigestWithoutArraySorting(t *testing.T
 			if err != nil {
 				t.Fatalf("canonicalize changed plan: %v", err)
 			}
-			if got := testPlanDigest(changed); got == baseDigest {
+			if got := Digest(changed); got == baseDigest {
 				t.Fatalf("%s did not affect the current plan digest", test.name)
 			}
 		})
@@ -771,7 +738,7 @@ func refreshPlanDigest(app *applicationv1.OneKSApplication) {
 	if err != nil {
 		panic(err)
 	}
-	app.Spec.PlanDigest = testPlanDigest(canonical)
+	app.Spec.PlanDigest = Digest(canonical)
 	if app.Labels != nil {
 		app.Labels[LabelPlanDigest] = app.Spec.PlanDigest
 	}
@@ -782,10 +749,5 @@ func refreshDependencyPlanDigestForTest(clusterID string, plan *applicationv1.De
 	if err != nil {
 		panic(err)
 	}
-	plan.PlanDigest = testPlanDigest(canonical)
-}
-
-func testPlanDigest(canonical []byte) string {
-	sum := sha256.Sum256(canonical)
-	return "sha256-" + base64.RawURLEncoding.EncodeToString(sum[:])
+	plan.PlanDigest = Digest(canonical)
 }

@@ -177,3 +177,26 @@ func TestInitialNodeSynchronizationQueuesOneReportPerNode(t *testing.T) {
 		}
 	}
 }
+
+func TestNodeReportWaitsForProviderID(t *testing.T) {
+	queue := newReportQueue(&recordingSender{})
+	defer queue.queue.ShutDown()
+	m := &Monitor{reports: queue}
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-1"}}
+
+	m.onNode(node, "Added")
+	if len(queue.pending) != 0 {
+		t.Fatalf("node without provider ID was queued: %#v", queue.pending)
+	}
+
+	node.Spec.ProviderID = "one://317"
+	m.onNode(node, "Updated")
+	queued := queue.pending["Node/worker-1"]
+	if queued == nil {
+		t.Fatal("node was not queued after provider ID was assigned")
+	}
+	report := queued.value.(Report)
+	if got := report.Status["providerID"]; got != "one://317" {
+		t.Fatalf("provider ID = %#v, want %q", got, "one://317")
+	}
+}

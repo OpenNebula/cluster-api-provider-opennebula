@@ -28,7 +28,7 @@ import (
 )
 
 func TestApplicationRoleHasOnlyRequiredApplicationWrites(t *testing.T) {
-	payload, err := os.ReadFile("../../kustomize/v1alpha5/application-controller/role_application.yaml")
+	payload, err := os.ReadFile("../../helm/v1alpha5/oneks-application-controller/templates/rbac-role-application.yaml")
 	if err != nil {
 		t.Fatalf("read application Role: %v", err)
 	}
@@ -64,21 +64,10 @@ func TestApplicationRoleHasOnlyRequiredApplicationWrites(t *testing.T) {
 		t.Fatalf("OneKSApplication verbs = %#v across %d rules, want exactly %#v", applicationVerbs, applicationRules, wantApplicationVerbs)
 	}
 
-	helmRBAC, err := os.ReadFile("../../helm/v1alpha5/oneks-application-controller/templates/rbac.yaml")
-	if err != nil {
-		t.Fatalf("read Helm RBAC template: %v", err)
-	}
-	text := string(helmRBAC)
-	if strings.Contains(text, "oneksapplications/finalizers") || strings.Contains(text, "resources: [\"*\"]") {
-		t.Fatalf("Helm RBAC contains a forbidden permission")
-	}
-	if !strings.Contains(text, `verbs: ["get", "list", "watch", "create", "patch", "delete"]`) {
-		t.Fatal("Helm RBAC lacks the exact required OneKSApplication verbs")
-	}
 }
 
 func TestManagedResourceRBACIsKindAndVerbBounded(t *testing.T) {
-	payload, err := os.ReadFile("../../kustomize/v1alpha5/application-controller/role_configmap.yaml")
+	payload, err := os.ReadFile("../../helm/v1alpha5/oneks-application-controller/templates/rbac-role-managed-resources.yaml")
 	if err != nil {
 		t.Fatalf("read managed-resource ClusterRole: %v", err)
 	}
@@ -146,32 +135,7 @@ func TestManagedResourceRBACIsKindAndVerbBounded(t *testing.T) {
 		}
 	}
 
-	helmPayload, err := os.ReadFile("../../helm/v1alpha5/oneks-application-controller/templates/rbac.yaml")
-	if err != nil {
-		t.Fatalf("read Helm RBAC: %v", err)
-	}
-	for _, required := range []string{
-		`resources: ["namespaces", "configmaps"]`, `resources: ["helmchartconfigs"]`,
-		`resources: ["clusterissuers", "certificates"]`, `resources: ["bundles"]`,
-		"- apiGroups: [\"\"]\n  resources: [\"services\"]\n  verbs: [\"get\"]",
-		"- apiGroups: [\"\"]\n  resources: [\"secrets\"]\n  # Get reads readiness metadata and immutable input/target Secrets. Create,\n  # update, and delete implement protected Secret lifecycle without patching.\n  verbs: [\"get\", \"create\", \"update\", \"delete\"]",
-		"- apiGroups: [\"networking.k8s.io\"]\n  resources: [\"ingressclasses\"]\n  verbs: [\"get\"]",
-		"- apiGroups: [\"longhorn.io\"]\n  resources: [\"settings\"]\n  resourceNames: [\"deleting-confirmation-flag\"]\n  verbs: [\"get\", \"patch\"]",
-		"- apiGroups: [\"apiextensions.k8s.io\"]\n  resources: [\"customresourcedefinitions\"]\n  resourceNames:\n  - certificates.cert-manager.io\n  - certificaterequests.cert-manager.io\n  - issuers.cert-manager.io\n  - clusterissuers.cert-manager.io\n  verbs: [\"get\"]",
-		"- apiGroups: [\"apps\"]\n  resources: [\"deployments\"]\n  verbs: [\"list\"]",
-		"- apiGroups: [\"\"]\n  resources: [\"pods\"]\n  verbs: [\"list\"]",
-		"- apiGroups: [\"\"]\n  resources: [\"endpoints\"]\n  resourceNames: [\"cert-manager-webhook\"]\n  verbs: [\"get\"]",
-		"kind: ClusterRoleBinding\nmetadata:\n  name: oneks-application-controller-managed-resources\nroleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRole\n  name: oneks-application-controller-managed-resources",
-	} {
-		if !strings.Contains(string(helmPayload), required) {
-			t.Fatalf("Helm RBAC is missing %q", required)
-		}
-	}
-	if strings.Contains(string(helmPayload), `resources: ["*"]`) || strings.Contains(string(helmPayload), `verbs: ["*"]`) {
-		t.Fatal("Helm managed-resource RBAC contains a wildcard permission")
-	}
-
-	bindingPayload, err := os.ReadFile("../../kustomize/v1alpha5/application-controller/role_binding_configmap.yaml")
+	bindingPayload, err := os.ReadFile("../../helm/v1alpha5/oneks-application-controller/templates/rbac-role-binding-managed-resources.yaml")
 	if err != nil {
 		t.Fatalf("read managed-resource ClusterRoleBinding: %v", err)
 	}

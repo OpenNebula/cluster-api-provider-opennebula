@@ -23,7 +23,6 @@ const (
 	ApplicationNamespace = "oneks-system"
 	ApplicationFinalizer = "applications.oneks.opennebula.io/finalizer"
 	FieldManager         = "oneks-application-controller"
-	LeaderElectionID     = "oneks-application-controller-leader"
 )
 
 type ExecutionMode string
@@ -443,8 +442,6 @@ type OneKSApplicationStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// +kubebuilder:validation:MaxLength=50
 	ObservedPlanDigest string `json:"observedPlanDigest,omitempty"`
-	// +kubebuilder:validation:MaxLength=128
-	ControllerVersion string `json:"controllerVersion,omitempty"`
 	// SecretInputUID is bound by the controller before plan execution.
 	// +kubebuilder:validation:MaxLength=128
 	SecretInputUID string `json:"secretInputUID,omitempty"`

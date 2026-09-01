@@ -28,10 +28,9 @@ import (
 func TestNormalizeStatusEnforcesEveryRuntimeBound(t *testing.T) {
 	status := applicationv1.OneKSApplicationStatus{
 		ObservedPlanDigest:    strings.Repeat("d", 60),
-		ControllerVersion:     strings.Repeat("v", 140),
-		SupportedPlanVersions: repeatStrings(10, strings.Repeat("p", 140)),
+		SupportedPlanVersions: repeatValue(10, strings.Repeat("p", 140)),
 		Progress:              applicationv1.ApplicationProgress{Current: strings.Repeat("c", 140)},
-		Conditions: repeatConditions(10, metav1.Condition{
+		Conditions: repeatValue(10, metav1.Condition{
 			Type: strings.Repeat("t", 140), Reason: strings.Repeat("r", 140),
 			Message: strings.Repeat("m", 540),
 		}),
@@ -39,7 +38,7 @@ func TestNormalizeStatusEnforcesEveryRuntimeBound(t *testing.T) {
 			Namespace: strings.Repeat("n", 70), Name: strings.Repeat("h", 260),
 			UID: strings.Repeat("u", 140), ResourceVersion: strings.Repeat("r", 70),
 		},
-		Resources: repeatResources(20, applicationv1.ResourceStatus{
+		Resources: repeatValue(20, applicationv1.ResourceStatus{
 			ID: strings.Repeat("i", 70), Phase: strings.Repeat("p", 40),
 			Reason: strings.Repeat("r", 140), Message: strings.Repeat("m", 540),
 			ResourceVersion: strings.Repeat("v", 70),
@@ -50,7 +49,7 @@ func TestNormalizeStatusEnforcesEveryRuntimeBound(t *testing.T) {
 	}
 	normalizeStatus(&status)
 
-	if len(status.ObservedPlanDigest) != 50 || len(status.ControllerVersion) != 128 || len(status.Progress.Current) != 128 {
+	if len(status.ObservedPlanDigest) != 50 || len(status.Progress.Current) != 128 {
 		t.Fatalf("top-level status bounds were not applied: %#v", status)
 	}
 	if len(status.SupportedPlanVersions) != 8 || len(status.SupportedPlanVersions[0]) != 128 {
@@ -75,24 +74,8 @@ func TestTruncatePreservesValidUTF8(t *testing.T) {
 	}
 }
 
-func repeatStrings(count int, value string) []string {
-	result := make([]string, count)
-	for index := range result {
-		result[index] = value
-	}
-	return result
-}
-
-func repeatConditions(count int, value metav1.Condition) []metav1.Condition {
-	result := make([]metav1.Condition, count)
-	for index := range result {
-		result[index] = value
-	}
-	return result
-}
-
-func repeatResources(count int, value applicationv1.ResourceStatus) []applicationv1.ResourceStatus {
-	result := make([]applicationv1.ResourceStatus, count)
+func repeatValue[T any](count int, value T) []T {
+	result := make([]T, count)
 	for index := range result {
 		result[index] = value
 	}

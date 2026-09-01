@@ -36,14 +36,13 @@ const (
 	maxStatusResources             = 16
 )
 
-func baseStatus(app *applicationv1.OneKSApplication, controllerVersion string) applicationv1.OneKSApplicationStatus {
+func baseStatus(app *applicationv1.OneKSApplication) applicationv1.OneKSApplicationStatus {
 	status := app.Status.DeepCopy()
 	if status == nil {
 		status = &applicationv1.OneKSApplicationStatus{}
 	}
 	status.ObservedGeneration = app.Generation
 	status.ObservedPlanDigest = app.Spec.PlanDigest
-	status.ControllerVersion = controllerVersion
 	status.SupportedPlanVersions = []string{
 		applicationv1.PlanVersion,
 	}
@@ -74,7 +73,6 @@ func setLastError(status *applicationv1.OneKSApplicationStatus, reason, message 
 
 func normalizeStatus(status *applicationv1.OneKSApplicationStatus) {
 	status.ObservedPlanDigest = truncate(status.ObservedPlanDigest, 50)
-	status.ControllerVersion = truncate(status.ControllerVersion, 128)
 	status.SecretInputUID = truncate(status.SecretInputUID, 128)
 	status.Progress.Current = truncate(status.Progress.Current, 128)
 	if len(status.SupportedPlanVersions) > 8 {

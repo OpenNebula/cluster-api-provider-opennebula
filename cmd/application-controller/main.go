@@ -42,14 +42,10 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
 
-var version = "development"
-
 type controllerConfig struct {
 	clusterID          string
 	metricsAddress     string
 	healthAddress      string
-	leaderElection     bool
-	controllerVersion  string
 	reconciliationPoll time.Duration
 }
 
@@ -58,8 +54,6 @@ func main() {
 	flag.StringVar(&config.clusterID, "cluster-id", os.Getenv("CLUSTER_ID"), "OneKS cluster identifier served by this controller")
 	flag.StringVar(&config.metricsAddress, "metrics-bind-address", "0", "Metrics bind address, or 0 to disable")
 	flag.StringVar(&config.healthAddress, "health-probe-bind-address", ":8081", "Health probe bind address")
-	flag.BoolVar(&config.leaderElection, "leader-elect", true, "Enable leader election")
-	flag.StringVar(&config.controllerVersion, "controller-version", version, "Version reported in application status")
 	flag.DurationVar(&config.reconciliationPoll, "reconciliation-poll", 15*time.Second, "Periodic authoritative status reconciliation interval")
 	logging := zap.Options{Development: false}
 	logging.BindFlags(flag.CommandLine)
@@ -80,9 +74,6 @@ func (config controllerConfig) validate() error {
 	if config.clusterID == "" {
 		return fmt.Errorf("--cluster-id is required")
 	}
-	if config.controllerVersion == "" {
-		return fmt.Errorf("--controller-version is required")
-	}
 	if config.reconciliationPoll <= 0 {
 		return fmt.Errorf("--reconciliation-poll must be positive")
 	}
@@ -97,23 +88,22 @@ func run(config controllerConfig) error {
 	utilruntime.Must(applicationv1.AddToScheme(scheme))
 
 	manager, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                  scheme,
-		Metrics:                 metricsserver.Options{BindAddress: config.metricsAddress},
-		HealthProbeBindAddress:  config.healthAddress,
-		LeaderElection:          config.leaderElection,
-		LeaderElectionID:        applicationv1.LeaderElectionID,
-		LeaderElectionNamespace: applicationv1.ApplicationNamespace,
-		Cache:                   controllerCacheOptions(),
-		Client:                  controllerClientOptions(),
+		Scheme:                 scheme,
+		Metrics:                metricsserver.Options{BindAddress: config.metricsAddress},
+		HealthProbeBindAddress: config.healthAddress,
+		Cache:                  controllerCacheOptions(),
+		Client: client.Options{Cache: &client.CacheOptions{
+			DisableFor:   []client.Object{&corev1.Namespace{}, &corev1.ConfigMap{}},
+			Unstructured: true,
+		}},
 	})
 	if err != nil {
 		return fmt.Errorf("create manager: %w", err)
 	}
 
 	reconciler := &application.Reconciler{
-		Client: manager.GetClient(), APIReader: manager.GetAPIReader(), Scheme: manager.GetScheme(),
-		Recorder:  manager.GetEventRecorderFor(applicationv1.FieldManager),
-		ClusterID: config.clusterID, ControllerVersion: config.controllerVersion,
+		Client: manager.GetClient(), APIReader: manager.GetAPIReader(),
+		Recorder: manager.GetEventRecorderFor(applicationv1.FieldManager), ClusterID: config.clusterID,
 		RequeueAfter: config.reconciliationPoll,
 	}
 	if err := reconciler.SetupWithManager(manager); err != nil {
@@ -128,13 +118,6 @@ func run(config controllerConfig) error {
 	return manager.Start(ctrl.SetupSignalHandler())
 }
 
-func controllerClientOptions() client.Options {
-	return client.Options{Cache: &client.CacheOptions{
-		DisableFor:   []client.Object{&corev1.Namespace{}, &corev1.ConfigMap{}},
-		Unstructured: true,
-	}}
-}
-
 func controllerCacheOptions() cache.Options {
 	helmChart := &unstructured.Unstructured{}
 	helmChart.SetGroupVersionKind(schema.GroupVersionKind{
@@ -145,9 +128,6 @@ func controllerCacheOptions() cache.Options {
 			applicationv1.ApplicationNamespace: {},
 		},
 		ByObject: map[client.Object]cache.ByObject{
-			&applicationv1.OneKSApplication{}: {
-				Namespaces: namespaceCache(applicationv1.ApplicationNamespace),
-			},
 			&corev1.ConfigMap{}: {
 				Namespaces: map[string]cache.Config{},
 				Label: labels.SelectorFromSet(labels.Set{
@@ -155,15 +135,11 @@ func controllerCacheOptions() cache.Options {
 				}),
 			},
 			helmChart: {
-				Namespaces: namespaceCache(application.HelmChartNamespace),
+				Namespaces: map[string]cache.Config{application.HelmChartNamespace: {}},
 			},
 			&batchv1.Job{}: {
-				Namespaces: namespaceCache(application.HelmChartNamespace),
+				Namespaces: map[string]cache.Config{application.HelmChartNamespace: {}},
 			},
 		},
 	}
-}
-
-func namespaceCache(namespace string) map[string]cache.Config {
-	return map[string]cache.Config{namespace: {}}
 }

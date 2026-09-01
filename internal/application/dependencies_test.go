@@ -173,7 +173,7 @@ func TestDependencyPreflightUsesAuthoritativeReaderForConflicts(t *testing.T) {
 	conflictingE := existingDependencyForTest(root, e)
 	conflictingE.Spec.Release.Version = "conflicting-version"
 	reconciler, _ := testReconciler(t, root)
-	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Scheme).WithObjects(
+	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Client.Scheme()).WithObjects(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "catalogue-workloads"}},
 		conflictingE,
 	).Build()
@@ -192,7 +192,7 @@ func TestDependencyPreflightReusesExactAuthoritativeObject(t *testing.T) {
 	root.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	existing := existingDependencyForTest(root, plan)
 	reconciler, _ := testReconciler(t, root)
-	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Scheme).WithObjects(
+	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Client.Scheme()).WithObjects(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "catalogue-workloads"}},
 		existing,
 	).Build()
@@ -213,7 +213,7 @@ func TestReconcileHelmChartUsesAuthoritativeExistingState(t *testing.T) {
 	existing.SetUID(types.UID("helm-uid"))
 	existing.SetResourceVersion("7")
 	reconciler, recorder := testReconciler(t, app)
-	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Scheme).WithObjects(existing).Build()
+	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Client.Scheme()).WithObjects(existing).Build()
 
 	if err := reconciler.reconcileHelmChart(ctx, app); err != nil {
 		t.Fatalf("reconcile authoritative existing HelmChart: %v", err)
@@ -237,7 +237,7 @@ func TestDeletionUsesAuthoritativeHelmChartState(t *testing.T) {
 	existing.SetUID(types.UID("helm-uid"))
 	existing.SetResourceVersion("7")
 	reconciler, recorder := testReconciler(t, app)
-	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Scheme).WithObjects(existing).Build()
+	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Client.Scheme()).WithObjects(existing).Build()
 
 	result := reconcileOnce(t, ctx, reconciler, app)
 	if result.RequeueAfter == 0 && !result.Requeue {
@@ -621,7 +621,7 @@ func TestAuthoritativeConsumerLookupProtectsAgainstCachedFalseZero(t *testing.T)
 	rootB.UID = "root-b-uid"
 	dependency := existingDependencyForTest(rootA, plan)
 	reconciler, _ := testReconciler(t, rootA, dependency)
-	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Scheme).WithObjects(rootA, rootB, dependency).Build()
+	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Client.Scheme()).WithObjects(rootA, rootB, dependency).Build()
 
 	reconcileOnce(t, ctx, reconciler, rootA)
 	stored := getDependencyApplication(t, ctx, reconciler.Client, plan.Name)
@@ -734,7 +734,7 @@ func TestAuthoritativeTerminatingDependencyOverridesStaleCachedReady(t *testing.
 	now := metav1.Now()
 	authoritativeTerminating.DeletionTimestamp = &now
 	reconciler, _ := testReconciler(t, root, staleReady)
-	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Scheme).WithObjects(
+	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Client.Scheme()).WithObjects(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "catalogue-workloads"}},
 		authoritativeTerminating,
 	).Build()

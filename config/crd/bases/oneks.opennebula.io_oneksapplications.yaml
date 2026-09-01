@@ -808,9 +808,6 @@ spec:
                     limit
                   rule: self.all(c, size(c.type) <= 128 && size(c.reason) <= 128 &&
                     size(c.message) <= 512)
-              controllerVersion:
-                maxLength: 128
-                type: string
               helmChartRef:
                 properties:
                   name:
