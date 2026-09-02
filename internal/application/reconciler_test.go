@@ -86,17 +86,20 @@ func TestExecuteCreatesManagedResourceBeforeHelmChartAndBecomesReady(t *testing.
 		t.Fatalf("unexpected resource status: %#v", stored.Status.Resources)
 	}
 	for _, stage := range []string{
-		"application reconciliation started",
 		"managed resource created",
 		"Helm release created",
 		"application status updated",
 		`"phase"="Ready"`,
-		"application reconciliation completed",
 		`"releaseName"="oneks-prometheus"`,
 		`"targetNamespace"="catalogue-workloads"`,
 	} {
 		if !strings.Contains(logs.String(), stage) {
 			t.Fatalf("successful reconciliation logs omit %q:\n%s", stage, logs.String())
+		}
+	}
+	for _, routine := range []string{"application reconciliation started", "application reconciliation completed"} {
+		if strings.Contains(logs.String(), routine) {
+			t.Fatalf("info logs contain verbose reconciliation message %q:\n%s", routine, logs.String())
 		}
 	}
 	for _, sensitive := range []string{"password", "kubeconfig", "authorization"} {

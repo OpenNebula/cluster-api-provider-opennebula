@@ -37,9 +37,7 @@ import (
 
 func TestManagedResourcePlanValidManagedResourceDAG(t *testing.T) {
 	app := validManagedRootPlan(t)
-	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
-		t.Fatalf("valid current managed-resource plan rejected: %v", err)
-	}
+	assertPlanValid(t, app)
 	canonical, err := CanonicalPlan(app.Spec)
 	if err != nil || !strings.Contains(string(canonical), `"managedResources"`) {
 		t.Fatalf("managed-resource canonicalization = %s, %v", canonical, err)
@@ -54,9 +52,9 @@ func TestManagedResourcePlanRootMaterializesUnchangedCurrentDependencyChild(t *t
 	refreshOwnedPlan(t, root)
 
 	reconciler, _ := testReconciler(t, root)
-	raced, terminating, conflict, err := reconciler.materializeRootDependencies(context.Background(), root)
-	if err != nil || raced || terminating != "" || conflict != nil {
-		t.Fatalf("materialize current managed-resource plan Root dependency = raced %v, terminating %q, conflict %#v, err %v", raced, terminating, conflict, err)
+	materialized, err := reconciler.materializeRootDependencies(context.Background(), root)
+	if err != nil || materialized != (dependencyMaterialization{}) {
+		t.Fatalf("materialize current managed-resource plan Root dependency = %#v, err %v", materialized, err)
 	}
 	child := &applicationv1.OneKSApplication{}
 	if err := reconciler.Get(context.Background(), types.NamespacedName{Namespace: applicationv1.ApplicationNamespace, Name: plan.Name}, child); err != nil {
@@ -162,10 +160,7 @@ func TestManagedResourcePlanRejectsInvalidManagedContracts(t *testing.T) {
 			app := validManagedRootPlan(t)
 			test.mutate(app)
 			refreshOwnedPlan(t, app)
-			err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID})
-			if err == nil || err.Reason != test.reason {
-				t.Fatalf("error = %#v, want %s", err, test.reason)
-			}
+			assertPlanError(t, app, test.reason)
 		})
 	}
 }
@@ -179,10 +174,7 @@ func TestManagedResourcePlanRejectsControllerOwnedManifestMetadata(t *testing.T)
 			app := validManagedRootPlan(t)
 			app.Spec.ManagedResources[0].ManifestJSON = `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"namespace":"runai","name":"settings","` + field + `":[]}}`
 			refreshOwnedPlan(t, app)
-			err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID})
-			if err == nil || err.Reason != "UnsupportedManagedManifestField" {
-				t.Fatalf("metadata.%s error = %#v", field, err)
-			}
+			assertPlanError(t, app, "UnsupportedManagedManifestField")
 		})
 	}
 }
@@ -195,9 +187,7 @@ func TestManagedResourcePlanSupportsNamespacedAndClusterScopedResources(t *testi
 		Readiness:    applicationv1.ManagedResourceReadiness{TimeoutSeconds: 60}, DeletionPolicy: applicationv1.DeletionPolicyDelete,
 	})
 	refreshOwnedPlan(t, app)
-	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
-		t.Fatalf("mixed scopes rejected: %v", err)
-	}
+	assertPlanValid(t, app)
 }
 
 func TestManagedResourcePlanCreatesInTopologicalOrderAndGatesHelm(t *testing.T) {
@@ -422,7 +412,7 @@ func TestManagedReadinessTimeoutRemainsStickyWhenObjectDisappears(t *testing.T) 
 	if err != nil {
 		t.Fatalf("observe absent timed-out resource: %v", err)
 	}
-	if len(observed.resources) != 1 || observed.resources[0].Phase != "Failed" || observed.resources[0].Reason != "ReadinessTimeout" || observed.resources[0].Message != "original timeout" || observed.resources[0].ReadinessStartedAt == nil || !observed.resources[0].ReadinessStartedAt.Equal(&origin) || !observed.resourcesFailed {
+	if len(observed.resources) != 1 || observed.resources[0].Phase != "Failed" || observed.resources[0].Reason != "ReadinessTimeout" || observed.resources[0].Message != "original timeout" || observed.resources[0].ReadinessStartedAt == nil || !observed.resources[0].ReadinessStartedAt.Equal(&origin) || !observed.managed.failed {
 		t.Fatalf("absent resource lost sticky timeout: observation=%#v status=%#v", observed, observed.resources)
 	}
 	if len(recorder.childWrites) != 0 {

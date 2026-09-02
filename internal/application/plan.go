@@ -132,41 +132,14 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 	if !validUTF8Bytes(app.Spec.CatalogueChartID, 1, 63) || len(validation.IsValidLabelValue(app.Spec.CatalogueChartID)) != 0 {
 		return invalid("InvalidCatalogueChartID", "catalogueChartID must be a Kubernetes label value")
 	}
-	if !validUTF8Bytes(app.Spec.Release.ChartID, 1, 63) || len(validation.IsValidLabelValue(app.Spec.Release.ChartID)) != 0 || app.Spec.Release.ChartID != app.Spec.CatalogueChartID {
-		return invalid("ChartIDMismatch", "release.chartID must equal catalogueChartID")
-	}
-	if !validUTF8Bytes(app.Spec.Release.Chart, 1, 1024) {
-		return invalid("InvalidChart", "release chart must be valid UTF-8 between 1 and 1024 bytes")
-	}
-	if !validUTF8Bytes(app.Spec.Release.Version, 1, 253) {
-		return invalid("InvalidChartVersion", "release version must be valid UTF-8 between 1 and 253 bytes")
-	}
-	if err := validateReleaseSource(app.Spec.Release, "release"); err != nil {
+	if err := validateRelease(app.Spec.Release, app.Spec.CatalogueChartID, "release"); err != nil {
 		return err
-	}
-	if !validUTF8Bytes(app.Spec.Release.ReleaseName, 1, 63) || len(validation.IsDNS1123Label(app.Spec.Release.ReleaseName)) > 0 {
-		return invalid("InvalidReleaseName", "releaseName is not a DNS-1123 label of at most 63 characters")
 	}
 	if app.Spec.Role == applicationv1.ApplicationRoleDependency {
 		expectedName := dependencyApplicationName(app.Spec.Release.ReleaseName)
 		if app.Name != expectedName {
 			return invalid("InvalidDependencyApplicationName", "application name must be %q for releaseName %q", expectedName, app.Spec.Release.ReleaseName)
 		}
-	}
-	if !validUTF8Bytes(app.Spec.Release.TargetNamespace, 1, 63) || len(validation.IsDNS1123Label(app.Spec.Release.TargetNamespace)) > 0 {
-		return invalid("InvalidTargetNamespace", "targetNamespace is not a DNS-1123 label of at most 63 characters")
-	}
-	if !utf8.ValidString(app.Spec.Release.ValuesContent) {
-		return invalid("InvalidValuesContent", "valuesContent must be valid UTF-8")
-	}
-	if len([]byte(app.Spec.Release.ValuesContent)) > maxValuesContentBytes {
-		return invalid("ValuesContentTooLarge", "valuesContent exceeds %d bytes", maxValuesContentBytes)
-	}
-	if placeholderPattern.MatchString(app.Spec.Release.ValuesContent) {
-		return invalid("UnresolvedPlaceholder", "valuesContent contains an unresolved placeholder")
-	}
-	if err := validateNonSensitiveValues(app.Spec.Release.ValuesContent); err != nil {
-		return err
 	}
 	if err := validateDependencyContract(app); err != nil {
 		return err
@@ -373,32 +346,8 @@ func validateDependencyPlan(plan applicationv1.DependencyPlan, path string) *Pla
 	if plan.Release.AuthSecret != nil {
 		return invalid("InvalidDependencyAuthSecret", "%s.release does not permit authSecret", path)
 	}
-	if plan.Release.ChartID != plan.CatalogueChartID {
-		return invalid("DependencyChartIDMismatch", "%s.release.chartID must equal catalogueChartID", path)
-	}
-	if !validUTF8Bytes(plan.Release.Chart, 1, 1024) {
-		return invalid("InvalidDependencyChart", "%s.release.chart must be valid UTF-8 between 1 and 1024 bytes", path)
-	}
-	if !validUTF8Bytes(plan.Release.Version, 1, 253) {
-		return invalid("InvalidDependencyChartVersion", "%s.release.version must be valid UTF-8 between 1 and 253 bytes", path)
-	}
-	if err := validateReleaseSource(plan.Release, path+".release"); err != nil {
+	if err := validateRelease(plan.Release, plan.CatalogueChartID, path+".release"); err != nil {
 		return err
-	}
-	if !validUTF8Bytes(plan.Release.ReleaseName, 1, 63) || len(validation.IsDNS1123Label(plan.Release.ReleaseName)) > 0 {
-		return invalid("InvalidDependencyReleaseName", "%s.release.releaseName is not a DNS-1123 label", path)
-	}
-	if !validUTF8Bytes(plan.Release.TargetNamespace, 1, 63) || len(validation.IsDNS1123Label(plan.Release.TargetNamespace)) > 0 {
-		return invalid("InvalidDependencyTargetNamespace", "%s.release.targetNamespace is not a DNS-1123 label", path)
-	}
-	if !utf8.ValidString(plan.Release.ValuesContent) || len([]byte(plan.Release.ValuesContent)) > maxValuesContentBytes {
-		return invalid("InvalidDependencyValuesContent", "%s.release.valuesContent is invalid or exceeds %d bytes", path, maxValuesContentBytes)
-	}
-	if placeholderPattern.MatchString(plan.Release.ValuesContent) {
-		return invalid("UnresolvedPlaceholder", "%s.release.valuesContent contains an unresolved placeholder", path)
-	}
-	if err := validateNonSensitiveValues(plan.Release.ValuesContent); err != nil {
-		return invalid(err.Reason, "%s.release: %s", path, err.Message)
 	}
 	if !validDeletionPolicy(plan.DeletionPolicy) {
 		return invalid("InvalidDeletionPolicy", "%s.deletionPolicy must be Delete or Retain", path)
@@ -426,6 +375,40 @@ func validateDependencyPlan(plan applicationv1.DependencyPlan, path string) *Pla
 			return invalid("DuplicateDependencyName", "%s dependency name %q is duplicated", path, dependency.Name)
 		}
 		names[dependency.Name] = struct{}{}
+	}
+	return nil
+}
+
+func validateRelease(release applicationv1.ReleaseSpec, catalogueChartID, path string) *PlanError {
+	if !validUTF8Bytes(release.ChartID, 1, 63) || len(validation.IsValidLabelValue(release.ChartID)) != 0 || release.ChartID != catalogueChartID {
+		return invalid("ChartIDMismatch", "%s.chartID must equal catalogueChartID", path)
+	}
+	if !validUTF8Bytes(release.Chart, 1, 1024) {
+		return invalid("InvalidChart", "%s.chart must be valid UTF-8 between 1 and 1024 bytes", path)
+	}
+	if !validUTF8Bytes(release.Version, 1, 253) {
+		return invalid("InvalidChartVersion", "%s.version must be valid UTF-8 between 1 and 253 bytes", path)
+	}
+	if err := validateReleaseSource(release, path); err != nil {
+		return err
+	}
+	if !validUTF8Bytes(release.ReleaseName, 1, 63) || len(validation.IsDNS1123Label(release.ReleaseName)) > 0 {
+		return invalid("InvalidReleaseName", "%s.releaseName is not a DNS-1123 label of at most 63 characters", path)
+	}
+	if !validUTF8Bytes(release.TargetNamespace, 1, 63) || len(validation.IsDNS1123Label(release.TargetNamespace)) > 0 {
+		return invalid("InvalidTargetNamespace", "%s.targetNamespace is not a DNS-1123 label of at most 63 characters", path)
+	}
+	if !utf8.ValidString(release.ValuesContent) {
+		return invalid("InvalidValuesContent", "%s.valuesContent must be valid UTF-8", path)
+	}
+	if len([]byte(release.ValuesContent)) > maxValuesContentBytes {
+		return invalid("ValuesContentTooLarge", "%s.valuesContent exceeds %d bytes", path, maxValuesContentBytes)
+	}
+	if placeholderPattern.MatchString(release.ValuesContent) {
+		return invalid("UnresolvedPlaceholder", "%s.valuesContent contains an unresolved placeholder", path)
+	}
+	if err := validateNonSensitiveValues(release.ValuesContent); err != nil {
+		return invalid(err.Reason, "%s: %s", path, err.Message)
 	}
 	return nil
 }

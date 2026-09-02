@@ -40,30 +40,21 @@ func TestProtectedSecretPlanRejectsCrossCollectionResourceIDCollisions(t *testin
 		app := validBoundProtectedRootPlan(t)
 		app.Spec.ProtectedSecrets[0].ID = app.Spec.ManagedResources[0].ID
 		refreshOwnedPlan(t, app)
-		err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID})
-		if err == nil || err.Reason != "ProtectedSecretManagedResourceIDCollision" {
-			t.Fatalf("cross-collection collision error = %#v", err)
-		}
+		assertPlanError(t, app, "ProtectedSecretManagedResourceIDCollision")
 	})
 
 	t.Run("managed collection", func(t *testing.T) {
 		app := validBoundProtectedRootPlan(t)
 		app.Spec.ManagedResources = append(app.Spec.ManagedResources, app.Spec.ManagedResources[0])
 		refreshOwnedPlan(t, app)
-		err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID})
-		if err == nil || err.Reason != "DuplicateManagedResourceID" {
-			t.Fatalf("managed duplicate error = %#v", err)
-		}
+		assertPlanError(t, app, "DuplicateManagedResourceID")
 	})
 
 	t.Run("protected collection", func(t *testing.T) {
 		app := validBoundProtectedRootPlan(t)
 		app.Spec.ProtectedSecrets = append(app.Spec.ProtectedSecrets, app.Spec.ProtectedSecrets[0])
 		refreshOwnedPlan(t, app)
-		err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID})
-		if err == nil || err.Reason != "DuplicateProtectedSecretID" {
-			t.Fatalf("protected duplicate error = %#v", err)
-		}
+		assertPlanError(t, app, "DuplicateProtectedSecretID")
 	})
 }
 
@@ -170,9 +161,7 @@ func TestInputSecretInvalidKeepsPlanValid(t *testing.T) {
 
 func TestProtectedSecretPlanValidatesStructuredProtectedSecretContract(t *testing.T) {
 	app := validBoundProtectedRootPlan(t)
-	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
-		t.Fatalf("valid protected plan rejected: %v", err)
-	}
+	assertPlanValid(t, app)
 
 	tests := []struct {
 		name   string
@@ -208,20 +197,14 @@ func TestProtectedSecretPlanValidatesStructuredProtectedSecretContract(t *testin
 			candidate := validBoundProtectedRootPlan(t)
 			test.mutate(candidate)
 			refreshOwnedPlan(t, candidate)
-			err := ValidatePlan(candidate, ValidationConfig{ClusterID: candidate.Spec.ClusterID})
-			if err == nil || err.Reason != test.reason {
-				t.Fatalf("error = %#v, want %s", err, test.reason)
-			}
+			assertPlanError(t, candidate, test.reason)
 		})
 	}
 }
 
 func TestReleaseAuthSecretValidationBoundaries(t *testing.T) {
 	t.Run("valid matching basic auth", func(t *testing.T) {
-		app := runAIProtectedPlan(t)
-		if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
-			t.Fatalf("valid authSecret plan rejected: %v", err)
-		}
+		assertPlanValid(t, runAIProtectedPlan(t))
 	})
 
 	for _, test := range []struct {
@@ -254,10 +237,7 @@ func TestReleaseAuthSecretValidationBoundaries(t *testing.T) {
 			app := runAIProtectedPlan(t)
 			test.mutate(app)
 			refreshOwnedPlan(t, app)
-			err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID})
-			if err == nil || err.Reason != test.reason {
-				t.Fatalf("authSecret validation error = %#v, want %s", err, test.reason)
-			}
+			assertPlanError(t, app, test.reason)
 		})
 	}
 }
@@ -266,10 +246,7 @@ func TestDependencyPlansRejectReleaseAuthSecret(t *testing.T) {
 	plan := dependencyPlanForTest("dependency", "dependency-chart", nil)
 	plan.Release.AuthSecret = &applicationv1.HelmAuthSecretReference{Name: "repository-credentials"}
 	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
-	err := ValidatePlan(root, ValidationConfig{ClusterID: root.Spec.ClusterID})
-	if err == nil || err.Reason != "InvalidDependencyAuthSecret" {
-		t.Fatalf("dependency authSecret error = %#v", err)
-	}
+	assertPlanError(t, root, "InvalidDependencyAuthSecret")
 }
 
 func TestProtectedSecretPlanProtectedFieldsAffectDigestWithoutSorting(t *testing.T) {
@@ -308,9 +285,9 @@ func TestProtectedSecretPlanRootMaterializesUnchangedCurrentDependencyChild(t *t
 	root.Spec.ProtectedSecrets = []applicationv1.ProtectedSecretSpec{opaqueProtectedSecret("protected", "catalogue-workloads", "protected")}
 	refreshOwnedPlan(t, root)
 	reconciler, _ := testReconciler(t, root)
-	_, _, conflict, err := reconciler.materializeRootDependencies(context.Background(), root)
-	if err != nil || conflict != nil {
-		t.Fatalf("materialize current dependency: conflict %#v, err %v", conflict, err)
+	materialized, err := reconciler.materializeRootDependencies(context.Background(), root)
+	if err != nil || materialized.conflict != nil {
+		t.Fatalf("materialize current dependency: result %#v, err %v", materialized, err)
 	}
 	child := &applicationv1.OneKSApplication{}
 	if err := reconciler.Get(context.Background(), types.NamespacedName{Namespace: applicationv1.ApplicationNamespace, Name: plan.Name}, child); err != nil {
@@ -690,9 +667,7 @@ func TestCurrentPlanHelmOnlyRootDoesNotRequireProtectedSecrets(t *testing.T) {
 	app.Spec.ManagedResources = nil
 	refreshOwnedPlan(t, app)
 
-	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
-		t.Fatalf("Helm-only v1alpha5 Root rejected: %v", err)
-	}
+	assertPlanValid(t, app)
 	if usesProtectedSecrets(app) {
 		t.Fatal("Helm-only v1alpha5 Root entered protected Secret lifecycle")
 	}

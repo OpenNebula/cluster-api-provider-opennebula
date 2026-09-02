@@ -31,9 +31,7 @@ func TestRootTargetNamespaceContract(t *testing.T) {
 			app.Spec.Release.TargetNamespace = "runai-backend"
 			app.Spec.Release.CreateNamespace = createNamespace
 			refreshDigest(t, app)
-			if err := ValidatePlan(app, validationConfig()); err != nil {
-				t.Fatalf("Root namespace contract rejected: %v", err)
-			}
+			assertPlanValid(t, app)
 		})
 	}
 }
@@ -67,9 +65,7 @@ func TestRootRejectsInvalidTargetNamespace(t *testing.T) {
 			app := validProtectedRootPlan(t)
 			app.Spec.Release.TargetNamespace = namespace
 			refreshDigest(t, app)
-			if err := ValidatePlan(app, validationConfig()); err == nil || err.Reason != "InvalidTargetNamespace" {
-				t.Fatalf("invalid target namespace error = %#v", err)
-			}
+			assertPlanError(t, app, "InvalidTargetNamespace")
 		})
 	}
 }

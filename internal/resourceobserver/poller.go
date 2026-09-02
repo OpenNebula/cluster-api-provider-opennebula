@@ -18,7 +18,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
-	"k8s.io/klog/v2"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 type Callback func(identity string, value ResourceValue) bool
@@ -70,6 +70,7 @@ func NewPoller(
 }
 
 func (poller *Poller) Run(ctx context.Context) {
+	log := ctrl.LoggerFrom(ctx).WithName("resource-observer")
 	wait.UntilWithContext(ctx, func(ctx context.Context) {
 		poller.refreshConfig(ctx)
 		if len(poller.active) == 0 {
@@ -77,27 +78,28 @@ func (poller *Poller) Run(ctx context.Context) {
 		}
 		for _, spec := range poller.active {
 			if err := poller.pollResource(ctx, spec); err != nil {
-				klog.ErrorS(err, "resource value poll failed", "resource", spec.ID)
+				log.Error(err, "resource value poll failed", "resource", spec.ID)
 			}
 		}
 	}, poller.options.PollInterval)
 }
 
 func (poller *Poller) refreshConfig(ctx context.Context) {
+	log := ctrl.LoggerFrom(ctx).WithName("resource-observer")
 	configMap, err := poller.configMaps.Get(ctx, poller.options.ConfigName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		poller.active = nil
 		return
 	}
 	if err != nil {
-		klog.ErrorS(err, "read resource value configuration",
+		log.Error(err, "read resource value configuration",
 			"configMap", ConfigMapIdentity(poller.options.ConfigNamespace, poller.options.ConfigName))
 		return
 	}
 	document := cmp.Or(strings.TrimSpace(configMap.Data[ConfigDataKey]), "[]")
 	config, err := ParseConfig([]byte(document))
 	if err != nil {
-		klog.ErrorS(err, "resource value configuration was rejected",
+		log.Error(err, "resource value configuration was rejected",
 			"configMap", ConfigMapIdentity(poller.options.ConfigNamespace, poller.options.ConfigName))
 		return
 	}

@@ -16,7 +16,7 @@ import (
 	"sync"
 
 	"k8s.io/client-go/util/workqueue"
-	"k8s.io/klog/v2"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 const maxPendingReports = 8192
@@ -57,7 +57,7 @@ func (q *reportQueue) Add(key string, report CallbackPayload) bool {
 	q.mu.Lock()
 	if _, exists := q.pending[key]; !exists && len(q.pending) >= maxPendingReports {
 		q.mu.Unlock()
-		klog.ErrorS(
+		ctrl.Log.WithName("monitor").WithName("report-queue").Error(
 			fmt.Errorf("pending report limit %d reached", maxPendingReports),
 			"report was not queued", "key", key,
 		)
@@ -86,7 +86,9 @@ func (q *reportQueue) processNext(ctx context.Context) bool {
 	}
 
 	if err := q.sender.Send(ctx, report.value); err != nil {
-		klog.ErrorS(err, "unable to report resource status", "key", key)
+		ctrl.LoggerFrom(ctx).WithName("monitor").WithName("report-queue").Error(
+			err, "unable to report resource status", "key", key,
+		)
 		q.queue.AddRateLimited(key)
 		return true
 	}

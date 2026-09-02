@@ -43,14 +43,36 @@ func (e *DependencyConflictError) Error() string {
 }
 
 type dependencyObservation struct {
-	enabled   bool
 	ready     bool
 	completed int32
 	current   string
 	reason    string
 	message   string
-	failed    bool
-	conflict  bool
+	terminal  bool
+}
+
+func (result *dependencyObservation) markPending(name, reason, message string) {
+	result.ready = false
+	if result.reason != "" {
+		return
+	}
+	result.current = name
+	result.reason = reason
+	result.message = message
+}
+
+func (result *dependencyObservation) markTerminal(name, reason, message string) {
+	result.ready = false
+	result.terminal = true
+	result.current = name
+	result.reason = reason
+	result.message = message
+}
+
+type dependencyMaterialization struct {
+	raced       bool
+	terminating string
+	conflict    *DependencyConflictError
 }
 
 func expectedDependencyApplication(root *applicationv1.OneKSApplication, plan applicationv1.DependencyPlan) *applicationv1.OneKSApplication {
@@ -73,42 +95,44 @@ func expectedDependencyApplication(root *applicationv1.OneKSApplication, plan ap
 }
 
 func dependencyIdentityError(existing, expected *applicationv1.OneKSApplication, clusterID string) *DependencyConflictError {
-	conflict := func(message string) *DependencyConflictError {
-		return &DependencyConflictError{Name: expected.Name, Message: message}
-	}
-	if existing.Namespace != expected.Namespace || existing.Name != expected.Name {
-		return conflict("metadata identity differs from the expected dependency")
-	}
-	if len(existing.OwnerReferences) != 0 {
-		return conflict("shared dependencies must not have ownerReferences")
+	if conflict := validateDependencyApplication(existing, expected.Name, clusterID); conflict != nil {
+		return conflict
 	}
 	if existing.Spec.PlanDigest != expected.Spec.PlanDigest {
-		return conflict("immutable spec differs from the expected dependency plan")
+		return dependencyConflict(expected.Name, "immutable spec differs from the expected dependency plan")
 	}
 	existingCanonical, err := CanonicalPlan(existing.Spec)
 	if err != nil {
-		return conflict(fmt.Sprintf("current spec cannot be canonicalized: %v", err))
+		return dependencyConflict(expected.Name, fmt.Sprintf("current spec cannot be canonicalized: %v", err))
 	}
 	expectedCanonical, err := CanonicalPlan(expected.Spec)
 	if err != nil {
-		return conflict(fmt.Sprintf("expected dependency spec cannot be canonicalized: %v", err))
+		return dependencyConflict(expected.Name, fmt.Sprintf("expected dependency spec cannot be canonicalized: %v", err))
 	}
 	if !bytes.Equal(existingCanonical, expectedCanonical) {
-		return conflict("immutable spec differs from the expected dependency plan")
-	}
-	if !producerLabelsMatch(existing) {
-		return conflict("producer identity labels do not match the expected dependency")
-	}
-	if validationError := ValidatePlan(existing, ValidationConfig{ClusterID: clusterID}); validationError != nil {
-		return conflict(fmt.Sprintf("current plan is invalid: %s", validationError.Reason))
+		return dependencyConflict(expected.Name, "immutable spec differs from the expected dependency plan")
 	}
 	return nil
 }
 
+func validateDependencyApplication(dependency *applicationv1.OneKSApplication, expectedName, clusterID string) *DependencyConflictError {
+	if dependency.Namespace != applicationv1.ApplicationNamespace || dependency.Name != expectedName {
+		return dependencyConflict(expectedName, "metadata identity differs from the expected dependency")
+	}
+	if validationError := ValidatePlan(dependency, ValidationConfig{ClusterID: clusterID}); validationError != nil {
+		return dependencyConflict(expectedName, fmt.Sprintf("dependency plan is invalid: %s", validationError.Reason))
+	}
+	return nil
+}
+
+func dependencyConflict(name, message string) *DependencyConflictError {
+	return &DependencyConflictError{Name: name, Message: message}
+}
+
 // materializeRootDependencies performs a complete identity scan before it
-// creates any missing application. raced is true when Create reported
-// AlreadyExists; the caller must requeue so the next scan verifies that object.
-func (r *Reconciler) materializeRootDependencies(ctx context.Context, root *applicationv1.OneKSApplication) (raced bool, terminating string, conflict *DependencyConflictError, err error) {
+// creates any missing application. A create race requires another complete
+// scan so the object that won the race is verified before execution continues.
+func (r *Reconciler) materializeRootDependencies(ctx context.Context, root *applicationv1.OneKSApplication) (dependencyMaterialization, error) {
 	missing := make([]*applicationv1.OneKSApplication, 0, len(root.Spec.DependencyPlans))
 	reader := r.authoritativeReader()
 	for _, plan := range root.Spec.DependencyPlans {
@@ -120,13 +144,13 @@ func (r *Reconciler) materializeRootDependencies(ctx context.Context, root *appl
 			continue
 		}
 		if getErr != nil {
-			return false, "", nil, fmt.Errorf("preflight dependency %s/%s: %w", expected.Namespace, expected.Name, getErr)
+			return dependencyMaterialization{}, fmt.Errorf("preflight dependency %s/%s: %w", expected.Namespace, expected.Name, getErr)
 		}
 		if !existing.DeletionTimestamp.IsZero() {
-			return false, existing.Name, nil, nil
+			return dependencyMaterialization{terminating: existing.Name}, nil
 		}
 		if identityError := dependencyIdentityError(existing, expected, root.Spec.ClusterID); identityError != nil {
-			return false, "", identityError, nil
+			return dependencyMaterialization{conflict: identityError}, nil
 		}
 	}
 
@@ -137,19 +161,18 @@ func (r *Reconciler) materializeRootDependencies(ctx context.Context, root *appl
 		)
 		if createErr := r.Create(ctx, expected); createErr != nil {
 			if apierrors.IsAlreadyExists(createErr) {
-				return true, "", nil, nil
+				return dependencyMaterialization{raced: true}, nil
 			}
-			return false, "", nil, fmt.Errorf("create dependency application %s/%s: %w", expected.Namespace, expected.Name, createErr)
+			return dependencyMaterialization{}, fmt.Errorf("create dependency application %s/%s: %w", expected.Namespace, expected.Name, createErr)
 		}
 		ctrl.LoggerFrom(ctx).Info("dependency created", "dependency", expected.Name)
 		r.event(root, corev1.EventTypeNormal, "DependencyCreated", fmt.Sprintf("Dependency application %s/%s created", expected.Namespace, expected.Name))
 	}
-	return false, "", nil, nil
+	return dependencyMaterialization{}, nil
 }
 
 func (r *Reconciler) observeDependencies(ctx context.Context, app *applicationv1.OneKSApplication) (dependencyObservation, error) {
 	result := dependencyObservation{ready: true}
-	result.enabled = true
 	if len(app.Spec.Dependencies) == 0 {
 		result.reason = "NoDependencies"
 		result.message = "Application has no direct dependencies"
@@ -160,32 +183,18 @@ func (r *Reconciler) observeDependencies(ctx context.Context, app *applicationv1
 		dependency := &applicationv1.OneKSApplication{}
 		err := r.Get(ctx, types.NamespacedName{Namespace: applicationv1.ApplicationNamespace, Name: reference.Name}, dependency)
 		if apierrors.IsNotFound(err) {
-			result.ready = false
-			if result.reason == "" {
-				result.current = reference.Name
-				result.reason = "DependencyMissing"
-				result.message = fmt.Sprintf("Direct dependency %s is missing", reference.Name)
-			}
+			result.markPending(reference.Name, "DependencyMissing", fmt.Sprintf("Direct dependency %s is missing", reference.Name))
 			continue
 		}
 		if err != nil {
 			return result, fmt.Errorf("observe dependency %s/%s: %w", applicationv1.ApplicationNamespace, reference.Name, err)
 		}
 		if !dependency.DeletionTimestamp.IsZero() {
-			result.ready = false
-			if result.reason == "" {
-				result.current = reference.Name
-				result.reason = "DependencyTerminating"
-				result.message = fmt.Sprintf("Direct dependency %s is terminating", reference.Name)
-			}
+			result.markPending(reference.Name, "DependencyTerminating", fmt.Sprintf("Direct dependency %s is terminating", reference.Name))
 			continue
 		}
 		if conflict := dependencyReferenceConflict(dependency, reference, app.Spec.ClusterID); conflict != nil {
-			result.ready = false
-			result.conflict = true
-			result.current = reference.Name
-			result.reason = "DependencyConflict"
-			result.message = conflict.Error()
+			result.markTerminal(reference.Name, "DependencyConflict", conflict.Error())
 			return result, nil
 		}
 		if dependencyStatusReady(dependency) {
@@ -193,34 +202,26 @@ func (r *Reconciler) observeDependencies(ctx context.Context, app *applicationv1
 			continue
 		}
 
-		result.ready = false
 		if dependencyStatusIsCurrent(dependency) && dependency.Status.Phase == applicationv1.PhaseFailed {
-			if !result.failed {
+			if !result.terminal {
 				failureReason := "Failed"
 				if dependency.Status.LastError != nil && dependency.Status.LastError.Reason != "" {
 					failureReason = dependency.Status.LastError.Reason
 				}
-				result.failed = true
-				result.current = reference.Name
-				result.reason = "DependencyFailed"
-				result.message = fmt.Sprintf("Direct dependency %s reported failure (%s)", reference.Name, failureReason)
+				result.markTerminal(
+					reference.Name, "DependencyFailed",
+					fmt.Sprintf("Direct dependency %s reported failure (%s)", reference.Name, failureReason),
+				)
 			}
 			continue
 		}
-		if result.reason != "" {
-			continue
-		}
-		result.current = reference.Name
 		switch dependency.Status.Phase {
 		case applicationv1.PhaseInstalling:
-			result.reason = "DependencyInstalling"
-			result.message = fmt.Sprintf("Direct dependency %s is installing", reference.Name)
+			result.markPending(reference.Name, "DependencyInstalling", fmt.Sprintf("Direct dependency %s is installing", reference.Name))
 		case applicationv1.PhaseObserving:
-			result.reason = "DependencyObserving"
-			result.message = fmt.Sprintf("Direct dependency %s is observing", reference.Name)
+			result.markPending(reference.Name, "DependencyObserving", fmt.Sprintf("Direct dependency %s is observing", reference.Name))
 		default:
-			result.reason = "DependencyPending"
-			result.message = fmt.Sprintf("Direct dependency %s is not ready", reference.Name)
+			result.markPending(reference.Name, "DependencyPending", fmt.Sprintf("Direct dependency %s is not ready", reference.Name))
 		}
 	}
 	if result.ready {
@@ -231,26 +232,11 @@ func (r *Reconciler) observeDependencies(ctx context.Context, app *applicationv1
 }
 
 func dependencyReferenceConflict(dependency *applicationv1.OneKSApplication, reference applicationv1.DependencyReference, clusterID string) *DependencyConflictError {
-	conflict := func(message string) *DependencyConflictError {
-		return &DependencyConflictError{Name: reference.Name, Message: message}
-	}
-	if dependency.Namespace != applicationv1.ApplicationNamespace || dependency.Name != reference.Name {
-		return conflict("metadata identity differs from the dependency reference")
-	}
-	if len(dependency.OwnerReferences) != 0 {
-		return conflict("shared dependencies must not have ownerReferences")
-	}
-	if dependency.Spec.PlanVersion != applicationv1.PlanVersion || dependency.Spec.Role != applicationv1.ApplicationRoleDependency {
-		return conflict("referenced application is not a plan-v1alpha5 Dependency")
+	if conflict := validateDependencyApplication(dependency, reference.Name, clusterID); conflict != nil {
+		return conflict
 	}
 	if dependency.Spec.CatalogueChartID != reference.CatalogueChartID || dependency.Spec.PlanDigest != reference.PlanDigest {
-		return conflict("catalogueChartID or planDigest differs from the dependency reference")
-	}
-	if !producerLabelsMatch(dependency) {
-		return conflict("producer identity labels do not match the dependency reference")
-	}
-	if validationError := ValidatePlan(dependency, ValidationConfig{ClusterID: clusterID}); validationError != nil {
-		return conflict(fmt.Sprintf("referenced plan is invalid: %s", validationError.Reason))
+		return dependencyConflict(reference.Name, "catalogueChartID or planDigest differs from the dependency reference")
 	}
 	return nil
 }

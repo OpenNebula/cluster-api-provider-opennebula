@@ -71,12 +71,10 @@ func TestSensitiveValuesValidationAppliesToDependencies(t *testing.T) {
 			app.Spec.Dependencies[0] = dependencyReferenceForPlan(*plan)
 			refreshOwnedPlan(t, app)
 
-			err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID})
-			if test.sensitive && (err == nil || err.Reason != "SensitiveValuesContent") {
-				t.Fatalf("error = %#v, want SensitiveValuesContent", err)
-			}
-			if !test.sensitive && err != nil {
-				t.Fatalf("safe dependency references rejected: %v", err)
+			if test.sensitive {
+				assertPlanError(t, app, "SensitiveValuesContent")
+			} else {
+				assertPlanValid(t, app)
 			}
 		})
 	}

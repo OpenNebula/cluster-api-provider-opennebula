@@ -310,10 +310,10 @@ func (r *Reconciler) observeManagedResources(ctx context.Context, app *applicati
 
 func (result *observation) markResourceFailed(id, reason, message string) {
 	result.allResources = false
-	result.resourcesFailed = true
-	if result.resourcesReason == "" {
-		result.resourcesReason = reason
-		result.resourcesMessage = message
+	result.managed.failed = true
+	if result.managed.reason == "" {
+		result.managed.reason = reason
+		result.managed.message = message
 		result.current = id
 	}
 }

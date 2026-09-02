@@ -62,9 +62,7 @@ func TestExternalDetectionMaterializesAndChangesCanonicalDigests(t *testing.T) {
 	}
 
 	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
-	if err := ValidatePlan(root, ValidationConfig{ClusterID: "42"}); err != nil {
-		t.Fatalf("validate Root external dependency plan: %v", err)
-	}
+	assertPlanValid(t, root)
 	rootCanonical, err := CanonicalPlan(root.Spec)
 	if err != nil || !strings.Contains(string(rootCanonical), `"externalDetection":{"detector":"cert-manager"}`) {
 		t.Fatalf("Root canonical input omitted external detection: %v %s", err, rootCanonical)
@@ -83,9 +81,7 @@ func TestExternalDetectionMaterializesAndChangesCanonicalDigests(t *testing.T) {
 
 func TestExternalDetectionValidationScope(t *testing.T) {
 	dependency := externalDependencyApplication(t)
-	if err := ValidatePlan(dependency, ValidationConfig{ClusterID: "42"}); err != nil {
-		t.Fatalf("valid external Dependency rejected: %v", err)
-	}
+	assertPlanValid(t, dependency)
 
 	tests := []struct {
 		name   string
@@ -104,9 +100,7 @@ func TestExternalDetectionValidationScope(t *testing.T) {
 			test.mutate(app)
 			refreshPlanDigest(app)
 			app.Labels = producerLabels(app)
-			if err := ValidatePlan(app, ValidationConfig{ClusterID: "42"}); err == nil || err.Reason != test.reason {
-				t.Fatalf("validation error = %#v, want %s", err, test.reason)
-			}
+			assertPlanError(t, app, test.reason)
 		})
 	}
 }

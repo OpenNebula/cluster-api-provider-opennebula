@@ -60,23 +60,21 @@ type Reconciler struct {
 }
 
 type observation struct {
-	resources               []applicationv1.ResourceStatus
-	managedResourcesReady   bool
-	protectedSecretsReady   bool
-	protectedSecretsFailed  bool
-	protectedSecretsReason  string
-	protectedSecretsMessage string
-	helm                    *unstructured.Unstructured
-	helmReady               bool
-	helmFailed              bool
-	helmReason              string
-	helmMessage             string
-	resourcesFailed         bool
-	resourcesReason         string
-	resourcesMessage        string
-	current                 string
-	completed               int32
-	allResources            bool
+	resources    []applicationv1.ResourceStatus
+	managed      componentObservation
+	protected    componentObservation
+	helm         *unstructured.Unstructured
+	helmState    componentObservation
+	current      string
+	completed    int32
+	allResources bool
+}
+
+type componentObservation struct {
+	ready   bool
+	failed  bool
+	reason  string
+	message string
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (result ctrl.Result, reconcileErr error) {
@@ -85,13 +83,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (resul
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	ctx = contextWithApplicationLogger(ctx, app)
-	ctrl.LoggerFrom(ctx).Info(
+	ctrl.LoggerFrom(ctx).V(1).Info(
 		"application reconciliation started",
 		"observedGeneration", app.Status.ObservedGeneration,
 		"phase", app.Status.Phase,
 	)
 	defer func() {
-		ctrl.LoggerFrom(ctx).Info(
+		ctrl.LoggerFrom(ctx).V(1).Info(
 			"application reconciliation completed",
 			"state", app.Status.Phase,
 			"requeue", result.Requeue,
@@ -99,7 +97,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (resul
 			"success", reconcileErr == nil,
 		)
 	}()
+	return r.reconcileApplication(ctx, app)
+}
 
+func (r *Reconciler) reconcileApplication(ctx context.Context, app *applicationv1.OneKSApplication) (ctrl.Result, error) {
 	deleting := !app.DeletionTimestamp.IsZero()
 	hasCleanupFinalizer := containsString(app.Finalizers, applicationv1.ApplicationFinalizer)
 	var validationError *PlanError
@@ -200,16 +201,27 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (resul
 	}
 
 	if app.Spec.ExecutionMode == applicationv1.ExecutionModeObserve {
-		dependencies, err := r.observeDependencies(ctx, app)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if err := r.preflightOwnership(ctx, app, false, managedAPIsRequired); err != nil {
-			return r.handleOwnershipError(ctx, app, err)
-		}
-		return r.reconcileStatus(ctx, app, true, dependencies)
+		return r.reconcileObserve(ctx, app)
 	}
+	return r.reconcileExecute(ctx, app, externalMode, externalSelectionToPersist)
+}
 
+func (r *Reconciler) reconcileObserve(ctx context.Context, app *applicationv1.OneKSApplication) (ctrl.Result, error) {
+	dependencies, err := r.observeDependencies(ctx, app)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.preflightOwnership(ctx, app, false, managedAPIsRequired); err != nil {
+		return r.handleOwnershipError(ctx, app, err)
+	}
+	return r.reconcileStatus(ctx, app, true, dependencies)
+}
+
+func (r *Reconciler) reconcileExecute(
+	ctx context.Context,
+	app *applicationv1.OneKSApplication,
+	externalMode, externalSelectionToPersist string,
+) (ctrl.Result, error) {
 	if externalMode != ExternalSelectionExternal && externalSelectionToPersist != ExternalSelectionExternal {
 		if err := r.preflightOwnership(ctx, app, false, managedAPIsMayBeUnavailable); err != nil {
 			return r.handleOwnershipError(ctx, app, err)
@@ -227,26 +239,26 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (resul
 	}
 
 	if app.Spec.Role == applicationv1.ApplicationRoleRoot {
-		raced, terminating, conflict, err := r.materializeRootDependencies(ctx, app)
+		materialized, err := r.materializeRootDependencies(ctx, app)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		if terminating != "" {
+		if materialized.terminating != "" {
 			dependencies := dependencyObservation{
-				enabled: true, ready: false, current: terminating,
-				reason: "DependencyTerminating", message: fmt.Sprintf("Dependency application %s is terminating", terminating),
+				current: materialized.terminating,
+				reason:  "DependencyTerminating", message: fmt.Sprintf("Dependency application %s is terminating", materialized.terminating),
 			}
 			return r.reconcileStatus(ctx, app, false, dependencies)
 		}
-		if conflict != nil {
+		if materialized.conflict != nil {
 			dependencies := dependencyObservation{
-				enabled: true, ready: false, conflict: true,
-				reason: "DependencyConflict", message: conflict.Error(), current: conflict.Name,
+				terminal: true,
+				reason:   "DependencyConflict", message: materialized.conflict.Error(), current: materialized.conflict.Name,
 			}
 			r.event(app, corev1.EventTypeWarning, dependencies.reason, dependencies.message)
 			return r.reconcileStatus(ctx, app, false, dependencies)
 		}
-		if raced {
+		if materialized.raced {
 			dependencies, observeErr := r.observeDependencies(ctx, app)
 			if observeErr != nil {
 				return ctrl.Result{}, observeErr
@@ -464,7 +476,7 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 	status.Progress = applicationv1.ApplicationProgress{
 		Completed: observed.completed + dependencies.completed, Total: applicationProgressTotal(app), Current: observed.current,
 	}
-	if dependencies.enabled && !dependencies.ready && dependencies.current != "" {
+	if !dependencies.ready && dependencies.current != "" {
 		status.Progress.Current = dependencies.current
 	}
 	status.HelmChartRef = nil
@@ -475,17 +487,15 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 		}
 	}
 	setCondition(&status, app.Generation, ConditionPlanValid, metav1.ConditionTrue, "Validated", "Plan digest and schema are valid")
-	if dependencies.enabled {
-		dependencyCondition := metav1.ConditionFalse
-		if dependencies.ready {
-			dependencyCondition = metav1.ConditionTrue
-		}
-		setCondition(&status, app.Generation, ConditionDependenciesReady, dependencyCondition, dependencies.reason, dependencies.message)
+	dependencyCondition := metav1.ConditionFalse
+	if dependencies.ready {
+		dependencyCondition = metav1.ConditionTrue
 	}
+	setCondition(&status, app.Generation, ConditionDependenciesReady, dependencyCondition, dependencies.reason, dependencies.message)
 	resourceCondition := metav1.ConditionFalse
 	resourcesReady := observed.allResources
 	if isRootApplication(app) {
-		resourcesReady = observed.managedResourcesReady
+		resourcesReady = observed.managed.ready
 	}
 	if resourcesReady {
 		resourceCondition = metav1.ConditionTrue
@@ -494,10 +504,10 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 	resourceMessage := conditionText(resourceCondition, "All managed resources are ready", "Managed resources are not ready")
 	if !isRootApplication(app) {
 		resourceMessage = conditionText(resourceCondition, "Dependency has no managed resources", "Dependency resources are not ready")
-	} else if observed.resourcesFailed {
-		resourceReason = observed.resourcesReason
-		resourceMessage = observed.resourcesMessage
-	} else if dependencies.enabled && !dependencies.ready {
+	} else if observed.managed.failed {
+		resourceReason = observed.managed.reason
+		resourceMessage = observed.managed.message
+	} else if !dependencies.ready {
 		resourceCondition = metav1.ConditionUnknown
 		resourceReason = "DependenciesPending"
 		resourceMessage = "Managed resources are gated by direct dependencies"
@@ -505,45 +515,45 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 	setCondition(&status, app.Generation, ConditionResourcesReady, resourceCondition, resourceReason, resourceMessage)
 	if usesProtectedSecrets(app) {
 		protectedCondition := metav1.ConditionFalse
-		if observed.protectedSecretsReady {
+		if observed.protected.ready {
 			protectedCondition = metav1.ConditionTrue
 		}
 		setCondition(
 			&status, app.Generation, ConditionProtectedSecretsReady, protectedCondition,
-			conditionText(protectedCondition, "ProtectedSecretsReady", observed.protectedSecretsReason),
-			conditionText(protectedCondition, "All protected Secrets are ready", observed.protectedSecretsMessage),
+			conditionText(protectedCondition, "ProtectedSecretsReady", observed.protected.reason),
+			conditionText(protectedCondition, "All protected Secrets are ready", observed.protected.message),
 		)
 	}
 	helmCondition := metav1.ConditionFalse
-	if observed.helmReady {
+	if observed.helmState.ready {
 		helmCondition = metav1.ConditionTrue
 	}
-	helmReason := conditionText(helmCondition, "HelmReleaseReady", observed.helmReason)
-	helmMessage := conditionText(helmCondition, "Helm release is ready", observed.helmMessage)
-	if observed.helmReady && observed.helmReason == "ExternalDependencyReady" {
-		helmReason = observed.helmReason
-		helmMessage = observed.helmMessage
+	helmReason := conditionText(helmCondition, "HelmReleaseReady", observed.helmState.reason)
+	helmMessage := conditionText(helmCondition, "Helm release is ready", observed.helmState.message)
+	if observed.helmState.ready && observed.helmState.reason == "ExternalDependencyReady" {
+		helmReason = observed.helmState.reason
+		helmMessage = observed.helmState.message
 	}
 	setCondition(&status, app.Generation, ConditionHelmReleaseReady, helmCondition, helmReason, helmMessage)
 	setCondition(&status, app.Generation, ConditionOwnershipConflict, metav1.ConditionFalse, "NoConflict", "Managed children have exact OneKS ownership")
 
-	ready := dependencies.ready && observed.allResources && observed.helmReady
+	ready := dependencies.ready && observed.allResources && observed.helmState.ready
 	readyCondition := metav1.ConditionFalse
 	if ready {
 		readyCondition = metav1.ConditionTrue
 	}
 	readyReason := "ApplicationProgressing"
 	readyMessage := "Application installation is in progress"
-	if observed.resourcesFailed {
-		readyReason = observed.resourcesReason
-		readyMessage = observed.resourcesMessage
-	} else if observed.protectedSecretsFailed {
-		readyReason = observed.protectedSecretsReason
-		readyMessage = observed.protectedSecretsMessage
-	} else if observed.helmFailed {
-		readyReason = observed.helmReason
-		readyMessage = observed.helmMessage
-	} else if dependencies.enabled && !dependencies.ready {
+	if observed.managed.failed {
+		readyReason = observed.managed.reason
+		readyMessage = observed.managed.message
+	} else if observed.protected.failed {
+		readyReason = observed.protected.reason
+		readyMessage = observed.protected.message
+	} else if observed.helmState.failed {
+		readyReason = observed.helmState.reason
+		readyMessage = observed.helmState.message
+	} else if !dependencies.ready {
 		readyReason = dependencies.reason
 		readyMessage = dependencies.message
 	}
@@ -552,18 +562,18 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 
 	if observeOnly {
 		status.Phase = applicationv1.PhaseObserving
-	} else if dependencies.failed || dependencies.conflict {
+	} else if dependencies.terminal {
 		status.Phase = applicationv1.PhaseFailed
 		setLastError(&status, dependencies.reason, dependencies.message)
-	} else if observed.resourcesFailed {
+	} else if observed.managed.failed {
 		status.Phase = applicationv1.PhaseFailed
-		setLastError(&status, observed.resourcesReason, observed.resourcesMessage)
-	} else if observed.protectedSecretsFailed {
+		setLastError(&status, observed.managed.reason, observed.managed.message)
+	} else if observed.protected.failed {
 		status.Phase = applicationv1.PhaseFailed
-		setLastError(&status, observed.protectedSecretsReason, observed.protectedSecretsMessage)
-	} else if observed.helmFailed {
+		setLastError(&status, observed.protected.reason, observed.protected.message)
+	} else if observed.helmState.failed {
 		status.Phase = applicationv1.PhaseFailed
-		setLastError(&status, observed.helmReason, observed.helmMessage)
+		setLastError(&status, observed.helmState.reason, observed.helmState.message)
 	} else if ready {
 		status.Phase = applicationv1.PhaseReady
 	} else {
@@ -581,20 +591,20 @@ func (r *Reconciler) observe(ctx context.Context, app *applicationv1.OneKSApplic
 		if err != nil {
 			return result, err
 		}
-		result.managedResourcesReady = result.allResources
+		result.managed.ready = result.allResources
 		if usesProtectedSecrets(app) {
-			protected, protectedErr := r.observeProtectedSecrets(ctx, app, result.managedResourcesReady)
+			protected, protectedErr := r.observeProtectedSecrets(ctx, app, result.managed.ready)
 			if protectedErr != nil {
 				return result, protectedErr
 			}
 			result.resources = append(result.resources, protected.statuses...)
 			result.completed += protected.completed
-			result.protectedSecretsReady = protected.ready
-			result.protectedSecretsFailed = protected.failed
-			result.protectedSecretsReason = protected.reason
-			result.protectedSecretsMessage = protected.message
-			result.allResources = result.managedResourcesReady && protected.ready
-			if result.managedResourcesReady && !protected.ready && protected.current != "" {
+			result.protected = componentObservation{
+				ready: protected.ready, failed: protected.failed,
+				reason: protected.reason, message: protected.message,
+			}
+			result.allResources = result.managed.ready && protected.ready
+			if result.managed.ready && !protected.ready && protected.current != "" {
 				result.current = protected.current
 			}
 		}
@@ -616,19 +626,19 @@ func (r *Reconciler) observeHelm(ctx context.Context, app *applicationv1.OneKSAp
 				return result, detectionErr
 			}
 			if detection.state == externalDetectionUsable {
-				result.helmReady = true
+				result.helmState.ready = true
 				result.completed++
-				result.helmReason = "ExternalDependencyReady"
-				result.helmMessage = detection.message
+				result.helmState.reason = "ExternalDependencyReady"
+				result.helmState.message = detection.message
 				return result, nil
 			}
-			result.helmFailed = true
+			result.helmState.failed = true
 			if selection == ExternalSelectionExternal {
-				result.helmReason = "ExternalDependencyLost"
-				result.helmMessage = "Previously selected external prerequisite is no longer usable: " + detection.message
+				result.helmState.reason = "ExternalDependencyLost"
+				result.helmState.message = "Previously selected external prerequisite is no longer usable: " + detection.message
 			} else {
-				result.helmReason = "ExternalDependencyUnusable"
-				result.helmMessage = detection.message
+				result.helmState.reason = "ExternalDependencyUnusable"
+				result.helmState.message = detection.message
 			}
 			return result, nil
 		}
@@ -636,38 +646,38 @@ func (r *Reconciler) observeHelm(ctx context.Context, app *applicationv1.OneKSAp
 	helm := helmChartObject(app.Spec.Release.ReleaseName)
 	if err := r.Get(ctx, client.ObjectKeyFromObject(helm), helm); err != nil {
 		if apierrors.IsNotFound(err) {
-			result.helmReason = "HelmChartNotFound"
-			result.helmMessage = "HelmChart is absent"
+			result.helmState.reason = "HelmChartNotFound"
+			result.helmState.message = "HelmChart is absent"
 			return result, nil
 		}
 		return result, fmt.Errorf("observe HelmChart %s/%s: %w", HelmChartNamespace, app.Spec.Release.ReleaseName, err)
 	}
 	result.helm = helm
 	if failed, message := chartCondition(helm, "Failed", "HelmChart reported failure"); failed {
-		result.helmFailed = true
-		result.helmReason = "HelmChartFailed"
-		result.helmMessage = message
+		result.helmState.failed = true
+		result.helmState.reason = "HelmChartFailed"
+		result.helmState.message = message
 		return result, nil
 	}
 
 	jobName, _, _ := unstructured.NestedString(helm.Object, "status", "jobName")
 	if strings.TrimSpace(jobName) == "" {
-		result.helmReason = "InstallerJobPending"
-		result.helmMessage = "HelmChart has not reported an installer Job"
+		result.helmState.reason = "InstallerJobPending"
+		result.helmState.message = "HelmChart has not reported an installer Job"
 		return result, nil
 	}
 	job := &batchv1.Job{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: helm.GetNamespace(), Name: strings.TrimSpace(jobName)}, job); err != nil {
 		if apierrors.IsNotFound(err) {
 			if app.Status.Phase == applicationv1.PhaseReady {
-				result.helmReady = true
+				result.helmState.ready = true
 				result.completed++
-				result.helmReason = "PreviouslyReady"
-				result.helmMessage = "Installer Job is gone after a previously ready release"
+				result.helmState.reason = "PreviouslyReady"
+				result.helmState.message = "Installer Job is gone after a previously ready release"
 				return result, nil
 			}
-			result.helmReason = "InstallerJobNotFound"
-			result.helmMessage = "Helm installer Job is absent"
+			result.helmState.reason = "InstallerJobNotFound"
+			result.helmState.message = "Helm installer Job is absent"
 			return result, nil
 		}
 		return result, fmt.Errorf("observe Helm installer Job %s/%s: %w", helm.GetNamespace(), jobName, err)
@@ -678,9 +688,9 @@ func (r *Reconciler) observeHelm(ctx context.Context, app *applicationv1.OneKSAp
 			continue
 		}
 		if condition.Type == batchv1.JobFailed {
-			result.helmFailed = true
-			result.helmReason = "InstallerJobFailed"
-			result.helmMessage = firstNonEmpty(condition.Message, condition.Reason, "Helm installer Job failed")
+			result.helmState.failed = true
+			result.helmState.reason = "InstallerJobFailed"
+			result.helmState.message = firstNonEmpty(condition.Message, condition.Reason, "Helm installer Job failed")
 			return result, nil
 		}
 		if condition.Type == batchv1.JobComplete {
@@ -688,14 +698,14 @@ func (r *Reconciler) observeHelm(ctx context.Context, app *applicationv1.OneKSAp
 		}
 	}
 	if completed {
-		result.helmReady = true
+		result.helmState.ready = true
 		result.completed++
-		result.helmReason = "InstallerJobComplete"
-		result.helmMessage = "Helm installer Job completed"
+		result.helmState.reason = "InstallerJobComplete"
+		result.helmState.message = "Helm installer Job completed"
 		return result, nil
 	}
-	result.helmReason = "InstallerJobPending"
-	result.helmMessage = "Helm installer Job is pending"
+	result.helmState.reason = "InstallerJobPending"
+	result.helmState.message = "Helm installer Job is pending"
 	return result, nil
 }
 

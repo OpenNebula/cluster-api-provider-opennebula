@@ -25,7 +25,7 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/klog/v2"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 const applicationSelector = "app.kubernetes.io/managed-by=oneks,applications.oneks.opennebula.io/producer=oneks-server"
@@ -80,7 +80,7 @@ func (m *Monitor) Run(ctx context.Context) error {
 	m.enqueueInitialNodes()
 	m.ready.Store(true)
 	defer m.ready.Store(false)
-	klog.InfoS("monitor caches synchronized")
+	ctrl.Log.WithName("monitor").Info("monitor caches synchronized")
 
 	m.reports.Run(ctx)
 	return nil

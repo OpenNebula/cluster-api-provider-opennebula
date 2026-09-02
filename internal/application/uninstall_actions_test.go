@@ -39,12 +39,11 @@ func TestDependencyPlanUninstallMaterializesIntoV1Alpha5Child(t *testing.T) {
 	refreshDependencyPlanDigestForTest("42", &plan)
 	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 
-	if err := ValidatePlan(root, ValidationConfig{ClusterID: root.Spec.ClusterID}); err != nil {
-		t.Fatalf("valid Longhorn dependency rejected: %v", err)
-	}
+	assertPlanValid(t, root)
 	reconciler, _ := testReconciler(t, root)
-	if _, _, conflict, err := reconciler.materializeRootDependencies(context.Background(), root); err != nil || conflict != nil {
-		t.Fatalf("materialize Longhorn dependency: conflict %#v, err %v", conflict, err)
+	materialized, err := reconciler.materializeRootDependencies(context.Background(), root)
+	if err != nil || materialized.conflict != nil {
+		t.Fatalf("materialize Longhorn dependency: result %#v, err %v", materialized, err)
 	}
 	child := &applicationv1.OneKSApplication{}
 	if err := reconciler.Get(context.Background(), types.NamespacedName{Namespace: applicationv1.ApplicationNamespace, Name: plan.Name}, child); err != nil {
@@ -189,9 +188,7 @@ func TestStructurallyValidNonLonghornUninstallActionIsAccepted(t *testing.T) {
 	refreshDependencyPlanDigestForTest("42", &plan)
 	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 
-	if err := ValidatePlan(root, ValidationConfig{ClusterID: root.Spec.ClusterID}); err != nil {
-		t.Fatalf("structurally valid generic uninstall action rejected: %v", err)
-	}
+	assertPlanValid(t, root)
 }
 
 func TestTopLevelUninstallIsOnlyValidForCurrentDependency(t *testing.T) {
@@ -202,9 +199,7 @@ func TestTopLevelUninstallIsOnlyValidForCurrentDependency(t *testing.T) {
 	valid.Spec.Release.TargetNamespace = "longhorn-system"
 	refreshPlanDigest(valid)
 	valid.Labels = producerLabels(valid)
-	if err := ValidatePlan(valid, ValidationConfig{ClusterID: valid.Spec.ClusterID}); err != nil {
-		t.Fatalf("current Dependency uninstall rejected: %v", err)
-	}
+	assertPlanValid(t, valid)
 
 	invalid := []*applicationv1.OneKSApplication{
 		goldenApplication(t), validRootPlan(t), validManagedRootPlan(t), validBoundProtectedRootPlan(t),
@@ -213,9 +208,7 @@ func TestTopLevelUninstallIsOnlyValidForCurrentDependency(t *testing.T) {
 		app.Spec.Uninstall = longhornUninstall()
 		refreshDigest(t, app)
 		app.Labels = producerLabels(app)
-		if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err == nil || err.Reason != "InvalidUninstall" {
-			t.Fatalf("%s top-level uninstall error = %#v", app.Spec.PlanVersion, err)
-		}
+		assertPlanError(t, app, "InvalidUninstall")
 	}
 }
 

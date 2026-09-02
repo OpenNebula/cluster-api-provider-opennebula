@@ -98,10 +98,7 @@ func TestStatusAdvertisesSupportedPlanVersions(t *testing.T) {
 }
 
 func TestCurrentPlanDependencyPrometheusCanCreateMonitoringNamespace(t *testing.T) {
-	app := validDependencyPlanApplication(t)
-	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
-		t.Fatalf("valid current plan Dependency rejected: %v", err)
-	}
+	assertPlanValid(t, validDependencyPlanApplication(t))
 }
 
 func TestCurrentPlanAcceptsCompleteDependencyDAGs(t *testing.T) {
@@ -124,10 +121,7 @@ func TestCurrentPlanAcceptsCompleteDependencyDAGs(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			app := validRootPlanGraph(t, test.dependencies, test.plans)
-			if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
-				t.Fatalf("valid dependency DAG rejected: %v", err)
-			}
+			assertPlanValid(t, validRootPlanGraph(t, test.dependencies, test.plans))
 		})
 	}
 }
@@ -160,9 +154,7 @@ func TestRootRejectsArbitraryDependencyApplicationName(t *testing.T) {
 	digestBeforeRename := plan.PlanDigest
 	plan.Name = "arbitrary-dependency"
 	app := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
-	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err == nil || err.Reason != "InvalidDependencyApplicationName" {
-		t.Fatalf("got error %#v, want InvalidDependencyApplicationName", err)
-	}
+	assertPlanError(t, app, "InvalidDependencyApplicationName")
 	canonical, err := CanonicalPlan(dependencyPlanChildSpec("42", plan))
 	if err != nil {
 		t.Fatalf("canonicalize renamed dependency child: %v", err)
@@ -194,17 +186,13 @@ func TestSharedReleaseNameCannotEscapeDependencyIdentity(t *testing.T) {
 		[]applicationv1.DependencyReference{dependencyReferenceForPlan(first)},
 		[]applicationv1.DependencyPlan{first, second},
 	)
-	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err == nil || err.Reason != "DuplicateDependencyPlanName" {
-		t.Fatalf("same releaseName escaped duplicate identity validation: %#v", err)
-	}
+	assertPlanError(t, app, "DuplicateDependencyPlanName")
 }
 
 func TestCurrentPlanDependencyRejectsArbitraryMetadataName(t *testing.T) {
 	app := validDependencyPlanApplication(t)
 	app.Name = "arbitrary-dependency"
-	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err == nil || err.Reason != "InvalidDependencyApplicationName" {
-		t.Fatalf("got error %#v, want InvalidDependencyApplicationName", err)
-	}
+	assertPlanError(t, app, "InvalidDependencyApplicationName")
 }
 
 func TestCurrentPlanDependencyMetadataNameUsesOnlyReleaseName(t *testing.T) {
@@ -218,14 +206,10 @@ func TestCurrentPlanDependencyMetadataNameUsesOnlyReleaseName(t *testing.T) {
 	if got := dependencyApplicationName(app.Spec.Release.ReleaseName); got != want {
 		t.Fatalf("changed release fields changed dependency metadata.name: got %q, want %q", got, want)
 	}
-	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err != nil {
-		t.Fatalf("Dependency with unchanged deterministic metadata.name rejected: %v", err)
-	}
+	assertPlanValid(t, app)
 
 	app.Name = "other-dependency"
-	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err == nil || err.Reason != "InvalidDependencyApplicationName" {
-		t.Fatalf("got error %#v, want InvalidDependencyApplicationName", err)
-	}
+	assertPlanError(t, app, "InvalidDependencyApplicationName")
 }
 
 func TestDependencyPlanDigestCommitsToCanonicalChildSpec(t *testing.T) {
@@ -331,10 +315,7 @@ func TestCurrentPlanRejectsInvalidDependencyGraphs(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			app := test.build(t)
-			if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err == nil || err.Reason != test.reason {
-				t.Fatalf("got error %#v, want reason %s", err, test.reason)
-			}
+			assertPlanError(t, test.build(t), test.reason)
 		})
 	}
 }
@@ -344,46 +325,34 @@ func TestCurrentPlanProducerLabelsAreRoleAware(t *testing.T) {
 	if root.Labels[LabelRootManagedBy] != RootManagedByValue || root.Labels[LabelProducer] != ProducerValue || root.Labels[LabelRole] != RootRoleValue {
 		t.Fatalf("Root producer labels are wrong: %#v", root.Labels)
 	}
-	if err := ValidatePlan(root, ValidationConfig{ClusterID: root.Spec.ClusterID}); err != nil {
-		t.Fatalf("Root producer labels rejected: %v", err)
-	}
+	assertPlanValid(t, root)
 
 	dependency := validDependencyPlanApplication(t)
 	if dependency.Labels[LabelRootManagedBy] != ManagedByValue || dependency.Labels[LabelProducer] != ManagedByValue || dependency.Labels[LabelRole] != DependencyRoleValue {
 		t.Fatalf("Dependency producer labels are wrong: %#v", dependency.Labels)
 	}
-	if err := ValidatePlan(dependency, ValidationConfig{ClusterID: dependency.Spec.ClusterID}); err != nil {
-		t.Fatalf("Dependency producer labels rejected: %v", err)
-	}
+	assertPlanValid(t, dependency)
 
 	dependency.Labels[LabelRootManagedBy] = RootManagedByValue
 	dependency.Labels[LabelProducer] = ProducerValue
 	dependency.Labels[LabelRole] = RootRoleValue
-	if err := ValidatePlan(dependency, ValidationConfig{ClusterID: dependency.Spec.ClusterID}); err == nil || err.Reason != "InvalidProducerLabels" {
-		t.Fatalf("Dependency accepted Root producer labels: %#v", err)
-	}
+	assertPlanError(t, dependency, "InvalidProducerLabels")
 
 	root.Labels[LabelRootManagedBy] = ManagedByValue
 	root.Labels[LabelProducer] = ManagedByValue
 	root.Labels[LabelRole] = DependencyRoleValue
-	if err := ValidatePlan(root, ValidationConfig{ClusterID: root.Spec.ClusterID}); err == nil || err.Reason != "InvalidProducerLabels" {
-		t.Fatalf("Root accepted Dependency producer labels: %#v", err)
-	}
+	assertPlanError(t, root, "InvalidProducerLabels")
 }
 
 func TestCurrentPlanAcceptsHTTPSAndOCIReleases(t *testing.T) {
 	httpsDependency := validDependencyPlanApplication(t)
-	if err := ValidatePlan(httpsDependency, ValidationConfig{ClusterID: httpsDependency.Spec.ClusterID}); err != nil {
-		t.Fatalf("HTTPS Dependency release rejected: %v", err)
-	}
+	assertPlanValid(t, httpsDependency)
 
 	ociDependency := validDependencyPlanApplication(t)
 	ociDependency.Spec.Release.RepositoryURL = ""
 	ociDependency.Spec.Release.Chart = "oci://registry.example.test/oneks/prometheus"
 	refreshPlanDigest(ociDependency)
-	if err := ValidatePlan(ociDependency, ValidationConfig{ClusterID: ociDependency.Spec.ClusterID}); err != nil {
-		t.Fatalf("OCI Dependency release rejected: %v", err)
-	}
+	assertPlanValid(t, ociDependency)
 	helm := desiredHelmChart(ociDependency)
 	helmSpec, _, err := unstructured.NestedMap(helm.Object, "spec")
 	if err != nil {
@@ -398,9 +367,7 @@ func TestCurrentPlanAcceptsHTTPSAndOCIReleases(t *testing.T) {
 	ociPlan.Release.Chart = "oci://registry.example.test/oneks/dependency"
 	refreshDependencyPlanDigestForTest("42", &ociPlan)
 	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(ociPlan)}, []applicationv1.DependencyPlan{ociPlan})
-	if err := ValidatePlan(root, ValidationConfig{ClusterID: root.Spec.ClusterID}); err != nil {
-		t.Fatalf("OCI dependencyPlan release rejected: %v", err)
-	}
+	assertPlanValid(t, root)
 }
 
 func TestCurrentPlanRejectsInvalidReleaseSourceCombinations(t *testing.T) {
@@ -420,9 +387,7 @@ func TestCurrentPlanRejectsInvalidReleaseSourceCombinations(t *testing.T) {
 			app := validDependencyPlanApplication(t)
 			test.mutate(&app.Spec.Release)
 			refreshPlanDigest(app)
-			if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err == nil || err.Reason != test.reason {
-				t.Fatalf("got error %#v, want reason %s", err, test.reason)
-			}
+			assertPlanError(t, app, test.reason)
 		})
 	}
 }
@@ -540,9 +505,7 @@ func TestCurrentPlanRejectsInvalidRoleNamespaceAndDependencyContracts(t *testing
 		t.Run(test.name, func(t *testing.T) {
 			app := validDependencyPlanApplication(t)
 			test.mutate(app)
-			if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err == nil || err.Reason != test.reason {
-				t.Fatalf("got error %#v, want reason %s", err, test.reason)
-			}
+			assertPlanError(t, app, test.reason)
 		})
 	}
 }
@@ -606,9 +569,7 @@ func TestCanonicalPlanRejectsUnsupportedVersion(t *testing.T) {
 	}
 	app := validDependencyPlanApplication(t)
 	app.Spec.PlanVersion = "oneks.opennebula.io/plan-v9"
-	if err := ValidatePlan(app, ValidationConfig{ClusterID: app.Spec.ClusterID}); err == nil || err.Reason != "UnsupportedPlanVersion" {
-		t.Fatalf("got error %#v, want UnsupportedPlanVersion", err)
-	}
+	assertPlanError(t, app, "UnsupportedPlanVersion")
 }
 
 func TestCurrentPlanNamespacePrecheckUsesTargetAndSkipsCreation(t *testing.T) {

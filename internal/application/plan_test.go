@@ -60,10 +60,7 @@ func TestCanonicalJSONUsesOnlyContractEscapes(t *testing.T) {
 }
 
 func TestValidatePlanAcceptsGoldenPlan(t *testing.T) {
-	app := goldenApplication(t)
-	if err := ValidatePlan(app, validationConfig()); err != nil {
-		t.Fatalf("golden plan rejected: %v", err)
-	}
+	assertPlanValid(t, goldenApplication(t))
 }
 
 func TestValidatePlanAcceptsExactRuntimeLimits(t *testing.T) {
@@ -87,9 +84,7 @@ func TestValidatePlanAcceptsExactRuntimeLimits(t *testing.T) {
 			app := goldenApplication(t)
 			test.mutate(app)
 			refreshDigest(t, app)
-			if err := ValidatePlan(app, validationConfig()); err != nil {
-				t.Fatalf("exact limit rejected: %#v", err)
-			}
+			assertPlanValid(t, app)
 		})
 	}
 }
@@ -114,10 +109,7 @@ func TestValidatePlanRejectsAdditionalRuntimeBoundaryViolations(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			app := goldenApplication(t)
 			test.mutate(app)
-			err := ValidatePlan(app, validationConfig())
-			if err == nil || err.Reason != test.reason {
-				t.Fatalf("expected %s, got %#v", test.reason, err)
-			}
+			assertPlanError(t, app, test.reason)
 		})
 	}
 }
@@ -170,10 +162,7 @@ func TestValidatePlanRejectsSecurityAndSchemaViolations(t *testing.T) {
 			if test.reason != "PlanDigestMismatch" {
 				refreshDigest(t, app)
 			}
-			err := ValidatePlan(app, validationConfig())
-			if err == nil || err.Reason != test.reason {
-				t.Fatalf("expected %s, got %#v", test.reason, err)
-			}
+			assertPlanErrorForCluster(t, app, "42", test.reason)
 		})
 	}
 }
@@ -181,17 +170,13 @@ func TestValidatePlanRejectsSecurityAndSchemaViolations(t *testing.T) {
 func TestValidatePlanAllowsOnlyControllerFinalizer(t *testing.T) {
 	app := goldenApplication(t)
 	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
-	if err := ValidatePlan(app, validationConfig()); err != nil {
-		t.Fatalf("controller retry finalizer rejected: %v", err)
-	}
+	assertPlanValid(t, app)
 }
 
 func TestValidatePlanAllowsUnrelatedRootLabels(t *testing.T) {
 	app := goldenApplication(t)
 	app.Labels["example.test/injected"] = "allowed"
-	if err := ValidatePlan(app, validationConfig()); err != nil {
-		t.Fatalf("unrelated Kubernetes label rejected: %v", err)
-	}
+	assertPlanValid(t, app)
 }
 
 func goldenApplication(t *testing.T) *applicationv1.OneKSApplication {
