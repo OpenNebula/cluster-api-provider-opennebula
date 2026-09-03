@@ -24,7 +24,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/cache"
 )
 
 type recordingSender struct {
@@ -145,36 +144,6 @@ func TestPendingCallbackIdentitiesAreGloballyBounded(t *testing.T) {
 	}
 	if len(queue.pending) != maxPendingReports {
 		t.Fatalf("existing-key update changed callback identity count: %d", len(queue.pending))
-	}
-}
-
-func TestInitialNodeSynchronizationQueuesOneReportPerNode(t *testing.T) {
-	nodes := cache.NewSharedIndexInformer(&cache.ListWatch{}, &corev1.Node{}, 0, cache.Indexers{})
-	queue := newReportQueue(&recordingSender{})
-	defer queue.queue.ShutDown()
-	m := &Monitor{nodes: nodes, reports: queue}
-	for _, node := range []*corev1.Node{
-		{ObjectMeta: metav1.ObjectMeta{Name: "node-2"}, Spec: corev1.NodeSpec{ProviderID: "one://2"}, Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}}},
-		{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}, Spec: corev1.NodeSpec{ProviderID: "one://1"}, Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionFalse}}}},
-	} {
-		if err := nodes.GetStore().Add(node); err != nil {
-			t.Fatalf("add node: %v", err)
-		}
-	}
-
-	m.enqueueInitialNodes()
-	if len(queue.pending) != 2 {
-		t.Fatalf("expected one report per Node, got %#v", queue.pending)
-	}
-	if queue.pending["Node/node-1"].value.(Report).Status["ready"] != false ||
-		queue.pending["Node/node-2"].value.(Report).Status["ready"] != true {
-		t.Fatalf("initial reports do not contain independent readiness: %#v", queue.pending)
-	}
-	for _, queued := range queue.pending {
-		report := queued.value.(Report)
-		if _, exists := report.Status["readyProviderIDs"]; exists {
-			t.Fatalf("initial report contains readiness snapshot: %#v", report.Status)
-		}
 	}
 }
 

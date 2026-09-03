@@ -209,19 +209,15 @@ func (r *Reconciler) readSecretInput(ctx context.Context, app *applicationv1.One
 	if err != nil {
 		return nil, false, &protectedSecretAPIError{operation: "read input", namespace: reference.Namespace, name: reference.Name, cause: err}
 	}
-	expectedUID := app.Status.SecretInputUID
-	labels := input.GetLabels()
 	expectedLabels := map[string]string{
 		LabelRootManagedBy: RootManagedByValue, LabelProducer: ProducerValue,
 		LabelClusterID: app.Spec.ClusterID, LabelCatalogueChartID: app.Spec.CatalogueChartID,
 		LabelPlanDigest: app.Spec.PlanDigest, LabelApplicationName: app.Name,
 	}
-	for key, expected := range expectedLabels {
-		if labels[key] != expected {
-			return nil, false, &InputSecretValidationError{Message: "input Secret labels do not match the compiled application"}
-		}
+	if !labelSubsetMatches(input.GetLabels(), expectedLabels) {
+		return nil, false, &InputSecretValidationError{Message: "input Secret labels do not match the compiled application"}
 	}
-	if expectedUID != "" && string(input.UID) != expectedUID {
+	if app.Status.SecretInputUID != "" && string(input.UID) != app.Status.SecretInputUID {
 		return nil, false, &InputSecretValidationError{Message: "input Secret UID does not match the compiled reference"}
 	}
 	if input.Type != corev1.SecretTypeOpaque {

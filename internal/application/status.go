@@ -38,14 +38,9 @@ const (
 
 func baseStatus(app *applicationv1.OneKSApplication) applicationv1.OneKSApplicationStatus {
 	status := app.Status.DeepCopy()
-	if status == nil {
-		status = &applicationv1.OneKSApplicationStatus{}
-	}
 	status.ObservedGeneration = app.Generation
 	status.ObservedPlanDigest = app.Spec.PlanDigest
-	status.SupportedPlanVersions = []string{
-		applicationv1.PlanVersion,
-	}
+	status.SupportedPlanVersions = []string{applicationv1.PlanVersion}
 	status.LastError = nil
 	return *status
 }

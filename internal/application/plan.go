@@ -401,7 +401,7 @@ func validateRelease(release applicationv1.ReleaseSpec, catalogueChartID, path s
 	if !utf8.ValidString(release.ValuesContent) {
 		return invalid("InvalidValuesContent", "%s.valuesContent must be valid UTF-8", path)
 	}
-	if len([]byte(release.ValuesContent)) > maxValuesContentBytes {
+	if len(release.ValuesContent) > maxValuesContentBytes {
 		return invalid("ValuesContentTooLarge", "%s.valuesContent exceeds %d bytes", path, maxValuesContentBytes)
 	}
 	if placeholderPattern.MatchString(release.ValuesContent) {
@@ -474,7 +474,7 @@ func validateUninstall(uninstall applicationv1.UninstallSpec, path string) *Plan
 			placeholderPattern.MatchString(action.PatchJSON) {
 			return invalid("UnresolvedPlaceholder", "%s contains an unresolved placeholder", actionPath)
 		}
-		if !utf8.ValidString(action.PatchJSON) || len([]byte(action.PatchJSON)) == 0 || len([]byte(action.PatchJSON)) > maxMergePatchBytes {
+		if !utf8.ValidString(action.PatchJSON) || len(action.PatchJSON) == 0 || len(action.PatchJSON) > maxMergePatchBytes {
 			return invalid("InvalidUninstallPatch", "%s.patchJSON must be valid UTF-8 between 1 and %d bytes", actionPath, maxMergePatchBytes)
 		}
 		patch := map[string]any{}
@@ -888,7 +888,7 @@ func isScalarValue(value any) bool {
 }
 
 func validUTF8Bytes(value string, minimum, maximum int) bool {
-	length := len([]byte(value))
+	length := len(value)
 	return utf8.ValidString(value) && length >= minimum && length <= maximum
 }
 
@@ -897,8 +897,7 @@ func validDeletionPolicy(policy applicationv1.DeletionPolicy) bool {
 }
 
 func invalid(reason, format string, args ...any) *PlanError {
-	message := fmt.Sprintf(format, args...)
-	message = strings.TrimSpace(message)
+	message := strings.TrimSpace(fmt.Sprintf(format, args...))
 	if len(message) > 512 {
 		message = message[:512]
 	}

@@ -161,8 +161,8 @@ func TestGeneratedMonitorChartContract(t *testing.T) {
 	if rbacObjects == 0 {
 		t.Fatal("generated monitor chart did not render RBAC objects")
 	}
-	if !observedResources["nodes"] || !viewBinding {
-		t.Fatalf("generated monitor RBAC is missing view or Nodes access: resources=%#v view=%t", observedResources, viewBinding)
+	if !observedResources["nodes"] || !observedResources["pods"] || !viewBinding {
+		t.Fatalf("generated monitor RBAC is missing view, Nodes or Pods access: resources=%#v view=%t", observedResources, viewBinding)
 	}
 }
 

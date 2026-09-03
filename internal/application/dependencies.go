@@ -254,7 +254,7 @@ func dependencyStatusIsCurrent(dependency *applicationv1.OneKSApplication) bool 
 		dependency.Status.ObservedPlanDigest == dependency.Spec.PlanDigest
 }
 
-func (r *Reconciler) releaseDependencies(ctx context.Context, app *applicationv1.OneKSApplication) (retry bool, err error) {
+func (r *Reconciler) releaseDependencies(ctx context.Context, app *applicationv1.OneKSApplication) (bool, error) {
 	if len(app.Spec.Dependencies) == 0 {
 		return false, nil
 	}
@@ -294,7 +294,7 @@ func hasLiveDependencyConsumer(applications []applicationv1.OneKSApplication, de
 	return false
 }
 
-func (r *Reconciler) releaseDependency(ctx context.Context, consumer *applicationv1.OneKSApplication, reference applicationv1.DependencyReference) (retry bool, err error) {
+func (r *Reconciler) releaseDependency(ctx context.Context, consumer *applicationv1.OneKSApplication, reference applicationv1.DependencyReference) (bool, error) {
 	dependency := &applicationv1.OneKSApplication{}
 	key := types.NamespacedName{Namespace: applicationv1.ApplicationNamespace, Name: reference.Name}
 	if err := r.authoritativeReader().Get(ctx, key, dependency); err != nil {

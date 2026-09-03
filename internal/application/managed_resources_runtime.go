@@ -426,8 +426,7 @@ func copyTime(value *metav1.Time) *metav1.Time {
 	if value == nil {
 		return nil
 	}
-	copy := value.DeepCopy()
-	return copy
+	return value.DeepCopy()
 }
 
 func (r *Reconciler) reconcileDeleteManagedResources(ctx context.Context, app *applicationv1.OneKSApplication) (bool, error) {

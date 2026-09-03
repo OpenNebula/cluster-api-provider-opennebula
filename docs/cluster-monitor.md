@@ -2,7 +2,7 @@
 
 `cmd/monitor` is a separate binary intended to run in each workload cluster.
 It uses Kubernetes shared informers (`List` followed by `Watch`) for Nodes,
-root `oneks.opennebula.io/v1alpha5` OneKSApplications, and an optional set of
+Pods, root `oneks.opennebula.io/v1alpha5` OneKSApplications, and an optional set of
 resources selected by a live ConfigMap. The application
 controller remains the only component that executes application plans; the
 monitor only projects selected scalar values to OneKS. It does not evaluate
@@ -30,13 +30,13 @@ projected Secret file named by `MONITOR_AUTH_FILE`.
 | `MONITOR_HEALTH_ADDRESS` | yes | `:8081` (Helm) | Health and readiness listener |
 | `MONITOR_RESOURCE_CONFIG_NAMESPACE` | no | `kube-system` | Namespace of the dynamic configuration ConfigMap |
 | `MONITOR_RESOURCE_CONFIG_NAME` | no | `capone-resource-monitor` | Name of the dynamic configuration ConfigMap |
-| `MONITOR_RESOURCE_POLL_INTERVAL` | no | `10s` | Interval between configuration refreshes and resource snapshots |
+| `MONITOR_RESOURCE_POLL_INTERVAL` | no | `10s` | Interval between configuration refreshes, resource snapshots, and Pod inventory reports |
 
 The monitor binary requires the variables marked as required. Optional values
 use the defaults shown when they are omitted.
 
 The health listener exposes `/healthz` and `/readyz`. Readiness becomes true
-after the essential Node and OneKSApplication informer caches have synchronized.
+after the essential Node, Pod, and OneKSApplication informer caches have synchronized.
 A missing or invalid dynamic ConfigMap never changes that readiness.
 
 ## Dynamic resource observations
@@ -218,3 +218,18 @@ replace a newer state.
 Without a cluster-wide readiness snapshot, an event for one Node cannot repair
 a missed observation for another Node. A later event for the affected Node, an
 informer relist, or a monitor restart reports its current state again.
+
+## Pod inventory
+
+After informer synchronization and at every resource polling interval, the
+monitor sends one complete cluster-wide Pod snapshot. The snapshot is built
+from the local informer cache and does not poll the Kubernetes API on every
+interval. Entries are keyed by `namespace/name` and contain a compact derived
+status, reason, restart count, and the Node provider ID when it can be resolved.
+Pods that have not been scheduled remain in the same snapshot with an empty
+provider ID.
+
+OneKS replaces the preceding inventory atomically. Consequently deleted Pods
+disappear on the next report and rescheduled Pods need no transfer operation
+between stored groups. While accepting the snapshot, the OneKS API resolves
+each provider ID and persists its `groupId` for group-specific views.

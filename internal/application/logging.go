@@ -24,8 +24,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
-func applicationLogger(ctx context.Context, app *applicationv1.OneKSApplication) logr.Logger {
-	return ctrl.LoggerFrom(ctx).WithValues(
+func contextWithApplicationLogger(ctx context.Context, app *applicationv1.OneKSApplication) context.Context {
+	logger := ctrl.LoggerFrom(ctx).WithValues(
 		"application", app.Name,
 		"namespace", app.Namespace,
 		"generation", app.Generation,
@@ -35,8 +35,5 @@ func applicationLogger(ctx context.Context, app *applicationv1.OneKSApplication)
 		"targetNamespace", app.Spec.Release.TargetNamespace,
 		"createNamespace", app.Spec.Release.CreateNamespace,
 	)
-}
-
-func contextWithApplicationLogger(ctx context.Context, app *applicationv1.OneKSApplication) context.Context {
-	return logr.NewContext(ctx, applicationLogger(ctx, app))
+	return logr.NewContext(ctx, logger)
 }

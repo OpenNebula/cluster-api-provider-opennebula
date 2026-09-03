@@ -106,9 +106,7 @@ func (s *HTTPEncryptedSender) Send(ctx context.Context, report CallbackPayload) 
 		return fmt.Errorf("generate report nonce: %w", err)
 	}
 	sealed := s.aead.Seal(nil, nonce, plaintext, nil)
-	wirePayload := make([]byte, 0, len(nonce)+len(sealed))
-	wirePayload = append(wirePayload, nonce...)
-	wirePayload = append(wirePayload, sealed...)
+	wirePayload := append(nonce, sealed...)
 	body, err := json.Marshal(encryptedEnvelope{
 		Payload: base64.StdEncoding.EncodeToString(wirePayload),
 	})

@@ -110,7 +110,7 @@ func (r *Reconciler) detectExternalDependency(ctx context.Context, app *applicat
 func (r *Reconciler) detectCertManager(ctx context.Context) (externalDetectionResult, error) {
 	reader := r.authoritativeReader()
 	evidence := false
-	issues := make([]string, 0)
+	var issues []string
 
 	for _, name := range certManagerCRDNames {
 		crd := &apiextensionsv1.CustomResourceDefinition{}
@@ -152,31 +152,17 @@ func (r *Reconciler) detectCertManager(ctx context.Context) (externalDetectionRe
 		evidence = true
 	}
 	for _, component := range []string{"controller", "webhook"} {
-		componentDeployments := deploymentsForComponent(deployments.Items, component)
-		if len(componentDeployments) == 0 {
+		found, ready := deploymentsReady(deployments.Items, component)
+		if !found {
 			issues = append(issues, component+" Deployment is absent")
-		} else {
-			for i := range componentDeployments {
-				desired := int32(1)
-				if componentDeployments[i].Spec.Replicas != nil {
-					desired = *componentDeployments[i].Spec.Replicas
-				}
-				if desired < 1 || componentDeployments[i].Status.AvailableReplicas < desired {
-					issues = append(issues, component+" Deployment is not ready")
-					break
-				}
-			}
+		} else if !ready {
+			issues = append(issues, component+" Deployment is not ready")
 		}
-		componentPods := podsForComponent(pods.Items, component)
-		if len(componentPods) == 0 {
+		found, ready = podsReady(pods.Items, component)
+		if !found {
 			issues = append(issues, component+" Pod is absent")
-		} else {
-			for i := range componentPods {
-				if componentPods[i].Status.Phase != corev1.PodRunning || !podConditionTrue(&componentPods[i], corev1.PodReady) {
-					issues = append(issues, component+" Pod is not ready")
-					break
-				}
-			}
+		} else if !ready {
+			issues = append(issues, component+" Pod is not ready")
 		}
 	}
 
@@ -223,24 +209,38 @@ func crdConditionTrue(crd *apiextensionsv1.CustomResourceDefinition, conditionTy
 	return false
 }
 
-func deploymentsForComponent(items []appsv1.Deployment, component string) []appsv1.Deployment {
-	result := make([]appsv1.Deployment, 0)
+func deploymentsReady(items []appsv1.Deployment, component string) (found, ready bool) {
+	ready = true
 	for i := range items {
-		if items[i].Labels["app.kubernetes.io/component"] == component {
-			result = append(result, items[i])
+		deployment := &items[i]
+		if deployment.Labels["app.kubernetes.io/component"] != component {
+			continue
+		}
+		found = true
+		desired := int32(1)
+		if deployment.Spec.Replicas != nil {
+			desired = *deployment.Spec.Replicas
+		}
+		if desired < 1 || deployment.Status.AvailableReplicas < desired {
+			ready = false
 		}
 	}
-	return result
+	return found, ready
 }
 
-func podsForComponent(items []corev1.Pod, component string) []corev1.Pod {
-	result := make([]corev1.Pod, 0)
+func podsReady(items []corev1.Pod, component string) (found, ready bool) {
+	ready = true
 	for i := range items {
-		if items[i].Labels["app.kubernetes.io/component"] == component {
-			result = append(result, items[i])
+		pod := &items[i]
+		if pod.Labels["app.kubernetes.io/component"] != component {
+			continue
+		}
+		found = true
+		if pod.Status.Phase != corev1.PodRunning || !podConditionTrue(pod, corev1.PodReady) {
+			ready = false
 		}
 	}
-	return result
+	return found, ready
 }
 
 func podConditionTrue(pod *corev1.Pod, conditionType corev1.PodConditionType) bool {

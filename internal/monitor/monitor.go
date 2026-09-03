@@ -14,12 +14,14 @@ import (
 	"context"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/informers"
@@ -33,17 +35,22 @@ const applicationSelector = "app.kubernetes.io/managed-by=oneks,applications.one
 var applicationGVR = schema.GroupVersionResource{Group: "oneks.opennebula.io", Version: "v1alpha5", Resource: "oneksapplications"}
 
 type Monitor struct {
-	nodeFactory        informers.SharedInformerFactory
-	applicationFactory dynamicinformer.DynamicSharedInformerFactory
-	nodes              cache.SharedIndexInformer
-	applications       cache.SharedIndexInformer
-	reports            *reportQueue
+	nodeFactory          informers.SharedInformerFactory
+	applicationFactory   dynamicinformer.DynamicSharedInformerFactory
+	nodes                cache.SharedIndexInformer
+	pods                 cache.SharedIndexInformer
+	applications         cache.SharedIndexInformer
+	reports              *reportQueue
+	resourcePollInterval time.Duration
 
 	ready atomic.Bool
 }
 
 func New(config Config, client kubernetes.Interface, dynamicClient dynamic.Interface, sender Sender) (*Monitor, error) {
-	m := &Monitor{reports: newReportQueue(sender)}
+	m := &Monitor{
+		reports:              newReportQueue(sender),
+		resourcePollInterval: config.ResourcePollInterval,
+	}
 	// Disable periodic resync; reconciliation is driven by informer events.
 	m.nodeFactory = informers.NewSharedInformerFactory(client, 0)
 	m.applicationFactory = dynamicinformer.NewFilteredDynamicSharedInformerFactory(
@@ -51,6 +58,7 @@ func New(config Config, client kubernetes.Interface, dynamicClient dynamic.Inter
 		func(options *metav1.ListOptions) { options.LabelSelector = applicationSelector },
 	)
 	m.nodes = m.nodeFactory.Core().V1().Nodes().Informer()
+	m.pods = m.nodeFactory.Core().V1().Pods().Informer()
 	m.applications = m.applicationFactory.ForResource(applicationGVR).Informer()
 
 	if _, err := m.nodes.AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -74,16 +82,26 @@ func (m *Monitor) Run(ctx context.Context) error {
 	defer runtime.HandleCrash()
 	m.nodeFactory.Start(ctx.Done())
 	m.applicationFactory.Start(ctx.Done())
-	if !cache.WaitForCacheSync(ctx.Done(), m.nodes.HasSynced, m.applications.HasSynced) {
+	if !cache.WaitForCacheSync(ctx.Done(), m.nodes.HasSynced, m.pods.HasSynced, m.applications.HasSynced) {
 		return fmt.Errorf("initial informer cache sync failed")
 	}
-	m.enqueueInitialNodes()
+	go m.runPodSnapshots(ctx)
 	m.ready.Store(true)
 	defer m.ready.Store(false)
 	ctrl.Log.WithName("monitor").Info("monitor caches synchronized")
 
 	m.reports.Run(ctx)
 	return nil
+}
+
+func (m *Monitor) runPodSnapshots(ctx context.Context) {
+	wait.UntilWithContext(ctx, func(context.Context) {
+		m.reports.Add("PodSnapshot", podSnapshot(
+			m.pods.GetStore().List(),
+			m.nodes.GetStore(),
+			time.Now().UTC(),
+		))
+	}, m.resourcePollInterval)
 }
 
 func (m *Monitor) Ready() bool { return m.ready.Load() }
@@ -105,12 +123,6 @@ func (m *Monitor) onNode(obj any, event string) {
 		return
 	}
 	m.reports.Add("Node/"+node.Name, nodeReport(node, event))
-}
-
-func (m *Monitor) enqueueInitialNodes() {
-	for _, item := range m.nodes.GetStore().List() {
-		m.onNode(item, "Updated")
-	}
 }
 
 func (m *Monitor) onApplication(obj any, event string) {

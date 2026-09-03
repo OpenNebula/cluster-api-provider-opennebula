@@ -487,19 +487,13 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 		}
 	}
 	setCondition(&status, app.Generation, ConditionPlanValid, metav1.ConditionTrue, "Validated", "Plan digest and schema are valid")
-	dependencyCondition := metav1.ConditionFalse
-	if dependencies.ready {
-		dependencyCondition = metav1.ConditionTrue
-	}
+	dependencyCondition := conditionStatus(dependencies.ready)
 	setCondition(&status, app.Generation, ConditionDependenciesReady, dependencyCondition, dependencies.reason, dependencies.message)
-	resourceCondition := metav1.ConditionFalse
 	resourcesReady := observed.allResources
 	if isRootApplication(app) {
 		resourcesReady = observed.managed.ready
 	}
-	if resourcesReady {
-		resourceCondition = metav1.ConditionTrue
-	}
+	resourceCondition := conditionStatus(resourcesReady)
 	resourceReason := conditionText(resourceCondition, "ResourcesReady", "ResourcesPending")
 	resourceMessage := conditionText(resourceCondition, "All managed resources are ready", "Managed resources are not ready")
 	if !isRootApplication(app) {
@@ -514,20 +508,14 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 	}
 	setCondition(&status, app.Generation, ConditionResourcesReady, resourceCondition, resourceReason, resourceMessage)
 	if usesProtectedSecrets(app) {
-		protectedCondition := metav1.ConditionFalse
-		if observed.protected.ready {
-			protectedCondition = metav1.ConditionTrue
-		}
+		protectedCondition := conditionStatus(observed.protected.ready)
 		setCondition(
 			&status, app.Generation, ConditionProtectedSecretsReady, protectedCondition,
 			conditionText(protectedCondition, "ProtectedSecretsReady", observed.protected.reason),
 			conditionText(protectedCondition, "All protected Secrets are ready", observed.protected.message),
 		)
 	}
-	helmCondition := metav1.ConditionFalse
-	if observed.helmState.ready {
-		helmCondition = metav1.ConditionTrue
-	}
+	helmCondition := conditionStatus(observed.helmState.ready)
 	helmReason := conditionText(helmCondition, "HelmReleaseReady", observed.helmState.reason)
 	helmMessage := conditionText(helmCondition, "Helm release is ready", observed.helmState.message)
 	if observed.helmState.ready && observed.helmState.reason == "ExternalDependencyReady" {
@@ -538,10 +526,7 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 	setCondition(&status, app.Generation, ConditionOwnershipConflict, metav1.ConditionFalse, "NoConflict", "Managed children have exact OneKS ownership")
 
 	ready := dependencies.ready && observed.allResources && observed.helmState.ready
-	readyCondition := metav1.ConditionFalse
-	if ready {
-		readyCondition = metav1.ConditionTrue
-	}
+	readyCondition := conditionStatus(ready)
 	readyReason := "ApplicationProgressing"
 	readyMessage := "Application installation is in progress"
 	if observed.managed.failed {
@@ -897,10 +882,7 @@ func (r *Reconciler) recordTerminal(ctx context.Context, app *applicationv1.OneK
 	if usesProtectedSecrets(app) {
 		setCondition(&status, app.Generation, ConditionProtectedSecretsReady, metav1.ConditionFalse, reason, message)
 	}
-	conflictCondition := metav1.ConditionFalse
-	if ownershipConflict {
-		conflictCondition = metav1.ConditionTrue
-	}
+	conflictCondition := conditionStatus(ownershipConflict)
 	setCondition(&status, app.Generation, ConditionOwnershipConflict, conflictCondition, reason, message)
 	setCondition(&status, app.Generation, ConditionReady, metav1.ConditionFalse, reason, message)
 	if err := r.updateStatus(ctx, app, status); err != nil {
@@ -1018,6 +1000,13 @@ func conditionText(status metav1.ConditionStatus, positive, negative string) str
 		return positive
 	}
 	return firstNonEmpty(negative, "Pending")
+}
+
+func conditionStatus(value bool) metav1.ConditionStatus {
+	if value {
+		return metav1.ConditionTrue
+	}
+	return metav1.ConditionFalse
 }
 
 func clearLastError(status *applicationv1.OneKSApplicationStatus) {

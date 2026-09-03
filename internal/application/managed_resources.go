@@ -81,7 +81,7 @@ func validateManagedResources(resources []applicationv1.ManagedResourceSpec) *Pl
 			return invalid("DuplicateManagedResourceIdentity", "%s duplicates Kubernetes identity %s %s/%s", path, resource.Kind, resource.Namespace, resource.Name)
 		}
 		identities[identity] = struct{}{}
-		if !utf8.ValidString(resource.ManifestJSON) || len([]byte(resource.ManifestJSON)) < 2 || len([]byte(resource.ManifestJSON)) > maxManagedManifestBytes {
+		if !utf8.ValidString(resource.ManifestJSON) || len(resource.ManifestJSON) < 2 || len(resource.ManifestJSON) > maxManagedManifestBytes {
 			return invalid("InvalidManagedManifest", "%s.manifestJSON is invalid or exceeds %d bytes", path, maxManagedManifestBytes)
 		}
 		if placeholderPattern.MatchString(resource.ManifestJSON) {

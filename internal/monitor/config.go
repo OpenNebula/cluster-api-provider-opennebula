@@ -77,9 +77,7 @@ func ConfigFromEnv() (Config, error) {
 	}
 	key, err := base64.StdEncoding.Strict().DecodeString(encodedKey)
 	if err != nil || len(key) != 32 {
-		return Config{}, fmt.Errorf(
-			"MONITOR_KEY must be Base64-encoded and decode to exactly 32 bytes",
-		)
+		return Config{}, fmt.Errorf("MONITOR_KEY must be Base64-encoded and decode to exactly 32 bytes")
 	}
 	c.Key = key
 
