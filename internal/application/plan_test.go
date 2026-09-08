@@ -21,20 +21,17 @@ import (
 	"strings"
 	"testing"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
 
 func TestCanonicalPlanUsesASCIIAndStableMapOrder(t *testing.T) {
-	spec := goldenSpec(t)
-	spec.Release.ValuesContent = "name: café\n"
-	canonical, err := CanonicalPlan(spec)
-	if err != nil {
-		t.Fatalf("canonical plan: %v", err)
-	}
+	spec := goldenSpec()
+	spec.Release.ValuesContent = "name: caf\u00e9\n"
+	canonical := canonicalSpec(t, spec)
 	text := string(canonical)
-	if !strings.Contains(text, `caf\u00e9`) || strings.Contains(text, "é") {
+	if !strings.Contains(text, `caf\u00e9`) || strings.Contains(text, "\u00e9") {
 		t.Fatalf("canonical JSON is not ASCII-only: %s", text)
 	}
 	if strings.Index(text, `"catalogueChartID"`) > strings.Index(text, `"clusterID"`) {
@@ -43,19 +40,14 @@ func TestCanonicalPlanUsesASCIIAndStableMapOrder(t *testing.T) {
 }
 
 func TestCanonicalJSONUsesOnlyContractEscapes(t *testing.T) {
-	var output strings.Builder
-	buffer := bytes.NewBuffer(nil)
-	value := "\x01\b\t\n\f\r/\"é🙂"
-	if err := writeCanonicalJSON(buffer, value); err != nil {
+	var buffer bytes.Buffer
+	value := "\x01\b\t\n\f\r/\"\u00e9\U00010000"
+	if err := writeCanonicalJSON(&buffer, value); err != nil {
 		t.Fatalf("canonical string: %v", err)
 	}
-	output.Write(buffer.Bytes())
-	want := `"\u0001\b\t\n\f\r/\"\u00e9\ud83d\ude42"`
-	if output.String() != want {
-		t.Fatalf("unexpected escaping: got %s, want %s", output.String(), want)
-	}
-	if strings.Contains(output.String(), `\x`) || strings.Contains(output.String(), `\U`) {
-		t.Fatalf("Go-specific escape emitted: %s", output.String())
+	want := `"\u0001\b\t\n\f\r/\"\u00e9\ud800\udc00"`
+	if buffer.String() != want {
+		t.Fatalf("unexpected escaping: got %s, want %s", buffer.String(), want)
 	}
 }
 
@@ -181,7 +173,7 @@ func TestValidatePlanAllowsUnrelatedRootLabels(t *testing.T) {
 
 func goldenApplication(t *testing.T) *applicationv1.OneKSApplication {
 	t.Helper()
-	spec := goldenSpec(t)
+	spec := goldenSpec()
 	app := &applicationv1.OneKSApplication{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "oneks-prometheus", Namespace: applicationv1.ApplicationNamespace,
@@ -194,12 +186,10 @@ func goldenApplication(t *testing.T) *applicationv1.OneKSApplication {
 	return app
 }
 
-func goldenSpec(t *testing.T) applicationv1.OneKSApplicationSpec {
-	t.Helper()
+func goldenSpec() applicationv1.OneKSApplicationSpec {
 	return applicationv1.OneKSApplicationSpec{
 		ClusterID: "42", CatalogueChartID: "d511b694-d868-4e40-8224-fdf6a0ca3383",
-		PlanVersion: applicationv1.PlanVersion, ExecutionMode: applicationv1.ExecutionModeExecute,
-		Role: applicationv1.ApplicationRoleRoot,
+		PlanVersion: applicationv1.PlanVersion, Role: applicationv1.ApplicationRoleRoot,
 		Release: applicationv1.ReleaseSpec{
 			ChartID:       "d511b694-d868-4e40-8224-fdf6a0ca3383",
 			RepositoryURL: "https://prometheus-community.github.io/helm-charts",
@@ -218,18 +208,11 @@ func goldenSpec(t *testing.T) applicationv1.OneKSApplicationSpec {
 func refreshDigest(t *testing.T, app *applicationv1.OneKSApplication) {
 	t.Helper()
 	previous := app.Spec.PlanDigest
-	canonical, err := CanonicalPlan(app.Spec)
-	if err != nil {
-		t.Fatalf("canonical plan: %v", err)
-	}
+	canonical := canonicalSpec(t, app.Spec)
 	app.Spec.PlanDigest = Digest(canonical)
 	if app.Labels != nil && app.Labels[LabelPlanDigest] == previous {
 		app.Labels[LabelPlanDigest] = app.Spec.PlanDigest
 	}
-}
-
-func validationConfig() ValidationConfig {
-	return ValidationConfig{ClusterID: "42"}
 }
 
 func yamlMappingOfSize(t *testing.T, size int) string {

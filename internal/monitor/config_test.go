@@ -105,10 +105,14 @@ func TestConfigRejectsInvalidTimeout(t *testing.T) {
 }
 
 func TestConfigRejectsInvalidResourcePollInterval(t *testing.T) {
-	setRequiredMonitorEnv(t, "https://oneks.example/api/v1", "42")
-	t.Setenv("MONITOR_RESOURCE_POLL_INTERVAL", "0s")
-	if _, err := ConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "MONITOR_RESOURCE_POLL_INTERVAL") {
-		t.Fatalf("expected resource poll interval validation error, got %v", err)
+	for _, interval := range []string{"0s", "-1s", "4s", "61m", "invalid"} {
+		t.Run(interval, func(t *testing.T) {
+			setRequiredMonitorEnv(t, "https://oneks.example/api/v1", "42")
+			t.Setenv("MONITOR_RESOURCE_POLL_INTERVAL", interval)
+			if _, err := ConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "MONITOR_RESOURCE_POLL_INTERVAL") {
+				t.Fatalf("expected resource poll interval validation error, got %v", err)
+			}
+		})
 	}
 }
 

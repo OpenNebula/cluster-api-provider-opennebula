@@ -25,8 +25,6 @@ type PodSnapshot struct {
 	Pods       map[string]PodStatus `json:"pods"`
 }
 
-func (snapshot PodSnapshot) CallbackKind() string { return snapshot.Kind }
-
 // PodStatus contains only the fields needed by the OneKS overview. Status is
 // the user-facing state derived from Kubernetes phase, readiness and deletion.
 type PodStatus struct {

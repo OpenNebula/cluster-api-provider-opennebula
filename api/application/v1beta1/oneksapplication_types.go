@@ -14,22 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package v1alpha5
+package v1beta1
 
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 const (
-	PlanVersion          = "oneks.opennebula.io/plan-v1alpha5"
+	PlanVersion          = "oneks.opennebula.io/plan-v1beta1"
 	ApplicationNamespace = "oneks-system"
 	ApplicationFinalizer = "applications.oneks.opennebula.io/finalizer"
 	FieldManager         = "oneks-application-controller"
-)
-
-type ExecutionMode string
-
-const (
-	ExecutionModeObserve ExecutionMode = "Observe"
-	ExecutionModeExecute ExecutionMode = "Execute"
 )
 
 type DeletionPolicy string
@@ -54,18 +47,17 @@ const (
 	PhaseReady      ApplicationPhase = "Ready"
 	PhaseFailed     ApplicationPhase = "Failed"
 	PhaseDeleting   ApplicationPhase = "Deleting"
-	PhaseObserving  ApplicationPhase = "Observing"
 )
 
 // OneKSApplicationSpec is an immutable, compiled application plan.
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable"
-// +kubebuilder:validation:XValidation:rule="has(self.role)",message="plan-v1alpha5 requires role"
+// +kubebuilder:validation:XValidation:rule="has(self.role)",message="plan-v1beta1 requires role"
 // +kubebuilder:validation:XValidation:rule="self.role != 'Dependency' || ((!has(self.dependencyPlans) || size(self.dependencyPlans) == 0) && (!has(self.managedResources) || size(self.managedResources) == 0) && !has(self.secretInputRef) && (!has(self.protectedSecrets) || size(self.protectedSecrets) == 0) && !has(self.release.authSecret))",message="Dependency must not contain Root-only dependencyPlans, managed resources, or protected Secret fields"
 // +kubebuilder:validation:XValidation:rule="((size(self.release.repositoryURL) == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$') && !self.release.chart.startsWith('oci://')))",message="release must use either an HTTPS repositoryURL with a non-OCI chart or an empty repositoryURL with an OCI chart"
 // +kubebuilder:validation:XValidation:rule="!has(self.release.authSecret) || self.release.repositoryURL.matches('^https://[^[:space:]]+$')",message="release.authSecret requires an HTTPS repositoryURL"
 // +kubebuilder:validation:XValidation:rule="!has(self.release.authSecret) || (has(self.protectedSecrets) && self.protectedSecrets.filter(p, p.builderType == 'basicAuthSecret' && p.__namespace__ == 'kube-system' && p.name == self.release.authSecret.name).size() == 1)",message="release.authSecret must match exactly one protected basicAuthSecret in kube-system"
-// +kubebuilder:validation:XValidation:rule="((!has(self.protectedSecrets) || size(self.protectedSecrets) == 0) ? !has(self.secretInputRef) : has(self.secretInputRef))",message="plan-v1alpha5 requires secretInputRef exactly when protectedSecrets are present"
-// +kubebuilder:validation:XValidation:rule="!has(self.managedResources) || !has(self.protectedSecrets) || size(self.managedResources) + size(self.protectedSecrets) <= 16",message="plan-v1alpha5 permits at most 16 combined managedResources and protectedSecrets"
+// +kubebuilder:validation:XValidation:rule="((!has(self.protectedSecrets) || size(self.protectedSecrets) == 0) ? !has(self.secretInputRef) : has(self.secretInputRef))",message="plan-v1beta1 requires secretInputRef exactly when protectedSecrets are present"
+// +kubebuilder:validation:XValidation:rule="!has(self.managedResources) || !has(self.protectedSecrets) || size(self.managedResources) + size(self.protectedSecrets) <= 16",message="plan-v1beta1 permits at most 16 combined managedResources and protectedSecrets"
 // +kubebuilder:validation:XValidation:rule="!has(self.dependencies) || self.dependencies.all(d, self.dependencies.filter(x, x.name == d.name).size() == 1)",message="dependency names must be unique"
 // +kubebuilder:validation:XValidation:rule="!has(self.dependencyPlans) || self.dependencyPlans.all(p, self.dependencyPlans.filter(x, x.name == p.name).size() == 1)",message="dependency plan names must be unique"
 // +kubebuilder:validation:XValidation:rule="self.role != 'Root' || !has(self.dependencies) || (has(self.dependencyPlans) && self.dependencies.all(d, self.dependencyPlans.filter(p, p.name == d.name && p.catalogueChartID == d.catalogueChartID && p.planDigest == d.planDigest).size() == 1))",message="each direct Root dependency must resolve to exactly one matching dependencyPlan"
@@ -83,14 +75,12 @@ type OneKSApplicationSpec struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$`
 	CatalogueChartID string `json:"catalogueChartID"`
-	// +kubebuilder:validation:Enum=oneks.opennebula.io/plan-v1alpha5
+	// +kubebuilder:validation:Enum=oneks.opennebula.io/plan-v1beta1
 	PlanVersion string `json:"planVersion"`
 	// +kubebuilder:validation:MaxLength=50
 	// +kubebuilder:validation:Pattern=`^sha256-[A-Za-z0-9_-]{43}$`
-	PlanDigest string `json:"planDigest"`
-	// +kubebuilder:validation:Enum=Observe;Execute
-	ExecutionMode ExecutionMode `json:"executionMode"`
-	Release       ReleaseSpec   `json:"release"`
+	PlanDigest string      `json:"planDigest"`
+	Release    ReleaseSpec `json:"release"`
 	// +kubebuilder:validation:Enum=Root;Dependency
 	Role ApplicationRole `json:"role,omitempty"`
 	// +kubebuilder:validation:MaxItems=16
@@ -246,8 +236,6 @@ type ManagedResourceSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=128
 	Kind string `json:"kind"`
-	// +kubebuilder:validation:MaxLength=128
-	APIResource string `json:"apiResource,omitempty"`
 	// +kubebuilder:validation:MaxLength=63
 	Namespace string `json:"namespace,omitempty"`
 	// +kubebuilder:validation:MinLength=1
@@ -291,8 +279,6 @@ type ManagedResourceReference struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=128
 	Kind string `json:"kind"`
-	// +kubebuilder:validation:MaxLength=128
-	APIResource string `json:"apiResource,omitempty"`
 	// +kubebuilder:validation:MaxLength=63
 	Namespace string `json:"namespace,omitempty"`
 	// +kubebuilder:validation:MinLength=1
@@ -420,7 +406,7 @@ type ResourceStatus struct {
 	// +kubebuilder:validation:MaxLength=63
 	ID string `json:"id"`
 	// +kubebuilder:validation:MaxLength=32
-	// +kubebuilder:validation:Enum=Pending;Applying;Ready;Failed;Deleting;Retained;Observing
+	// +kubebuilder:validation:Enum=Pending;Applying;Ready;Failed;Deleting;Retained
 	Phase string `json:"phase"`
 	// +kubebuilder:validation:MaxLength=128
 	Reason string `json:"reason,omitempty"`
@@ -448,7 +434,7 @@ type OneKSApplicationStatus struct {
 	// +kubebuilder:validation:MaxItems=8
 	// +kubebuilder:validation:items:MaxLength=128
 	SupportedPlanVersions []string `json:"supportedPlanVersions,omitempty"`
-	// +kubebuilder:validation:Enum=Pending;Installing;Ready;Failed;Deleting;Observing
+	// +kubebuilder:validation:Enum=Pending;Installing;Ready;Failed;Deleting
 	Phase    ApplicationPhase    `json:"phase,omitempty"`
 	Progress ApplicationProgress `json:"progress,omitempty"`
 	// +kubebuilder:validation:MaxItems=8
@@ -463,7 +449,6 @@ type OneKSApplicationStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=oneksapp
-// +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=`.spec.executionMode`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Chart",type=string,JSONPath=`.spec.release.chart`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`

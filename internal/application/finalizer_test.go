@@ -22,11 +22,12 @@ import (
 	"errors"
 	"testing"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 func TestSparseCurrentPlanApplicationFinalizersUseMetadataPatches(t *testing.T) {
@@ -64,7 +65,7 @@ func TestSparseCurrentPlanApplicationFinalizersUseMetadataPatches(t *testing.T) 
 	reconcileOnce(t, ctx, reconciler, app)
 
 	stored := getApplication(t, ctx, reconciler.Client, app)
-	if !containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) {
+	if !controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) {
 		t.Fatalf("application finalizer was not added: %#v", stored.Finalizers)
 	}
 	assertApplicationSpecJSONUnchanged(t, wantSpecJSON, stored.Spec)
@@ -74,7 +75,7 @@ func TestSparseCurrentPlanApplicationFinalizersUseMetadataPatches(t *testing.T) 
 		t.Fatalf("remove application finalizer: %v", err)
 	}
 	stored = getApplication(t, ctx, reconciler.Client, app)
-	if containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) {
+	if controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) {
 		t.Fatalf("application finalizer remains: %#v", stored.Finalizers)
 	}
 	assertApplicationSpecJSONUnchanged(t, wantSpecJSON, stored.Spec)
@@ -92,7 +93,7 @@ func TestRemoveApplicationFinalizerNormally(t *testing.T) {
 		t.Fatalf("remove application finalizer: %v", err)
 	}
 	stored = getApplication(t, ctx, reconciler.Client, app)
-	if containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) {
+	if controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) {
 		t.Fatalf("application finalizer remains: %#v", stored.Finalizers)
 	}
 }
@@ -133,7 +134,7 @@ func TestRemoveApplicationFinalizerHandlesPatchConflictAuthoritatively(t *testin
 			}
 			if test.authoritative == "replacement" {
 				current := &applicationv1.OneKSApplication{}
-				if err := reconciler.APIReader.Get(ctx, client.ObjectKeyFromObject(stored), current); err != nil || current.UID != types.UID("replacement-uid") || !containsString(current.Finalizers, applicationv1.ApplicationFinalizer) {
+				if err := reconciler.APIReader.Get(ctx, client.ObjectKeyFromObject(stored), current); err != nil || current.UID != types.UID("replacement-uid") || !controllerutil.ContainsFinalizer(current, applicationv1.ApplicationFinalizer) {
 					t.Fatalf("replacement was modified: %#v, %v", current.ObjectMeta, err)
 				}
 			}

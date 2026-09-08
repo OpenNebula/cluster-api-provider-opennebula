@@ -23,7 +23,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/OpenNebula/cluster-api-provider-opennebula/internal/monitor"
-	"github.com/OpenNebula/cluster-api-provider-opennebula/internal/resourceobserver"
 )
 
 func main() {
@@ -63,21 +62,6 @@ func main() {
 		log.Error(err, "unable to create monitor")
 		os.Exit(1)
 	}
-	resourcePoller, err := resourceobserver.NewPoller(
-		client, dynamicClient,
-		resourceobserver.Options{
-			ConfigNamespace: config.ResourceConfigNamespace,
-			ConfigName:      config.ResourceConfigName,
-			PollInterval:    config.ResourcePollInterval,
-		},
-		func(identity string, value resourceobserver.ResourceValue) bool {
-			return watcher.EnqueueCallback(identity, value)
-		},
-	)
-	if err != nil {
-		log.Error(err, "unable to create resource value poller")
-		os.Exit(1)
-	}
 
 	ctx := ctrl.SetupSignalHandler()
 	health := &http.Server{
@@ -88,7 +72,6 @@ func main() {
 		<-ctx.Done()
 		_ = health.Close()
 	}()
-	go resourcePoller.Run(ctx)
 	go func() {
 		log.Info("starting health server", "address", config.HealthAddress)
 		if err := health.ListenAndServe(); err != nil && err != http.ErrServerClosed {

@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -114,7 +114,8 @@ func (r *Reconciler) preflightManagedOwnership(ctx context.Context, app *applica
 	return nil
 }
 
-func (r *Reconciler) reconcileManagedResources(ctx context.Context, app *applicationv1.OneKSApplication) (bool, error) {
+// applyManagedResources returns false when a concurrent deletion requires a retry.
+func (r *Reconciler) applyManagedResources(ctx context.Context, app *applicationv1.OneKSApplication) (bool, error) {
 	order, validationError := managedResourceOrder(app.Spec.ManagedResources)
 	if validationError != nil {
 		return false, validationError
@@ -191,8 +192,7 @@ func (r *Reconciler) reconcileManagedResources(ctx context.Context, app *applica
 			}
 		}
 	}
-	observed, err := r.observeManagedResources(ctx, app, true)
-	return err == nil && observed.allResources, err
+	return true, nil
 }
 
 func managedResourceNeedsApply(current, desired *unstructured.Unstructured) bool {

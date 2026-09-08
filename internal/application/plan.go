@@ -17,20 +17,15 @@ limitations under the License.
 package application
 
 import (
-	"bytes"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
 	"regexp"
-	"sort"
-	"strconv"
 	"strings"
-	"unicode/utf16"
 	"unicode/utf8"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/yaml"
 )
@@ -89,9 +84,6 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 	if len(app.Finalizers) > 1 || (len(app.Finalizers) == 1 && app.Finalizers[0] != applicationv1.ApplicationFinalizer) {
 		return invalid("InvalidFinalizers", "application finalizers may contain only the OneKS application finalizer")
 	}
-	if app.Spec.ExecutionMode == applicationv1.ExecutionModeObserve && len(app.Finalizers) != 0 {
-		return invalid("InvalidFinalizers", "Observe applications must not have a cleanup finalizer")
-	}
 	if app.Spec.ClusterID == "" || app.Spec.ClusterID != config.ClusterID {
 		return invalid("ClusterIDMismatch", "spec.clusterID does not match this controller")
 	}
@@ -102,7 +94,7 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 		return invalid("UnsupportedPlanVersion", "unsupported planVersion %q", app.Spec.PlanVersion)
 	}
 	if app.Spec.Role != applicationv1.ApplicationRoleRoot && app.Spec.Role != applicationv1.ApplicationRoleDependency {
-		return invalid("InvalidApplicationRole", "plan-v1alpha5 role must be Root or Dependency")
+		return invalid("InvalidApplicationRole", "plan-v1beta1 role must be Root or Dependency")
 	}
 	if app.Spec.Role == applicationv1.ApplicationRoleDependency {
 		if len(app.Spec.ManagedResources) != 0 {
@@ -122,9 +114,6 @@ func validatePlan(app *applicationv1.OneKSApplication, config ValidationConfig, 
 		if err := validateExternalDetection(*app.Spec.ExternalDetection, "externalDetection"); err != nil {
 			return err
 		}
-	}
-	if app.Spec.ExecutionMode != applicationv1.ExecutionModeObserve && app.Spec.ExecutionMode != applicationv1.ExecutionModeExecute {
-		return invalid("InvalidExecutionMode", "executionMode must be Observe or Execute")
 	}
 	if !validDeletionPolicy(app.Spec.DeletionPolicy) {
 		return invalid("InvalidDeletionPolicy", "deletionPolicy must be Delete or Retain")
@@ -321,9 +310,8 @@ func dependencyPlanChildSpec(clusterID string, plan applicationv1.DependencyPlan
 	return applicationv1.OneKSApplicationSpec{
 		ClusterID: clusterID, CatalogueChartID: plan.CatalogueChartID,
 		PlanVersion: applicationv1.PlanVersion, PlanDigest: plan.PlanDigest,
-		ExecutionMode: applicationv1.ExecutionModeExecute,
-		Release:       plan.Release,
-		Role:          applicationv1.ApplicationRoleDependency, Dependencies: plan.Dependencies,
+		Release: plan.Release,
+		Role:    applicationv1.ApplicationRoleDependency, Dependencies: plan.Dependencies,
 		DependencyPlans: nil, Uninstall: plan.Uninstall, ExternalDetection: plan.ExternalDetection,
 		DeletionPolicy: plan.DeletionPolicy,
 	}
@@ -483,290 +471,6 @@ func validateUninstall(uninstall applicationv1.UninstallSpec, path string) *Plan
 		}
 	}
 	return nil
-}
-
-func CanonicalPlan(spec applicationv1.OneKSApplicationSpec) ([]byte, error) {
-	if spec.PlanVersion != applicationv1.PlanVersion {
-		return nil, fmt.Errorf("unsupported planVersion %q", spec.PlanVersion)
-	}
-	return canonicalPlan(spec)
-}
-
-func canonicalPlan(spec applicationv1.OneKSApplicationSpec) ([]byte, error) {
-	dependencies := make([]any, len(spec.Dependencies))
-	for index, dependency := range spec.Dependencies {
-		dependencies[index] = canonicalDependencyReference(dependency)
-	}
-	dependencyPlans := make([]any, len(spec.DependencyPlans))
-	for index, dependencyPlan := range spec.DependencyPlans {
-		dependencyPlans[index] = canonicalDependencyPlan(dependencyPlan)
-	}
-	managed := make([]any, len(spec.ManagedResources))
-	for index, resource := range spec.ManagedResources {
-		conditions := make([]any, len(resource.Readiness.Conditions))
-		for i, condition := range resource.Readiness.Conditions {
-			conditions[i] = map[string]any{"type": condition.Type, "status": condition.Status}
-		}
-		required := make([]any, len(resource.Readiness.RequiredResources))
-		for i, reference := range resource.Readiness.RequiredResources {
-			required[i] = map[string]any{
-				"apiVersion": reference.APIVersion, "kind": reference.Kind,
-				"apiResource": reference.APIResource, "namespace": reference.Namespace, "name": reference.Name,
-			}
-		}
-		checks := make([]any, len(resource.Readiness.Checks))
-		for i, check := range resource.Readiness.Checks {
-			checks[i] = map[string]any{
-				"type": string(check.Type), "hostname": check.Hostname,
-				"service": map[string]any{"namespace": check.Service.Namespace, "name": check.Service.Name},
-			}
-		}
-		dependsOn := make([]any, len(resource.DependsOn))
-		for i, dependency := range resource.DependsOn {
-			dependsOn[i] = dependency
-		}
-		managed[index] = map[string]any{
-			"id": resource.ID, "scope": string(resource.Scope), "apiVersion": resource.APIVersion,
-			"kind": resource.Kind, "apiResource": resource.APIResource, "namespace": resource.Namespace,
-			"name": resource.Name, "manifestJSON": resource.ManifestJSON, "dependsOn": dependsOn,
-			"readiness": map[string]any{
-				"conditions": conditions, "requiredResources": required, "checks": checks,
-				"timeoutSeconds": resource.Readiness.TimeoutSeconds,
-			},
-			"deletionPolicy": string(resource.DeletionPolicy),
-		}
-	}
-	protected := make([]any, len(spec.ProtectedSecrets))
-	for index, secret := range spec.ProtectedSecrets {
-		opaqueData := make([]any, len(secret.OpaqueData))
-		for i, mapping := range secret.OpaqueData {
-			opaqueData[i] = map[string]any{"key": mapping.Key, "inputKey": mapping.InputKey}
-		}
-		protected[index] = map[string]any{
-			"id": secret.ID, "namespace": secret.Namespace, "name": secret.Name,
-			"builderType": string(secret.BuilderType), "username": secret.Username,
-			"passwordInputKey": secret.PasswordInputKey, "opaqueData": opaqueData,
-			"registry": secret.Registry, "email": secret.Email,
-			"deletionPolicy": string(secret.DeletionPolicy),
-		}
-	}
-	plan := map[string]any{
-		"clusterID": spec.ClusterID, "catalogueChartID": spec.CatalogueChartID,
-		"planVersion": spec.PlanVersion, "executionMode": string(spec.ExecutionMode),
-		"release": canonicalRelease(spec.Release),
-		"role":    string(spec.Role), "dependencies": dependencies, "dependencyPlans": dependencyPlans,
-		"managedResources": managed,
-		"deletionPolicy":   string(spec.DeletionPolicy),
-	}
-	if spec.SecretInputRef != nil {
-		plan["secretInputRef"] = map[string]any{
-			"namespace": spec.SecretInputRef.Namespace,
-			"name":      spec.SecretInputRef.Name,
-		}
-	}
-	if len(spec.ProtectedSecrets) != 0 {
-		plan["protectedSecrets"] = protected
-	}
-	if spec.Uninstall != nil {
-		plan["uninstall"] = canonicalUninstall(*spec.Uninstall)
-	}
-	if spec.ExternalDetection != nil {
-		plan["externalDetection"] = canonicalExternalDetection(*spec.ExternalDetection)
-	}
-	var output bytes.Buffer
-	if err := writeCanonicalJSON(&output, plan); err != nil {
-		return nil, err
-	}
-	return output.Bytes(), nil
-}
-
-func canonicalDependencyPlan(plan applicationv1.DependencyPlan) map[string]any {
-	dependencies := make([]any, len(plan.Dependencies))
-	for index, dependency := range plan.Dependencies {
-		dependencies[index] = canonicalDependencyReference(dependency)
-	}
-	canonical := map[string]any{
-		"name": plan.Name, "catalogueChartID": plan.CatalogueChartID,
-		"planDigest": plan.PlanDigest, "release": canonicalRelease(plan.Release),
-		"dependencies":   dependencies,
-		"deletionPolicy": string(plan.DeletionPolicy),
-	}
-	if plan.Uninstall != nil {
-		canonical["uninstall"] = canonicalUninstall(*plan.Uninstall)
-	}
-	if plan.ExternalDetection != nil {
-		canonical["externalDetection"] = canonicalExternalDetection(*plan.ExternalDetection)
-	}
-	return canonical
-}
-
-func canonicalExternalDetection(detection applicationv1.ExternalDetectionSpec) map[string]any {
-	return map[string]any{"detector": string(detection.Detector)}
-}
-
-func canonicalUninstall(uninstall applicationv1.UninstallSpec) map[string]any {
-	actions := make([]any, len(uninstall.PreActions))
-	for index, action := range uninstall.PreActions {
-		resource := map[string]any{
-			"apiVersion": action.Resource.APIVersion,
-			"kind":       action.Resource.Kind,
-			"name":       action.Resource.Name,
-		}
-		if action.Resource.Namespace != "" {
-			resource["namespace"] = action.Resource.Namespace
-		}
-		actions[index] = map[string]any{
-			"type": string(action.Type), "resource": resource,
-			"patchType": string(action.PatchType), "patchJSON": action.PatchJSON,
-		}
-	}
-	return map[string]any{"preActions": actions}
-}
-
-func canonicalDependencyReference(reference applicationv1.DependencyReference) map[string]any {
-	return map[string]any{
-		"name": reference.Name, "catalogueChartID": reference.CatalogueChartID,
-		"planDigest": reference.PlanDigest,
-	}
-}
-
-func canonicalRelease(release applicationv1.ReleaseSpec) map[string]any {
-	canonical := map[string]any{
-		"chartID": release.ChartID, "repositoryURL": release.RepositoryURL,
-		"chart": release.Chart, "version": release.Version,
-		"releaseName": release.ReleaseName, "targetNamespace": release.TargetNamespace,
-		"createNamespace": release.CreateNamespace, "valuesContent": release.ValuesContent,
-	}
-	if release.AuthSecret != nil {
-		canonical["authSecret"] = map[string]any{"name": release.AuthSecret.Name}
-	}
-	return canonical
-}
-
-func Digest(canonical []byte) string {
-	sum := sha256.Sum256(canonical)
-	return "sha256-" + base64.RawURLEncoding.EncodeToString(sum[:])
-}
-
-func writeCanonicalJSON(output *bytes.Buffer, value any) error {
-	switch typed := value.(type) {
-	case map[string]any:
-		keys := make([]string, 0, len(typed))
-		for key := range typed {
-			if !utf8.ValidString(key) {
-				return fmt.Errorf("object key is not valid UTF-8")
-			}
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		output.WriteByte('{')
-		for index, key := range keys {
-			if index > 0 {
-				output.WriteByte(',')
-			}
-			if err := writeJSONString(output, key); err != nil {
-				return err
-			}
-			output.WriteByte(':')
-			if err := writeCanonicalJSON(output, typed[key]); err != nil {
-				return err
-			}
-		}
-		output.WriteByte('}')
-	case []any:
-		output.WriteByte('[')
-		for index, item := range typed {
-			if index > 0 {
-				output.WriteByte(',')
-			}
-			if err := writeCanonicalJSON(output, item); err != nil {
-				return err
-			}
-		}
-		output.WriteByte(']')
-	case string:
-		return writeJSONString(output, typed)
-	case bool:
-		output.WriteString(strconv.FormatBool(typed))
-	case int:
-		output.WriteString(strconv.Itoa(typed))
-	case int8:
-		output.WriteString(strconv.FormatInt(int64(typed), 10))
-	case int16:
-		output.WriteString(strconv.FormatInt(int64(typed), 10))
-	case int32:
-		output.WriteString(strconv.FormatInt(int64(typed), 10))
-	case int64:
-		output.WriteString(strconv.FormatInt(typed, 10))
-	case uint:
-		output.WriteString(strconv.FormatUint(uint64(typed), 10))
-	case uint8:
-		output.WriteString(strconv.FormatUint(uint64(typed), 10))
-	case uint16:
-		output.WriteString(strconv.FormatUint(uint64(typed), 10))
-	case uint32:
-		output.WriteString(strconv.FormatUint(uint64(typed), 10))
-	case uint64:
-		output.WriteString(strconv.FormatUint(typed, 10))
-	case json.Number:
-		if strings.ContainsAny(string(typed), ".eE") {
-			return fmt.Errorf("floating-point values are not canonical")
-		}
-		integer, err := strconv.ParseInt(string(typed), 10, 64)
-		if err != nil || strconv.FormatInt(integer, 10) != string(typed) {
-			return fmt.Errorf("invalid canonical integer %q", typed)
-		}
-		output.WriteString(string(typed))
-	default:
-		return fmt.Errorf("unsupported canonical value type %T", value)
-	}
-	return nil
-}
-
-func writeJSONString(output *bytes.Buffer, value string) error {
-	if !utf8.ValidString(value) {
-		return fmt.Errorf("string is not valid UTF-8")
-	}
-	const hex = "0123456789abcdef"
-	output.WriteByte('"')
-	for _, codepoint := range value {
-		switch codepoint {
-		case '"':
-			output.WriteString(`\"`)
-		case '\\':
-			output.WriteString(`\\`)
-		case '\b':
-			output.WriteString(`\b`)
-		case '\t':
-			output.WriteString(`\t`)
-		case '\n':
-			output.WriteString(`\n`)
-		case '\f':
-			output.WriteString(`\f`)
-		case '\r':
-			output.WriteString(`\r`)
-		default:
-			if codepoint >= 0x20 && codepoint <= 0x7e {
-				output.WriteRune(codepoint)
-			} else if codepoint <= 0xffff {
-				writeUTF16Escape(output, uint16(codepoint), hex)
-			} else {
-				high, low := utf16.EncodeRune(codepoint)
-				writeUTF16Escape(output, uint16(high), hex)
-				writeUTF16Escape(output, uint16(low), hex)
-			}
-		}
-	}
-	output.WriteByte('"')
-	return nil
-}
-
-func writeUTF16Escape(output *bytes.Buffer, value uint16, hex string) {
-	output.WriteString(`\u`)
-	output.WriteByte(hex[(value>>12)&0xf])
-	output.WriteByte(hex[(value>>8)&0xf])
-	output.WriteByte(hex[(value>>4)&0xf])
-	output.WriteByte(hex[value&0xf])
 }
 
 func validateRepositoryURL(raw string) *PlanError {

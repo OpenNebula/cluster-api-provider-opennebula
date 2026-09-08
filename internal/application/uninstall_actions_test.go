@@ -23,16 +23,17 @@ import (
 	"testing"
 	"time"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
-func TestDependencyPlanUninstallMaterializesIntoV1Alpha5Child(t *testing.T) {
+func TestDependencyPlanUninstallMaterializesIntoV1Beta1Child(t *testing.T) {
 	plan := dependencyPlanForTest("oneks-longhorn", "longhorn", nil)
 	plan.Release.TargetNamespace = "longhorn-system"
 	plan.Uninstall = longhornUninstall()
@@ -50,7 +51,7 @@ func TestDependencyPlanUninstallMaterializesIntoV1Alpha5Child(t *testing.T) {
 		t.Fatal(err)
 	}
 	if child.Spec.PlanVersion != applicationv1.PlanVersion || child.Spec.Role != applicationv1.ApplicationRoleDependency || child.Spec.Uninstall == nil {
-		t.Fatalf("materialized dependency lacks v1alpha5 uninstall action: %#v", child.Spec)
+		t.Fatalf("materialized dependency lacks v1beta1 uninstall action: %#v", child.Spec)
 	}
 	if got := child.Spec.Uninstall.PreActions[0]; got.Resource.Namespace != "longhorn-system" || got.PatchJSON != `{"value":"true"}` {
 		t.Fatalf("materialized Longhorn action = %#v", got)
@@ -60,7 +61,7 @@ func TestDependencyPlanUninstallMaterializesIntoV1Alpha5Child(t *testing.T) {
 func TestLonghornDependencyChildDigestMatchesOneKSCompiler(t *testing.T) {
 	plan := applicationv1.DependencyPlan{
 		Name: "oneks-dep-oneks-longhorn-e705e7af33775af3fd13", CatalogueChartID: "e3a6dcfe-abca-406a-a73b-d173b75b143a",
-		PlanDigest: "sha256-uqTQFTmA5703_2Q4amucXWBarTcoevSXmcZ6gAa3WH0",
+		PlanDigest: "sha256-OX9V_FDgy8piq7yTmDkJ-80lM9gcToVBJ4FEkkmFlEI",
 		Release: applicationv1.ReleaseSpec{
 			ChartID: "e3a6dcfe-abca-406a-a73b-d173b75b143a", RepositoryURL: "https://charts.longhorn.io",
 			Chart: "longhorn", Version: "v1.12.0", ReleaseName: "oneks-longhorn",
@@ -80,8 +81,7 @@ func TestLonghornDependencyChildDigestMatchesOneKSCompiler(t *testing.T) {
 
 	root := applicationv1.OneKSApplicationSpec{
 		ClusterID: "42", CatalogueChartID: "d511b694-d868-4e40-8224-fdf6a0ca3383",
-		PlanVersion: applicationv1.PlanVersion, ExecutionMode: applicationv1.ExecutionModeExecute,
-		Release: applicationv1.ReleaseSpec{
+		PlanVersion: applicationv1.PlanVersion, Release: applicationv1.ReleaseSpec{
 			ChartID: "d511b694-d868-4e40-8224-fdf6a0ca3383", RepositoryURL: "https://prometheus-community.github.io/helm-charts",
 			Chart: "kube-prometheus-stack", Version: "v87.12.2", ReleaseName: "oneks-root",
 			TargetNamespace: "catalogue-workloads", CreateNamespace: false,
@@ -133,7 +133,7 @@ func TestDependencyUninstallActionsAffectChildAndRootDigestsInOrder(t *testing.T
 		},
 	}
 	for index, mutate := range mutations {
-		changed := cloneJSON(t, base)
+		changed := *base.DeepCopy()
 		mutate(&changed)
 		refreshDependencyPlanDigestForTest("42", &changed)
 		changedRoot := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(changed)}, []applicationv1.DependencyPlan{changed})
@@ -242,7 +242,7 @@ func TestDependencyPreUninstallPatchFailureKeepsHelmAndFinalizer(t *testing.T) {
 	}
 	assertExists(t, ctx, reconciler.Client, helmChartObject(helm.GetName()), HelmChartNamespace, helm.GetName())
 	stored := getApplication(t, ctx, reconciler.Client, app)
-	if !containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) || strings.Join(writes.writes, ",") != "patch:Setting" {
+	if !controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) || strings.Join(writes.writes, ",") != "patch:Setting" {
 		t.Fatalf("patch failure advanced deletion: finalizers=%#v writes=%#v", stored.Finalizers, writes.writes)
 	}
 }
@@ -265,7 +265,7 @@ func TestDependencyTerminatingHelmSkipsPreActionAndRepeatedDelete(t *testing.T) 
 		t.Fatalf("terminating Helm retried preAction or Delete: gets=%d deletes=%d writes=%#v", writes.preActionGets, writes.helmDeletes, writes.writes)
 	}
 	stored := getApplication(t, ctx, reconciler.Client, app)
-	if !containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) {
+	if !controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) {
 		t.Fatalf("terminating Helm allowed finalizer removal: %#v", stored.Finalizers)
 	}
 }
@@ -318,9 +318,7 @@ func TestDependencyPreUninstallRunsOnceThenCleanupContinuesAfterHelmDisappears(t
 		t.Fatalf("verify finalized HelmChart: %v", err)
 	}
 
-	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(app)}); err != nil {
-		t.Fatalf("continue cleanup after Helm disappearance: %v", err)
-	}
+	reconcileOnce(t, ctx, reconciler, app)
 	assertApplicationNotFound(t, ctx, reconciler.Client, app.Name)
 }
 

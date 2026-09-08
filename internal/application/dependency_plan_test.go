@@ -23,7 +23,7 @@ import (
 	"strings"
 	"testing"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
 	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsvalidation "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/validation"
@@ -31,7 +31,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/yaml"
 )
 
@@ -39,8 +38,8 @@ func TestGeneratedCRDUsesOnlyCurrentPlanVersion(t *testing.T) {
 	payload := generatedApplicationCRD(t)
 	text := string(payload)
 	for _, required := range []string{
-		"- oneks.opennebula.io/plan-v1alpha5",
-		"plan-v1alpha5 requires role",
+		"- oneks.opennebula.io/plan-v1beta1",
+		"plan-v1beta1 requires role",
 		"each direct Root dependency must resolve to exactly one matching",
 		"maxItems: 16",
 	} {
@@ -52,9 +51,23 @@ func TestGeneratedCRDUsesOnlyCurrentPlanVersion(t *testing.T) {
 	if err := yaml.Unmarshal(payload, external); err != nil {
 		t.Fatalf("decode generated OneKSApplication CRD: %v", err)
 	}
+	if len(external.Spec.Versions) != 1 || external.Spec.Versions[0].Name != "v1beta1" || !external.Spec.Versions[0].Storage || !external.Spec.Versions[0].Served {
+		t.Fatal("CRD must serve and store only v1beta1")
+	}
 	specSchema := external.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"]
 	if _, exists := specSchema.Properties["resources"]; exists {
 		t.Fatal("generated current plan schema still exposes removed resources")
+	}
+	if _, exists := specSchema.Properties["executionMode"]; exists {
+		t.Fatal("CRD still exposes executionMode")
+	}
+	managed := specSchema.Properties["managedResources"].Items.Schema
+	if _, exists := managed.Properties["apiResource"]; exists {
+		t.Fatal("CRD still exposes managed apiResource")
+	}
+	required := managed.Properties["readiness"].Properties["requiredResources"].Items.Schema
+	if _, exists := required.Properties["apiResource"]; exists {
+		t.Fatal("CRD still exposes readiness apiResource")
 	}
 	secretInput := specSchema.Properties["secretInputRef"]
 	if _, exists := secretInput.Properties["uid"]; exists {
@@ -68,7 +81,7 @@ func TestGeneratedCRDUsesOnlyCurrentPlanVersion(t *testing.T) {
 	if err := apiextensionsv1.Convert_v1_CustomResourceDefinition_To_apiextensions_CustomResourceDefinition(external, internal, nil); err != nil {
 		t.Fatalf("convert generated OneKSApplication CRD: %v", err)
 	}
-	internal.Status.StoredVersions = []string{"v1alpha5"}
+	internal.Status.StoredVersions = []string{"v1beta1"}
 	if errors := apiextensionsvalidation.ValidateCustomResourceDefinition(context.Background(), internal); len(errors) != 0 {
 		t.Fatalf("generated OneKSApplication CRD is invalid: %v", errors.ToAggregate())
 	}
@@ -155,10 +168,7 @@ func TestRootRejectsArbitraryDependencyApplicationName(t *testing.T) {
 	plan.Name = "arbitrary-dependency"
 	app := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
 	assertPlanError(t, app, "InvalidDependencyApplicationName")
-	canonical, err := CanonicalPlan(dependencyPlanChildSpec("42", plan))
-	if err != nil {
-		t.Fatalf("canonicalize renamed dependency child: %v", err)
-	}
+	canonical := canonicalSpec(t, dependencyPlanChildSpec("42", plan))
 	if got := Digest(canonical); got != digestBeforeRename {
 		t.Fatalf("metadata name changed child spec digest: got %s, want %s", got, digestBeforeRename)
 	}
@@ -217,14 +227,11 @@ func TestDependencyPlanDigestCommitsToCanonicalChildSpec(t *testing.T) {
 	d := dependencyPlanForTest("oneks-d", "chart-d", []applicationv1.DependencyReference{dependencyReferenceForPlan(e)})
 	for _, plan := range []applicationv1.DependencyPlan{d, e} {
 		child := dependencyPlanChildSpec("42", plan)
-		canonical, err := CanonicalPlan(child)
-		if err != nil {
-			t.Fatalf("canonicalize child %s: %v", plan.Name, err)
-		}
+		canonical := canonicalSpec(t, child)
 		if got := Digest(canonical); got != plan.PlanDigest {
 			t.Fatalf("child %s digest = %s, want %s", plan.Name, got, plan.PlanDigest)
 		}
-		if child.ExecutionMode != applicationv1.ExecutionModeExecute || child.Role != applicationv1.ApplicationRoleDependency || child.DependencyPlans != nil {
+		if child.Role != applicationv1.ApplicationRoleDependency || child.DependencyPlans != nil {
 			t.Fatalf("child %s materialized with wrong fixed fields: %#v", plan.Name, child)
 		}
 	}
@@ -512,10 +519,7 @@ func TestCurrentPlanRejectsInvalidRoleNamespaceAndDependencyContracts(t *testing
 
 func TestCurrentPlanDependencyFieldsAffectDigestWithoutArraySorting(t *testing.T) {
 	app := validRootPlan(t)
-	canonical, err := CanonicalPlan(app.Spec)
-	if err != nil {
-		t.Fatalf("canonicalize base plan: %v", err)
-	}
+	canonical := canonicalSpec(t, app.Spec)
 	baseDigest := Digest(canonical)
 
 	mutations := []struct {
@@ -532,10 +536,7 @@ func TestCurrentPlanDependencyFieldsAffectDigestWithoutArraySorting(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			spec := *app.Spec.DeepCopy()
 			test.mutate(&spec)
-			changed, err := CanonicalPlan(spec)
-			if err != nil {
-				t.Fatalf("canonicalize changed plan: %v", err)
-			}
+			changed := canonicalSpec(t, spec)
 			if got := Digest(changed); got == baseDigest {
 				t.Fatalf("%s did not affect the current plan digest", test.name)
 			}
@@ -547,15 +548,9 @@ func TestCurrentPlanDependencyFieldsAffectDigestWithoutArraySorting(t *testing.T
 		Name: "oneks-grafana", CatalogueChartID: "grafana", PlanDigest: "sha256-" + strings.Repeat("C", 43),
 	}
 	spec.Dependencies = append(spec.Dependencies, secondReference)
-	forward, err := CanonicalPlan(spec)
-	if err != nil {
-		t.Fatalf("canonicalize forward dependencies: %v", err)
-	}
+	forward := canonicalSpec(t, spec)
 	spec.Dependencies[0], spec.Dependencies[1] = spec.Dependencies[1], spec.Dependencies[0]
-	reversed, err := CanonicalPlan(spec)
-	if err != nil {
-		t.Fatalf("canonicalize reversed dependencies: %v", err)
-	}
+	reversed := canonicalSpec(t, spec)
 	if bytes.Equal(forward, reversed) {
 		t.Fatal("dependency array order was not preserved by canonicalization")
 	}
@@ -578,12 +573,8 @@ func TestCurrentPlanNamespacePrecheckUsesTargetAndSkipsCreation(t *testing.T) {
 	missing.Spec.Release.CreateNamespace = false
 	refreshPlanDigest(missing)
 	reconciler, _ := testReconciler(t, missing)
-	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: missing.Namespace, Name: missing.Name}}); err != nil {
-		t.Fatalf("reconcile missing monitoring namespace: %v", err)
-	}
-	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: missing.Namespace, Name: missing.Name}}); err != nil {
-		t.Fatalf("reconcile missing monitoring namespace after finalizer: %v", err)
-	}
+	reconcileOnce(t, ctx, reconciler, missing)
+	reconcileOnce(t, ctx, reconciler, missing)
 	stored := &applicationv1.OneKSApplication{}
 	if err := reconciler.Get(ctx, types.NamespacedName{Namespace: missing.Namespace, Name: missing.Name}, stored); err != nil {
 		t.Fatalf("get application: %v", err)
@@ -594,9 +585,7 @@ func TestCurrentPlanNamespacePrecheckUsesTargetAndSkipsCreation(t *testing.T) {
 
 	creating := validDependencyPlanApplication(t)
 	reconciler, _ = testReconciler(t, creating)
-	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: creating.Namespace, Name: creating.Name}}); err != nil {
-		t.Fatalf("reconcile namespace-creating dependency: %v", err)
-	}
+	reconcileOnce(t, ctx, reconciler, creating)
 	stored = &applicationv1.OneKSApplication{}
 	if err := reconciler.Get(ctx, types.NamespacedName{Namespace: creating.Namespace, Name: creating.Name}, stored); err != nil {
 		t.Fatalf("get namespace-creating application: %v", err)
@@ -615,7 +604,7 @@ func validDependencyPlanApplication(t *testing.T) *applicationv1.OneKSApplicatio
 		},
 		Spec: applicationv1.OneKSApplicationSpec{
 			ClusterID: "42", CatalogueChartID: "prometheus", PlanVersion: applicationv1.PlanVersion,
-			ExecutionMode: applicationv1.ExecutionModeExecute, Role: applicationv1.ApplicationRoleDependency,
+			Role: applicationv1.ApplicationRoleDependency,
 			Release: applicationv1.ReleaseSpec{
 				ChartID: "prometheus", RepositoryURL: "https://prometheus-community.github.io/helm-charts",
 				Chart: "kube-prometheus-stack", Version: "87.12.2", ReleaseName: "oneks-prometheus",

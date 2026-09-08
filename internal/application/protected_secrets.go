@@ -24,7 +24,7 @@ import (
 	"reflect"
 	"sort"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -285,7 +285,8 @@ func (r *Reconciler) preflightProtectedSecretOwnership(ctx context.Context, app 
 	return nil
 }
 
-func (r *Reconciler) reconcileProtectedSecrets(ctx context.Context, app *applicationv1.OneKSApplication) (bool, error) {
+// applyProtectedSecrets returns false when inputs or concurrent changes require a retry.
+func (r *Reconciler) applyProtectedSecrets(ctx context.Context, app *applicationv1.OneKSApplication) (bool, error) {
 	input, missing, err := r.readSecretInput(ctx, app)
 	if err != nil || missing {
 		return false, err
@@ -338,8 +339,7 @@ func (r *Reconciler) reconcileProtectedSecrets(ctx context.Context, app *applica
 			return false, err
 		}
 	}
-	observed, err := r.observeProtectedSecrets(ctx, app, true)
-	return err == nil && observed.ready, err
+	return true, nil
 }
 
 func desiredProtectedSecret(app *applicationv1.OneKSApplication, resource applicationv1.ProtectedSecretSpec, input *corev1.Secret) (*corev1.Secret, error) {

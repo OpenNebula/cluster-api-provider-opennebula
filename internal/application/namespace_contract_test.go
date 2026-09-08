@@ -42,10 +42,7 @@ func TestCanonicalPlanPreservesNamespaceContract(t *testing.T) {
 	app.Spec.Release.CreateNamespace = true
 	refreshDigest(t, app)
 
-	canonical, err := CanonicalPlan(app.Spec)
-	if err != nil {
-		t.Fatal(err)
-	}
+	canonical := canonicalSpec(t, app.Spec)
 	var input map[string]any
 	if err := json.Unmarshal(canonical, &input); err != nil {
 		t.Fatal(err)

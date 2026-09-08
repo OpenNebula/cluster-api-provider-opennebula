@@ -17,9 +17,6 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.executionMode
-      name: Mode
-      type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
@@ -29,7 +26,7 @@ spec:
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
-    name: v1alpha5
+    name: v1beta1
     schema:
       openAPIV3Schema:
         properties:
@@ -280,11 +277,6 @@ spec:
                     rule: '!has(self.release.authSecret)'
                 maxItems: 16
                 type: array
-              executionMode:
-                enum:
-                - Observe
-                - Execute
-                type: string
               externalDetection:
                 properties:
                   detector:
@@ -297,9 +289,6 @@ spec:
               managedResources:
                 items:
                   properties:
-                    apiResource:
-                      maxLength: 128
-                      type: string
                     apiVersion:
                       maxLength: 128
                       minLength: 1
@@ -390,9 +379,6 @@ spec:
                         requiredResources:
                           items:
                             properties:
-                              apiResource:
-                                maxLength: 128
-                                type: string
                               apiVersion:
                                 maxLength: 128
                                 minLength: 1
@@ -450,7 +436,7 @@ spec:
                 type: string
               planVersion:
                 enum:
-                - oneks.opennebula.io/plan-v1alpha5
+                - oneks.opennebula.io/plan-v1beta1
                 type: string
               protectedSecrets:
                 items:
@@ -677,7 +663,6 @@ spec:
             - catalogueChartID
             - clusterID
             - deletionPolicy
-            - executionMode
             - planDigest
             - planVersion
             - release
@@ -685,7 +670,7 @@ spec:
             x-kubernetes-validations:
             - message: spec is immutable
               rule: self == oldSelf
-            - message: plan-v1alpha5 requires role
+            - message: plan-v1beta1 requires role
               rule: has(self.role)
             - message: Dependency must not contain Root-only dependencyPlans, managed
                 resources, or protected Secret fields
@@ -706,12 +691,12 @@ spec:
                 && self.protectedSecrets.filter(p, p.builderType == ''basicAuthSecret''
                 && p.__namespace__ == ''kube-system'' && p.name == self.release.authSecret.name).size()
                 == 1)'
-            - message: plan-v1alpha5 requires secretInputRef exactly when protectedSecrets
+            - message: plan-v1beta1 requires secretInputRef exactly when protectedSecrets
                 are present
               rule: '((!has(self.protectedSecrets) || size(self.protectedSecrets)
                 == 0) ? !has(self.secretInputRef) : has(self.secretInputRef))'
-            - message: plan-v1alpha5 permits at most 16 combined managedResources
-                and protectedSecrets
+            - message: plan-v1beta1 permits at most 16 combined managedResources and
+                protectedSecrets
               rule: '!has(self.managedResources) || !has(self.protectedSecrets) ||
                 size(self.managedResources) + size(self.protectedSecrets) <= 16'
             - message: dependency names must be unique
@@ -851,7 +836,6 @@ spec:
                 - Ready
                 - Failed
                 - Deleting
-                - Observing
                 type: string
               progress:
                 properties:
@@ -888,7 +872,6 @@ spec:
                       - Failed
                       - Deleting
                       - Retained
-                      - Observing
                       maxLength: 32
                       type: string
                     readinessStartedAt:

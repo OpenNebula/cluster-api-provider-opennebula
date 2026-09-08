@@ -32,7 +32,7 @@ import (
 
 const applicationSelector = "app.kubernetes.io/managed-by=oneks,applications.oneks.opennebula.io/producer=oneks-server"
 
-var applicationGVR = schema.GroupVersionResource{Group: "oneks.opennebula.io", Version: "v1alpha5", Resource: "oneksapplications"}
+var applicationGVR = schema.GroupVersionResource{Group: "oneks.opennebula.io", Version: "v1beta1", Resource: "oneksapplications"}
 
 type Monitor struct {
 	nodeFactory          informers.SharedInformerFactory
@@ -41,15 +41,24 @@ type Monitor struct {
 	pods                 cache.SharedIndexInformer
 	applications         cache.SharedIndexInformer
 	reports              *reportQueue
+	resourcePoller       *resourcePoller
 	resourcePollInterval time.Duration
 
 	ready atomic.Bool
 }
 
 func New(config Config, client kubernetes.Interface, dynamicClient dynamic.Interface, sender Sender) (*Monitor, error) {
+	if err := config.defaultResourcePolling(); err != nil {
+		return nil, err
+	}
 	m := &Monitor{
 		reports:              newReportQueue(sender),
 		resourcePollInterval: config.ResourcePollInterval,
+	}
+	m.resourcePoller = &resourcePoller{
+		dynamicClient: dynamicClient,
+		configMaps:    client.CoreV1().ConfigMaps(config.ResourceConfigNamespace),
+		config:        config, reports: m.reports, now: time.Now,
 	}
 	// Disable periodic resync; reconciliation is driven by informer events.
 	m.nodeFactory = informers.NewSharedInformerFactory(client, 0)
@@ -80,6 +89,9 @@ func New(config Config, client kubernetes.Interface, dynamicClient dynamic.Inter
 
 func (m *Monitor) Run(ctx context.Context) error {
 	defer runtime.HandleCrash()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go m.resourcePoller.Run(ctx)
 	m.nodeFactory.Start(ctx.Done())
 	m.applicationFactory.Start(ctx.Done())
 	if !cache.WaitForCacheSync(ctx.Done(), m.nodes.HasSynced, m.pods.HasSynced, m.applications.HasSynced) {
@@ -105,12 +117,6 @@ func (m *Monitor) runPodSnapshots(ctx context.Context) {
 }
 
 func (m *Monitor) Ready() bool { return m.ready.Load() }
-
-// EnqueueCallback adds a payload to the monitor's bounded, rate-limited,
-// coalescing delivery queue.
-func (m *Monitor) EnqueueCallback(identity string, payload CallbackPayload) bool {
-	return m.reports.Add(identity, payload)
-}
 
 func (m *Monitor) onNode(obj any, event string) {
 	node, ok := objectFromEvent[*corev1.Node](obj)

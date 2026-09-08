@@ -24,9 +24,10 @@ import (
 	"testing"
 	"time"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -77,7 +78,7 @@ func TestManagedResourcePlanManagedFieldsAffectDigest(t *testing.T) {
 	base.ManagedResources[0].DependsOn = []string{"anchor"}
 	base.ManagedResources[0].Readiness.Conditions = []applicationv1.ManagedResourceCondition{{Type: "Ready", Status: "True"}}
 	base.ManagedResources[0].Readiness.RequiredResources = []applicationv1.ManagedResourceReference{{
-		APIVersion: "v1", Kind: "Secret", APIResource: "secrets", Namespace: "runai", Name: "license",
+		APIVersion: "v1", Kind: "Secret", Namespace: "runai", Name: "license",
 	}}
 	base.ManagedResources[0].Readiness.Checks = []applicationv1.ManagedResourceCheck{{
 		Type: applicationv1.ManagedResourceCheckDNSMatchesService, Hostname: "backend.runai.svc",
@@ -86,22 +87,20 @@ func TestManagedResourcePlanManagedFieldsAffectDigest(t *testing.T) {
 	base.ManagedResources = append(base.ManagedResources, managedConfigMap("anchor", "runai", "anchor", nil))
 	baseDigest := digestSpec(t, base)
 	mutations := map[string]func(*applicationv1.ManagedResourceSpec){
-		"id":                   func(r *applicationv1.ManagedResourceSpec) { r.ID += "-x" },
-		"scope":                func(r *applicationv1.ManagedResourceSpec) { r.Scope = applicationv1.ManagedResourceScopeCluster },
-		"apiVersion":           func(r *applicationv1.ManagedResourceSpec) { r.APIVersion = "v2" },
-		"kind":                 func(r *applicationv1.ManagedResourceSpec) { r.Kind = "Other" },
-		"apiResource":          func(r *applicationv1.ManagedResourceSpec) { r.APIResource = "widgets" },
-		"namespace":            func(r *applicationv1.ManagedResourceSpec) { r.Namespace = "other" },
-		"name":                 func(r *applicationv1.ManagedResourceSpec) { r.Name += "-x" },
-		"manifestJSON":         func(r *applicationv1.ManagedResourceSpec) { r.ManifestJSON += " " },
-		"dependsOn":            func(r *applicationv1.ManagedResourceSpec) { r.DependsOn[0] = "other" },
-		"condition type":       func(r *applicationv1.ManagedResourceSpec) { r.Readiness.Conditions[0].Type = "Available" },
-		"condition status":     func(r *applicationv1.ManagedResourceSpec) { r.Readiness.Conditions[0].Status = "False" },
-		"required apiVersion":  func(r *applicationv1.ManagedResourceSpec) { r.Readiness.RequiredResources[0].APIVersion = "v2" },
-		"required kind":        func(r *applicationv1.ManagedResourceSpec) { r.Readiness.RequiredResources[0].Kind = "ConfigMap" },
-		"required apiResource": func(r *applicationv1.ManagedResourceSpec) { r.Readiness.RequiredResources[0].APIResource = "other" },
-		"required namespace":   func(r *applicationv1.ManagedResourceSpec) { r.Readiness.RequiredResources[0].Namespace = "other" },
-		"required name":        func(r *applicationv1.ManagedResourceSpec) { r.Readiness.RequiredResources[0].Name = "other" },
+		"id":                  func(r *applicationv1.ManagedResourceSpec) { r.ID += "-x" },
+		"scope":               func(r *applicationv1.ManagedResourceSpec) { r.Scope = applicationv1.ManagedResourceScopeCluster },
+		"apiVersion":          func(r *applicationv1.ManagedResourceSpec) { r.APIVersion = "v2" },
+		"kind":                func(r *applicationv1.ManagedResourceSpec) { r.Kind = "Other" },
+		"namespace":           func(r *applicationv1.ManagedResourceSpec) { r.Namespace = "other" },
+		"name":                func(r *applicationv1.ManagedResourceSpec) { r.Name += "-x" },
+		"manifestJSON":        func(r *applicationv1.ManagedResourceSpec) { r.ManifestJSON += " " },
+		"dependsOn":           func(r *applicationv1.ManagedResourceSpec) { r.DependsOn[0] = "other" },
+		"condition type":      func(r *applicationv1.ManagedResourceSpec) { r.Readiness.Conditions[0].Type = "Available" },
+		"condition status":    func(r *applicationv1.ManagedResourceSpec) { r.Readiness.Conditions[0].Status = "False" },
+		"required apiVersion": func(r *applicationv1.ManagedResourceSpec) { r.Readiness.RequiredResources[0].APIVersion = "v2" },
+		"required kind":       func(r *applicationv1.ManagedResourceSpec) { r.Readiness.RequiredResources[0].Kind = "ConfigMap" },
+		"required namespace":  func(r *applicationv1.ManagedResourceSpec) { r.Readiness.RequiredResources[0].Namespace = "other" },
+		"required name":       func(r *applicationv1.ManagedResourceSpec) { r.Readiness.RequiredResources[0].Name = "other" },
 		"check type": func(r *applicationv1.ManagedResourceSpec) {
 			r.Readiness.Checks[0].Type = applicationv1.ManagedResourceCheckType("Other")
 		},
@@ -113,7 +112,7 @@ func TestManagedResourcePlanManagedFieldsAffectDigest(t *testing.T) {
 	}
 	for name, mutate := range mutations {
 		t.Run(name, func(t *testing.T) {
-			copy := cloneJSON(t, base)
+			copy := *base.DeepCopy()
 			mutate(&copy.ManagedResources[0])
 			if got := digestSpec(t, copy); got == baseDigest {
 				t.Fatalf("changing %s did not change digest", name)
@@ -218,7 +217,7 @@ func TestManagedResourcePlanCreatesInTopologicalOrderAndGatesHelm(t *testing.T) 
 	}
 }
 
-func TestManagedResourcePlanOwnershipPreflightAndObserveAreWriteSafe(t *testing.T) {
+func TestManagedResourcePlanOwnershipPreflightIsWriteSafe(t *testing.T) {
 	ctx := context.Background()
 	app := validManagedRootPlan(t)
 	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
@@ -232,14 +231,6 @@ func TestManagedResourcePlanOwnershipPreflightAndObserveAreWriteSafe(t *testing.
 		t.Fatalf("preflight conflict wrote an earlier object: %#v", recorder.childWrites)
 	}
 
-	observe := validManagedRootPlan(t)
-	observe.Spec.ExecutionMode = applicationv1.ExecutionModeObserve
-	refreshOwnedPlan(t, observe)
-	reconciler, recorder = testReconciler(t, observe)
-	reconcileOnce(t, ctx, reconciler, observe)
-	if len(recorder.childWrites) != 0 {
-		t.Fatalf("Observe mutated generic children: %#v", recorder.childWrites)
-	}
 }
 
 func TestManagedResourcePlanRepairsOwnedDriftWithNonForcedSSA(t *testing.T) {
@@ -295,8 +286,15 @@ func TestManagedResourcePlanRequiredSecretAndDNSGateHelm(t *testing.T) {
 	if len(recorder.childWrites) != 0 {
 		t.Fatalf("DNS mismatch did not gate Helm: %#v", recorder.childWrites)
 	}
-	reconciler.DNSLookup = func(context.Context, string) ([]string, error) { return []string{"10.0.0.8"}, nil }
+	lookups := 0
+	reconciler.DNSLookup = func(context.Context, string) ([]string, error) {
+		lookups++
+		return []string{"10.0.0.8"}, nil
+	}
 	reconcileOnce(t, ctx, reconciler, app)
+	if lookups != 1 {
+		t.Fatalf("readiness must reuse the same DNS observation for Helm and status, got %d lookups", lookups)
+	}
 	if got := strings.Join(recorder.childWrites, ","); got != "create:HelmChart" {
 		t.Fatalf("satisfied readiness writes = %s", got)
 	}
@@ -356,7 +354,7 @@ func TestManagedCreateAlreadyExistsRaceRechecksOwnership(t *testing.T) {
 	if stored.Status.LastError == nil || stored.Status.LastError.Reason != "OwnershipConflict" {
 		t.Fatalf("AlreadyExists foreign object was not terminal OwnershipConflict: %#v", stored.Status)
 	}
-	conflictCondition := conditionByType(stored.Status.Conditions, ConditionOwnershipConflict)
+	conflictCondition := meta.FindStatusCondition(stored.Status.Conditions, ConditionOwnershipConflict)
 	if conflictCondition == nil || conflictCondition.Status != metav1.ConditionTrue {
 		t.Fatalf("AlreadyExists race reported inconsistent ownership condition: %#v", stored.Status.Conditions)
 	}
@@ -591,7 +589,7 @@ func validManagedRootPlan(t *testing.T) *applicationv1.OneKSApplication {
 
 func managedConfigMap(id, namespace, name string, dependencies []string) applicationv1.ManagedResourceSpec {
 	return applicationv1.ManagedResourceSpec{
-		ID: id, Scope: applicationv1.ManagedResourceScopeNamespaced, APIVersion: "v1", Kind: "ConfigMap", APIResource: "configmaps",
+		ID: id, Scope: applicationv1.ManagedResourceScopeNamespaced, APIVersion: "v1", Kind: "ConfigMap",
 		Namespace: namespace, Name: name, ManifestJSON: managedConfigMapManifest(namespace, name), DependsOn: dependencies,
 		Readiness: applicationv1.ManagedResourceReadiness{TimeoutSeconds: 60}, DeletionPolicy: applicationv1.DeletionPolicyDelete,
 	}
@@ -609,24 +607,8 @@ func refreshOwnedPlan(t *testing.T, app *applicationv1.OneKSApplication) {
 
 func digestSpec(t *testing.T, spec applicationv1.OneKSApplicationSpec) string {
 	t.Helper()
-	canonical, err := CanonicalPlan(spec)
-	if err != nil {
-		t.Fatal(err)
-	}
+	canonical := canonicalSpec(t, spec)
 	return Digest(canonical)
-}
-
-func cloneJSON[T any](t *testing.T, value T) T {
-	t.Helper()
-	payload, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var cloned T
-	if err := json.Unmarshal(payload, &cloned); err != nil {
-		t.Fatal(err)
-	}
-	return cloned
 }
 
 type metadataSecretReader struct {
@@ -637,7 +619,7 @@ type metadataSecretReader struct {
 func (r *metadataSecretReader) Get(ctx context.Context, key client.ObjectKey, object client.Object, options ...client.GetOption) error {
 	if metadata, ok := object.(*metav1.PartialObjectMetadata); ok && metadata.GroupVersionKind().Kind == "Secret" {
 		if !r.secretExists {
-			return apierrors.NewNotFound(schemaGroupResource("secrets"), key.Name)
+			return apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, key.Name)
 		}
 		metadata.SetNamespace(key.Namespace)
 		metadata.SetName(key.Name)
@@ -645,19 +627,6 @@ func (r *metadataSecretReader) Get(ctx context.Context, key client.ObjectKey, ob
 		return nil
 	}
 	return r.Reader.Get(ctx, key, object, options...)
-}
-
-func schemaGroupResource(resource string) schema.GroupResource {
-	return schema.GroupResource{Resource: resource}
-}
-
-func conditionByType(conditions []metav1.Condition, conditionType string) *metav1.Condition {
-	for index := range conditions {
-		if conditions[index].Type == conditionType {
-			return &conditions[index]
-		}
-	}
-	return nil
 }
 
 type serviceErrorReader struct {

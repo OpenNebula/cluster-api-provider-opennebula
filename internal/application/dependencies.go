@@ -17,11 +17,10 @@ limitations under the License.
 package application
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -29,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 const dependencyNameIndex = "oneks.application.directDependencyName"
@@ -99,17 +99,6 @@ func dependencyIdentityError(existing, expected *applicationv1.OneKSApplication,
 		return conflict
 	}
 	if existing.Spec.PlanDigest != expected.Spec.PlanDigest {
-		return dependencyConflict(expected.Name, "immutable spec differs from the expected dependency plan")
-	}
-	existingCanonical, err := CanonicalPlan(existing.Spec)
-	if err != nil {
-		return dependencyConflict(expected.Name, fmt.Sprintf("current spec cannot be canonicalized: %v", err))
-	}
-	expectedCanonical, err := CanonicalPlan(expected.Spec)
-	if err != nil {
-		return dependencyConflict(expected.Name, fmt.Sprintf("expected dependency spec cannot be canonicalized: %v", err))
-	}
-	if !bytes.Equal(existingCanonical, expectedCanonical) {
 		return dependencyConflict(expected.Name, "immutable spec differs from the expected dependency plan")
 	}
 	return nil
@@ -218,8 +207,6 @@ func (r *Reconciler) observeDependencies(ctx context.Context, app *applicationv1
 		switch dependency.Status.Phase {
 		case applicationv1.PhaseInstalling:
 			result.markPending(reference.Name, "DependencyInstalling", fmt.Sprintf("Direct dependency %s is installing", reference.Name))
-		case applicationv1.PhaseObserving:
-			result.markPending(reference.Name, "DependencyObserving", fmt.Sprintf("Direct dependency %s is observing", reference.Name))
 		default:
 			result.markPending(reference.Name, "DependencyPending", fmt.Sprintf("Direct dependency %s is not ready", reference.Name))
 		}
@@ -282,7 +269,7 @@ func (r *Reconciler) releaseDependencies(ctx context.Context, app *applicationv1
 func hasLiveDependencyConsumer(applications []applicationv1.OneKSApplication, dependencyName string) bool {
 	for index := range applications {
 		consumer := &applications[index]
-		if consumer.Spec.ExecutionMode != applicationv1.ExecutionModeExecute || !consumer.DeletionTimestamp.IsZero() {
+		if !consumer.DeletionTimestamp.IsZero() {
 			continue
 		}
 		for _, reference := range consumer.Spec.Dependencies {
@@ -315,7 +302,7 @@ func (r *Reconciler) releaseDependency(ctx context.Context, consumer *applicatio
 		r.event(consumer, corev1.EventTypeNormal, "DependencyRetained", fmt.Sprintf("Dependency application %s/%s retained by policy", dependency.Namespace, dependency.Name))
 		return false, nil
 	}
-	if !containsString(dependency.Finalizers, applicationv1.ApplicationFinalizer) {
+	if !controllerutil.ContainsFinalizer(dependency, applicationv1.ApplicationFinalizer) {
 		finalizers := append([]string(nil), dependency.Finalizers...)
 		_, err := r.patchApplicationFinalizers(
 			ctx, dependency,

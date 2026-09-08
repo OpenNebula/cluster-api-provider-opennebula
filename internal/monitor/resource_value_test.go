@@ -1,4 +1,4 @@
-package resourceobserver
+package monitor
 
 import (
 	"encoding/json"

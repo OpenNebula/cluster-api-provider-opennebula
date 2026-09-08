@@ -24,14 +24,16 @@ import (
 	"strings"
 	"testing"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 func TestExternalDetectionMaterializesAndChangesCanonicalDigests(t *testing.T) {
@@ -41,7 +43,7 @@ func TestExternalDetectionMaterializesAndChangesCanonicalDigests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("canonicalize dependency without detector: %v", err)
 	}
-	if got := Digest(withoutCanonical); got != "sha256-GHKwcVdzJtmSmOdJeQHMbAp_7L2TDsoLGnO7KeRq5zw" {
+	if got := Digest(withoutCanonical); got != "sha256-hD--BwpGcAPf1mLZNe192DXi0jz6B3Wk7PndqR4Z6pA" {
 		t.Fatalf("dependency digest without detector = %s", got)
 	}
 	plan.ExternalDetection = &applicationv1.ExternalDetectionSpec{Detector: applicationv1.ExternalDetectorCertManager}
@@ -57,7 +59,7 @@ func TestExternalDetectionMaterializesAndChangesCanonicalDigests(t *testing.T) {
 	if reflect.DeepEqual(withoutCanonical, withCanonical) || !strings.Contains(string(withCanonical), `"externalDetection":{"detector":"cert-manager"}`) {
 		t.Fatalf("external detector did not affect child canonical input: %s", withCanonical)
 	}
-	if got := Digest(withCanonical); got != "sha256-AZfmrfCmm7jJyLKA4z_8mqJ6bRtC84arLnv0Kyf8EG4" {
+	if got := Digest(withCanonical); got != "sha256-7Him7MnQ_nRxadO2WNrcmIMLBjubOusxKvqBSm2IW9A" {
 		t.Fatalf("cross-language external detector digest = %s", got)
 	}
 
@@ -113,7 +115,7 @@ func TestUsableExternalSelectionIsRestartStableAndNeverCreatesHelm(t *testing.T)
 
 	reconcileOnce(t, ctx, reconciler, app)
 	stored := getApplication(t, ctx, reconciler.Client, app)
-	if !containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) || stored.Annotations[ExternalSelectionAnnotation] != "" {
+	if !controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) || stored.Annotations[ExternalSelectionAnnotation] != "" {
 		t.Fatalf("selection was persisted before cleanup finalizer: finalizers=%#v annotations=%#v", stored.Finalizers, stored.Annotations)
 	}
 	reconcileOnce(t, ctx, reconciler, app)
@@ -384,7 +386,7 @@ func establishedCRD(name string) *apiextensionsv1.CustomResourceDefinition {
 
 func assertExternalCondition(t *testing.T, app *applicationv1.OneKSApplication, conditionType string, status metav1.ConditionStatus, reason string) {
 	t.Helper()
-	condition := conditionByType(app.Status.Conditions, conditionType)
+	condition := meta.FindStatusCondition(app.Status.Conditions, conditionType)
 	if condition == nil || condition.Status != status || reason != "" && condition.Reason != reason {
 		t.Fatalf("condition %s = %#v, want status %s reason %q", conditionType, condition, status, reason)
 	}

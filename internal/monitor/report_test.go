@@ -21,8 +21,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/OpenNebula/cluster-api-provider-opennebula/internal/resourceobserver"
 )
 
 func TestExistingNodeReportJSONIsStable(t *testing.T) {
@@ -101,7 +99,7 @@ func TestHTTPEncryptedSenderEncryptsResourceValue(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusNoContent, Status: "204 No Content",
 			Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
 	})
-	value := resourceobserver.ResourceValue{
+	value := ResourceValue{
 		Kind: "ResourceValue", ID: "deployment-ready",
 		APIVersion: "apps/v1", Resource: "deployments", Namespace: "payments",
 		Name: "api", Path: "status.readyReplicas", Value: int64(3),

@@ -17,13 +17,58 @@ limitations under the License.
 package application
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func TestObservedStatusPreservesFailurePriorities(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		dependencyFailed bool
+		managedFailed    bool
+		protectedFailed  bool
+		readyReason      string
+		errorReason      string
+	}{
+		{"dependency error and managed readiness failure", true, true, true, "ManagedFailed", "DependencyFailed"},
+		{"managed before protected and Helm", false, true, true, "ManagedFailed", "ManagedFailed"},
+		{"protected before Helm", false, false, true, "ProtectedFailed", "ProtectedFailed"},
+		{"Helm failure", false, false, false, "HelmFailed", "HelmFailed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			app := goldenApplication(t)
+			r, _ := testReconciler(t, app)
+			dependencies := dependencyObservation{ready: !test.dependencyFailed, terminal: test.dependencyFailed, reason: "DependencyFailed", message: "dependency"}
+			observed := observation{
+				managed:   componentObservation{failed: test.managedFailed, reason: "ManagedFailed", message: "managed"},
+				protected: componentObservation{failed: test.protectedFailed, reason: "ProtectedFailed", message: "protected"},
+				helmState: componentObservation{failed: true, reason: "HelmFailed", message: "helm"},
+			}
+			ctx := context.Background()
+			if _, err := r.recordObservedStatus(ctx, app, dependencies, observed); err != nil {
+				t.Fatal(err)
+			}
+			status := getApplication(t, ctx, r.Client, app).Status
+			ready := meta.FindStatusCondition(status.Conditions, ConditionReady)
+			if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != test.readyReason {
+				t.Fatalf("unexpected Ready: %#v", ready)
+			}
+			if status.LastError == nil || status.LastError.Reason != test.errorReason {
+				t.Fatalf("unexpected LastError: %#v", status.LastError)
+			}
+			wantPhase := applicationv1.PhaseFailed
+			if status.Phase != wantPhase {
+				t.Fatalf("phase = %s, want %s", status.Phase, wantPhase)
+			}
+		})
+	}
+}
 
 func TestNormalizeStatusEnforcesEveryRuntimeBound(t *testing.T) {
 	status := applicationv1.OneKSApplicationStatus{
@@ -67,7 +112,7 @@ func TestNormalizeStatusEnforcesEveryRuntimeBound(t *testing.T) {
 }
 
 func TestTruncatePreservesValidUTF8(t *testing.T) {
-	value := strings.Repeat("a", 510) + "🚀"
+	value := strings.Repeat("a", 510) + "\U00010000"
 	got := truncate(value, 512)
 	if !utf8.ValidString(got) || len(got) > 512 {
 		t.Fatalf("truncate produced invalid bounded UTF-8: %q", got)

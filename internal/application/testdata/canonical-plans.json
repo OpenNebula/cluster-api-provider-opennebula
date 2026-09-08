@@ -1,0 +1,65 @@
+[
+  {
+    "name": "absent-fields",
+    "spec": {
+      "planVersion": "oneks.opennebula.io/plan-v1beta1",
+      "release": {
+        "createNamespace": false
+      }
+    },
+    "canonical": "{\"planVersion\":\"oneks.opennebula.io/plan-v1beta1\",\"release\":{\"createNamespace\":false}}",
+    "digest": "sha256-VAW50WK9sGfqvBSEOVwoBD1SDirf2pDqfDACsuEsncM"
+  },
+  {
+    "name": "empty-fields-and-ignored-digest",
+    "spec": {
+      "planVersion": "oneks.opennebula.io/plan-v1beta1",
+      "planDigest": "ignored",
+      "clusterID": "",
+      "release": {
+        "createNamespace": false,
+        "authSecret": {}
+      },
+      "dependencies": [],
+      "managedResources": null,
+      "secretInputRef": {}
+    },
+    "canonical": "{\"planVersion\":\"oneks.opennebula.io/plan-v1beta1\",\"release\":{\"createNamespace\":false}}",
+    "digest": "sha256-VAW50WK9sGfqvBSEOVwoBD1SDirf2pDqfDACsuEsncM"
+  },
+  {
+    "name": "nested-order-numbers-and-strings",
+    "spec": {
+      "planVersion": "oneks.opennebula.io/plan-v1beta1",
+      "planDigest": "ignored",
+      "release": {
+        "createNamespace": true,
+        "valuesContent": "z: café\na: <>&/𐀀\n"
+      },
+      "dependencies": [
+        {
+          "name": "z",
+          "planDigest": "kept"
+        },
+        {
+          "name": "a"
+        }
+      ],
+      "managedResources": [
+        {
+          "manifestJSON": "{ \"z\": 1, \"a\": 2 }",
+          "dependsOn": [
+            "z",
+            "a"
+          ],
+          "readiness": {
+            "timeoutSeconds": 0,
+            "conditions": []
+          }
+        }
+      ]
+    },
+    "canonical": "{\"dependencies\":[{\"name\":\"z\",\"planDigest\":\"kept\"},{\"name\":\"a\"}],\"managedResources\":[{\"dependsOn\":[\"z\",\"a\"],\"manifestJSON\":\"{ \\\"z\\\": 1, \\\"a\\\": 2 }\",\"readiness\":{\"timeoutSeconds\":0}}],\"planVersion\":\"oneks.opennebula.io/plan-v1beta1\",\"release\":{\"createNamespace\":true,\"valuesContent\":\"z: caf\\u00e9\\na: <>&/\\ud800\\udc00\\n\"}}",
+    "digest": "sha256-r794qYWwrYiqIHqW3JvDJr2Cb25dmNBOcp4_xY_lqFc"
+  }
+]

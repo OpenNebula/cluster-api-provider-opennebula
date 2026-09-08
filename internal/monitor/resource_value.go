@@ -3,7 +3,7 @@ Copyright 2026, OpenNebula Project, OpenNebula Systems.
 Licensed under the Apache License, Version 2.0 (the "License");
 */
 
-package resourceobserver
+package monitor
 
 import (
 	"crypto/sha256"
@@ -34,8 +34,6 @@ type ResourceValue struct {
 	ObservedAt string `json:"observedAt"`
 }
 
-func (value ResourceValue) CallbackKind() string { return value.Kind }
-
 func NewResourceValue(spec ResourceSpec, value any, now time.Time) (ResourceValue, error) {
 	report := ResourceValue{
 		Kind: "ResourceValue", ID: spec.ID, APIVersion: spec.APIVersion,
@@ -58,10 +56,10 @@ func (value ResourceValue) Identity() string {
 	return "ResourceValue/" + hex.EncodeToString(digest[:])
 }
 
-func ExtractScalar(object *unstructured.Unstructured, path string) (any, error) {
-	value, found, err := unstructured.NestedFieldNoCopy(object.Object, strings.Split(path, ".")...)
+func extractScalar(object *unstructured.Unstructured, path []string) (any, error) {
+	value, found, err := unstructured.NestedFieldNoCopy(object.Object, path...)
 	if err != nil {
-		return nil, fmt.Errorf("extract path %q: invalid object shape", path)
+		return nil, fmt.Errorf("extract path %q: invalid object shape", strings.Join(path, "."))
 	}
 	if !found {
 		return nil, nil

@@ -20,19 +20,98 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes/fake"
 )
+
+func TestMonitorRunsResourcePollingAndPodSnapshots(t *testing.T) {
+	configMap := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "capone-resource-monitor", Namespace: "kube-system"},
+		Data:       map[string]string{ConfigDataKey: validConfig},
+	}
+	client := fake.NewSimpleClientset(configMap)
+	dynamicClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+		applicationGVR: "OneKSApplicationList",
+	}, deployment(1))
+	payloads := make(chan any, 8)
+	monitor, err := New(Config{ApplicationNamespace: "oneks-system"}, client, dynamicClient, senderFunc(func(ctx context.Context, payload any) error {
+		select {
+		case payloads <- payload:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	monitor.resourcePoller.config.ResourcePollInterval = 10 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- monitor.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("monitor stopped: %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Error("monitor did not stop")
+		}
+	})
+	timeout := time.NewTimer(3 * time.Second)
+	defer timeout.Stop()
+	seenValue, seenPods, seenReload := false, false, false
+	for !seenValue || !seenPods || !seenReload {
+		select {
+		case payload := <-payloads:
+			switch value := payload.(type) {
+			case ResourceValue:
+				if value.Path == "status.availableReplicas" {
+					if value.Value != nil {
+						t.Fatalf("missing field: %#v", value)
+					}
+					seenReload = true
+					continue
+				}
+				if value.Value != int64(1) {
+					t.Fatalf("unexpected polled value: %#v", value)
+				}
+				if !seenValue {
+					configMap.Data[ConfigDataKey] = strings.ReplaceAll(validConfig, "status.readyReplicas", "status.availableReplicas")
+					if _, err := client.CoreV1().ConfigMaps(configMap.Namespace).Update(ctx, configMap, metav1.UpdateOptions{}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				seenValue = true
+			case PodSnapshot:
+				seenPods = true
+			}
+		case <-timeout.C:
+			t.Fatal("monitor did not deliver resource values, Pod snapshots and reloaded configuration")
+		}
+	}
+	if !monitor.Ready() {
+		t.Fatal("monitor is not ready after cache synchronization")
+	}
+}
 
 type recordingSender struct {
 	reports  []Report
-	payloads []CallbackPayload
+	payloads []any
 	err      error
 }
 
-func (s *recordingSender) Send(_ context.Context, payload CallbackPayload) error {
+func (s *recordingSender) Send(_ context.Context, payload any) error {
 	s.payloads = append(s.payloads, payload)
 	if report, ok := payload.(Report); ok {
 		s.reports = append(s.reports, report)
@@ -40,9 +119,9 @@ func (s *recordingSender) Send(_ context.Context, payload CallbackPayload) error
 	return s.err
 }
 
-type senderFunc func(context.Context, CallbackPayload) error
+type senderFunc func(context.Context, any) error
 
-func (f senderFunc) Send(ctx context.Context, report CallbackPayload) error { return f(ctx, report) }
+func (f senderFunc) Send(ctx context.Context, report any) error { return f(ctx, report) }
 
 func TestEnqueueKeepsLatestReportForExistingKey(t *testing.T) {
 	queue := newReportQueue(&recordingSender{})
@@ -59,19 +138,12 @@ func TestEnqueueKeepsLatestReportForExistingKey(t *testing.T) {
 	}
 }
 
-type testCallback struct {
-	Kind  string `json:"kind"`
-	Value int    `json:"value"`
-}
-
-func (callback testCallback) CallbackKind() string { return callback.Kind }
-
 func TestEnqueueCoalescesLatestGenericCallback(t *testing.T) {
 	queue := newReportQueue(&recordingSender{})
 	defer queue.queue.ShutDown()
-	queue.Add("resource-value/stable", testCallback{Kind: "ResourceValue", Value: 1})
-	queue.Add("resource-value/stable", testCallback{Kind: "ResourceValue", Value: 2})
-	if got := queue.pending["resource-value/stable"].value.(testCallback).Value; got != 2 {
+	queue.Add("resource-value/stable", ResourceValue{Kind: "ResourceValue", Value: 1})
+	queue.Add("resource-value/stable", ResourceValue{Kind: "ResourceValue", Value: 2})
+	if got := queue.pending["resource-value/stable"].value.(ResourceValue).Value; got != 2 {
 		t.Fatalf("coalesced value = %d, want 2", got)
 	}
 }
@@ -96,7 +168,7 @@ func TestFailedCallbackRemainsPendingAndIsRateLimited(t *testing.T) {
 func TestReportAddedDuringSendRemainsPending(t *testing.T) {
 	var queue *reportQueue
 	sent := make([]Report, 0, 2)
-	queue = newReportQueue(senderFunc(func(_ context.Context, payload CallbackPayload) error {
+	queue = newReportQueue(senderFunc(func(_ context.Context, payload any) error {
 		report := payload.(Report)
 		sent = append(sent, report)
 		if report.Event == "Added" {

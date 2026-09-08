@@ -36,17 +36,8 @@ type Report struct {
 	Status          map[string]any `json:"status,omitempty"`
 }
 
-// CallbackPayload is implemented by every document accepted by the encrypted
-// status callback. Keeping the sender generic lets additional observers reuse
-// exactly the same authentication, encryption and delivery path.
-type CallbackPayload interface {
-	CallbackKind() string
-}
-
-func (r Report) CallbackKind() string { return r.Kind }
-
 type Sender interface {
-	Send(context.Context, CallbackPayload) error
+	Send(context.Context, any) error
 }
 
 type encryptedEnvelope struct {
@@ -88,7 +79,7 @@ func NewHTTPEncryptedSender(config Config) (*HTTPEncryptedSender, error) {
 	}, nil
 }
 
-func (s *HTTPEncryptedSender) Send(ctx context.Context, report CallbackPayload) error {
+func (s *HTTPEncryptedSender) Send(ctx context.Context, report any) error {
 	credential, err := readCredential(s.authFile)
 	if err != nil {
 		return fmt.Errorf("resolve monitor authentication: %w", err)

@@ -19,7 +19,7 @@ package application
 import (
 	"testing"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
 )
 
 func assertPlanValid(t *testing.T, app *applicationv1.OneKSApplication) {
@@ -30,6 +30,7 @@ func assertPlanValid(t *testing.T, app *applicationv1.OneKSApplication) {
 }
 
 func assertPlanError(t *testing.T, app *applicationv1.OneKSApplication, reason string) *PlanError {
+	t.Helper()
 	return assertPlanErrorForCluster(t, app, app.Spec.ClusterID, reason)
 }
 
@@ -40,4 +41,13 @@ func assertPlanErrorForCluster(t *testing.T, app *applicationv1.OneKSApplication
 		t.Fatalf("plan error = %#v, want reason %s", err, reason)
 	}
 	return err
+}
+
+func canonicalSpec(t *testing.T, spec applicationv1.OneKSApplicationSpec) []byte {
+	t.Helper()
+	canonical, err := CanonicalPlan(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
 }

@@ -25,7 +25,7 @@ import (
 )
 
 func TestHelmClusterIDValueContract(t *testing.T) {
-	payload, err := os.ReadFile("../../helm/v1alpha5/oneks-application-controller/values.schema.json")
+	payload, err := os.ReadFile("../../helm/v1beta1/oneks-application-controller/values.schema.json")
 	if err != nil {
 		t.Fatalf("read Helm values schema: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestHelmClusterIDValueContract(t *testing.T) {
 	if !exists || !containsValue(schema.Required, "clusterID") || clusterID.Type != "string" || clusterID.MinLength != 1 || clusterID.MaxLength != 63 || clusterID.Pattern == "" {
 		t.Fatalf("clusterID is not a required bounded label value: %#v", clusterID)
 	}
-	template, err := os.ReadFile("../../helm/v1alpha5/oneks-application-controller/templates/configmap.yaml")
+	template, err := os.ReadFile("../../helm/v1beta1/oneks-application-controller/templates/configmap.yaml")
 	if err != nil {
 		t.Fatalf("read Helm ConfigMap template: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestHelmUsesTheGeneratedCRD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read generated CRD: %v", err)
 	}
-	helmCRD, err := os.ReadFile("../../helm/v1alpha5/oneks-application-controller/crds/oneks.opennebula.io_oneksapplications.yaml")
+	helmCRD, err := os.ReadFile("../../helm/v1beta1/oneks-application-controller/crds/oneks.opennebula.io_oneksapplications.yaml")
 	if err != nil {
 		t.Fatalf("read Helm CRD: %v", err)
 	}
@@ -69,14 +69,14 @@ func TestHelmUsesTheGeneratedCRD(t *testing.T) {
 }
 
 func TestChartDoesNotCreateSharedWorkloadNamespaces(t *testing.T) {
-	path := "../../helm/v1alpha5/oneks-application-controller/templates/namespaces.yaml"
+	path := "../../helm/v1beta1/oneks-application-controller/templates/namespaces.yaml"
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("obsolete Namespace manifest %s still exists: %v", path, err)
 	}
 }
 
 func TestNamespacePermissionSupportsManagedClusterResources(t *testing.T) {
-	path := "../../helm/v1alpha5/oneks-application-controller/templates/rbac-role-managed-resources.yaml"
+	path := "../../helm/v1beta1/oneks-application-controller/templates/rbac-role-managed-resources.yaml"
 	payload, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
@@ -92,7 +92,7 @@ func TestNamespacePermissionSupportsManagedClusterResources(t *testing.T) {
 
 func TestManagedResourceBindingUsesUpgradeSafeIdentity(t *testing.T) {
 	want := "kind: ClusterRoleBinding\nmetadata:\n  name: oneks-application-controller-managed-resources\nroleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRole\n  name: oneks-application-controller-managed-resources"
-	path := "../../helm/v1alpha5/oneks-application-controller/templates/rbac-role-binding-managed-resources.yaml"
+	path := "../../helm/v1beta1/oneks-application-controller/templates/rbac-role-binding-managed-resources.yaml"
 	payload, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)

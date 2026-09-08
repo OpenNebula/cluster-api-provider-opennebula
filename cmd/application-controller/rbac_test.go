@@ -28,7 +28,7 @@ import (
 )
 
 func TestApplicationRoleHasOnlyRequiredApplicationWrites(t *testing.T) {
-	payload, err := os.ReadFile("../../helm/v1alpha5/oneks-application-controller/templates/rbac-role-application.yaml")
+	payload, err := os.ReadFile("../../helm/v1beta1/oneks-application-controller/templates/rbac-role-application.yaml")
 	if err != nil {
 		t.Fatalf("read application Role: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestApplicationRoleHasOnlyRequiredApplicationWrites(t *testing.T) {
 }
 
 func TestManagedResourceRBACIsKindAndVerbBounded(t *testing.T) {
-	payload, err := os.ReadFile("../../helm/v1alpha5/oneks-application-controller/templates/rbac-role-managed-resources.yaml")
+	payload, err := os.ReadFile("../../helm/v1beta1/oneks-application-controller/templates/rbac-role-managed-resources.yaml")
 	if err != nil {
 		t.Fatalf("read managed-resource ClusterRole: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestManagedResourceRBACIsKindAndVerbBounded(t *testing.T) {
 		}
 	}
 
-	bindingPayload, err := os.ReadFile("../../helm/v1alpha5/oneks-application-controller/templates/rbac-role-binding-managed-resources.yaml")
+	bindingPayload, err := os.ReadFile("../../helm/v1beta1/oneks-application-controller/templates/rbac-role-binding-managed-resources.yaml")
 	if err != nil {
 		t.Fatalf("read managed-resource ClusterRoleBinding: %v", err)
 	}

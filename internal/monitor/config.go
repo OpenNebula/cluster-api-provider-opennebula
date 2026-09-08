@@ -42,12 +42,6 @@ func ConfigFromEnv() (Config, error) {
 		ResourceConfigNamespace: strings.TrimSpace(os.Getenv("MONITOR_RESOURCE_CONFIG_NAMESPACE")),
 		ResourceConfigName:      strings.TrimSpace(os.Getenv("MONITOR_RESOURCE_CONFIG_NAME")),
 	}
-	if c.ResourceConfigNamespace == "" {
-		c.ResourceConfigNamespace = "kube-system"
-	}
-	if c.ResourceConfigName == "" {
-		c.ResourceConfigName = "capone-resource-monitor"
-	}
 	if c.Endpoint == "" {
 		return Config{}, fmt.Errorf("MONITOR_ENDPOINT is required")
 	}
@@ -91,13 +85,31 @@ func ConfigFromEnv() (Config, error) {
 	}
 
 	pollInterval := strings.TrimSpace(os.Getenv("MONITOR_RESOURCE_POLL_INTERVAL"))
-	if pollInterval == "" {
-		pollInterval = "10s"
+	if pollInterval != "" {
+		c.ResourcePollInterval, err = time.ParseDuration(pollInterval)
+		if err != nil || c.ResourcePollInterval <= 0 {
+			return Config{}, fmt.Errorf("MONITOR_RESOURCE_POLL_INTERVAL must be a positive duration: %q", pollInterval)
+		}
 	}
-	c.ResourcePollInterval, err = time.ParseDuration(pollInterval)
-	if err != nil || c.ResourcePollInterval <= 0 {
-		return Config{}, fmt.Errorf("MONITOR_RESOURCE_POLL_INTERVAL must be a positive duration: %q", pollInterval)
+	if err := c.defaultResourcePolling(); err != nil {
+		return Config{}, err
 	}
 
 	return c, nil
+}
+
+func (c *Config) defaultResourcePolling() error {
+	if c.ResourceConfigNamespace == "" {
+		c.ResourceConfigNamespace = "kube-system"
+	}
+	if c.ResourceConfigName == "" {
+		c.ResourceConfigName = "capone-resource-monitor"
+	}
+	if c.ResourcePollInterval == 0 {
+		c.ResourcePollInterval = 10 * time.Second
+	}
+	if c.ResourcePollInterval < 5*time.Second || c.ResourcePollInterval > time.Hour {
+		return fmt.Errorf("MONITOR_RESOURCE_POLL_INTERVAL must be between 5s and 1h0m0s")
+	}
+	return nil
 }

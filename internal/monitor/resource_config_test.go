@@ -1,4 +1,4 @@
-package resourceobserver
+package monitor
 
 import (
 	"testing"
@@ -12,8 +12,8 @@ const validConfig = `- id: deployment-ready
   path: status.readyReplicas
 `
 
-func TestParseConfig(t *testing.T) {
-	config, err := ParseConfig([]byte(validConfig))
+func TestParseResourceConfig(t *testing.T) {
+	config, err := parseResourceConfig([]byte(validConfig))
 	if err != nil {
 		t.Fatalf("parse valid config: %v", err)
 	}
@@ -22,14 +22,14 @@ func TestParseConfig(t *testing.T) {
 	}
 }
 
-func TestParseConfigRequiresFields(t *testing.T) {
-	if _, err := ParseConfig([]byte("- id: incomplete\n")); err == nil {
+func TestParseResourceConfigRequiresFields(t *testing.T) {
+	if _, err := parseResourceConfig([]byte("- id: incomplete\n")); err == nil {
 		t.Fatal("incomplete resource was accepted")
 	}
 }
 
-func TestParseConfigAcceptsEmptyList(t *testing.T) {
-	config, err := ParseConfig([]byte("[]\n"))
+func TestParseResourceConfigAcceptsEmptyList(t *testing.T) {
+	config, err := parseResourceConfig([]byte("[]\n"))
 	if err != nil || len(config) != 0 {
 		t.Fatalf("empty resource list was rejected: %#v %v", config, err)
 	}

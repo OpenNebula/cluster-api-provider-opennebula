@@ -30,7 +30,7 @@ type reportQueue struct {
 }
 
 type queuedPayload struct {
-	value CallbackPayload
+	value any
 }
 
 func newReportQueue(sender Sender) *reportQueue {
@@ -53,7 +53,7 @@ func (q *reportQueue) Run(ctx context.Context) {
 	}
 }
 
-func (q *reportQueue) Add(key string, report CallbackPayload) bool {
+func (q *reportQueue) Add(key string, report any) bool {
 	q.mu.Lock()
 	if _, exists := q.pending[key]; !exists && len(q.pending) >= maxPendingReports {
 		q.mu.Unlock()

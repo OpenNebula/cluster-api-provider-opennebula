@@ -23,7 +23,7 @@ import (
 	"reflect"
 	"testing"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -34,6 +34,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 func TestRootMaterializesFlatTransitiveDependencyGraph(t *testing.T) {
@@ -45,7 +46,7 @@ func TestRootMaterializesFlatTransitiveDependencyGraph(t *testing.T) {
 
 	reconcileOnce(t, ctx, reconciler, root)
 	storedRoot := getApplication(t, ctx, reconciler.Client, root)
-	if !containsString(storedRoot.Finalizers, applicationv1.ApplicationFinalizer) {
+	if !controllerutil.ContainsFinalizer(storedRoot, applicationv1.ApplicationFinalizer) {
 		t.Fatalf("Root finalizer was not acquired before dependency materialization: %#v", storedRoot.Finalizers)
 	}
 	assertApplicationNotFound(t, ctx, reconciler.Client, d.Name)
@@ -56,13 +57,13 @@ func TestRootMaterializesFlatTransitiveDependencyGraph(t *testing.T) {
 		if len(child.OwnerReferences) != 0 {
 			t.Fatalf("dependency %s has ownerReferences: %#v", plan.Name, child.OwnerReferences)
 		}
-		if child.UID != "" || child.Status.Phase != "" || !containsString(child.Finalizers, applicationv1.ApplicationFinalizer) {
+		if child.UID != "" || child.Status.Phase != "" || !controllerutil.ContainsFinalizer(child, applicationv1.ApplicationFinalizer) {
 			t.Fatalf("dependency %s received creation-time lifecycle state: %#v", plan.Name, child)
 		}
 		if len(child.Spec.DependencyPlans) != 0 {
 			t.Fatalf("dependency %s contains dependencyPlans: %#v", plan.Name, child.Spec.DependencyPlans)
 		}
-		if want := dependencyPlanChildSpec(root.Spec.ClusterID, plan); !reflectSpecsEqual(child.Spec, want) {
+		if want := dependencyPlanChildSpec(root.Spec.ClusterID, plan); !reflect.DeepEqual(child.Spec, want) {
 			t.Fatalf("dependency %s spec differs from child contract:\n got: %#v\nwant: %#v", plan.Name, child.Spec, want)
 		}
 		if !producerLabelsMatch(child) {
@@ -133,13 +134,13 @@ func TestDependencyPreflightReusesCompatibleAndCreatesMissing(t *testing.T) {
 	if reused.Annotations["unrelated.example.test/kept"] != "true" {
 		t.Fatalf("compatible dependency metadata was mutated: %#v", reused.Annotations)
 	}
-	if containsString(reused.Finalizers, applicationv1.ApplicationFinalizer) {
+	if controllerutil.ContainsFinalizer(reused, applicationv1.ApplicationFinalizer) {
 		t.Fatalf("compatible dependency was mutated instead of reusing it unchanged: %#v", reused.Finalizers)
 	}
 	getDependencyApplication(t, ctx, reconciler.Client, e.Name)
 	reconcileOnce(t, ctx, reconciler, reused)
 	reused = getDependencyApplication(t, ctx, reconciler.Client, d.Name)
-	if !containsString(reused.Finalizers, applicationv1.ApplicationFinalizer) {
+	if !controllerutil.ContainsFinalizer(reused, applicationv1.ApplicationFinalizer) {
 		t.Fatalf("compatible dependency did not acquire its finalizer through normal reconciliation: %#v", reused.Finalizers)
 	}
 }
@@ -247,7 +248,7 @@ func TestDeletionUsesAuthoritativeHelmChartState(t *testing.T) {
 		t.Fatalf("authoritative HelmChart was not deleted first: %#v", recorder.childWrites)
 	}
 	stored := getApplication(t, ctx, reconciler.Client, app)
-	if !containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) {
+	if !controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) {
 		t.Fatalf("application finalizer was removed before authoritative HelmChart deletion completed: %#v", stored.Finalizers)
 	}
 }
@@ -465,25 +466,6 @@ func TestDirectDependencyProgressTotals(t *testing.T) {
 	}
 }
 
-func TestObserveRootDoesNotMaterializeDependencies(t *testing.T) {
-	ctx := context.Background()
-	plan := dependencyPlanForTest("observe-dependency", "observe-chart", nil)
-	root := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
-	root.Spec.ExecutionMode = applicationv1.ExecutionModeObserve
-	refreshPlanDigest(root)
-	root.Labels = producerLabels(root)
-	reconciler, _ := testReconciler(t, root)
-
-	reconcileOnce(t, ctx, reconciler, root)
-	assertApplicationNotFound(t, ctx, reconciler.Client, plan.Name)
-	assertOwnEffectsAbsent(t, ctx, reconciler.Client, root)
-	stored := getApplication(t, ctx, reconciler.Client, root)
-	if stored.Status.Phase != applicationv1.PhaseObserving {
-		t.Fatalf("Observe Root phase = %s, want Observing", stored.Status.Phase)
-	}
-	assertDependencyCondition(t, stored, metav1.ConditionFalse, "DependencyMissing")
-}
-
 func TestDeletingRootNeverCreatesMissingDependency(t *testing.T) {
 	ctx := context.Background()
 	plan := dependencyPlanForTest("missing-dependency", "missing-chart", nil)
@@ -550,14 +532,14 @@ func TestDependencyWithoutFinalizerGetsOneBeforeLastConsumerDeletion(t *testing.
 		t.Fatalf("dependency finalizer installation did not requeue: %#v", result)
 	}
 	storedDependency := getDependencyApplication(t, ctx, reconciler.Client, plan.Name)
-	if !containsString(storedDependency.Finalizers, applicationv1.ApplicationFinalizer) {
+	if !controllerutil.ContainsFinalizer(storedDependency, applicationv1.ApplicationFinalizer) {
 		t.Fatalf("dependency cleanup finalizer was not installed: %#v", storedDependency.Finalizers)
 	}
 	if !storedDependency.DeletionTimestamp.IsZero() {
 		t.Fatalf("dependency was deleted while its finalizer was first installed: %s", storedDependency.DeletionTimestamp)
 	}
 	storedRoot := getApplication(t, ctx, reconciler.Client, root)
-	if !containsString(storedRoot.Finalizers, applicationv1.ApplicationFinalizer) {
+	if !controllerutil.ContainsFinalizer(storedRoot, applicationv1.ApplicationFinalizer) {
 		t.Fatalf("consumer finalizer was removed before dependency deletion retry: %#v", storedRoot.Finalizers)
 	}
 	assertApplicationSpecJSONUnchanged(t, wantSpecJSON, storedDependency.Spec)
@@ -592,23 +574,6 @@ func TestDeletingConsumersDoNotProtectDependencyGC(t *testing.T) {
 	reconciler, _ := testReconciler(t, rootA, rootB, dependency)
 
 	reconcileOnce(t, ctx, reconciler, rootA)
-	assertDependencyTerminating(t, ctx, reconciler.Client, plan.Name)
-}
-
-func TestObserveConsumersDoNotProtectDependencyGC(t *testing.T) {
-	ctx := context.Background()
-	plan := dependencyPlanForTest("observe-consumer", "shared-chart", nil)
-	root := deletingRootForTest(t, "root", plan)
-	observer := validRootPlanGraph(t, []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}, []applicationv1.DependencyPlan{plan})
-	observer.Name = "observer"
-	observer.UID = "observer-uid"
-	observer.Spec.ExecutionMode = applicationv1.ExecutionModeObserve
-	refreshPlanDigest(observer)
-	observer.Labels = producerLabels(observer)
-	dependency := existingDependencyForTest(root, plan)
-	reconciler, _ := testReconciler(t, root, observer, dependency)
-
-	reconcileOnce(t, ctx, reconciler, root)
 	assertDependencyTerminating(t, ctx, reconciler.Client, plan.Name)
 }
 
@@ -662,7 +627,7 @@ func TestDependencyGCReleasesOnlyDirectEdges(t *testing.T) {
 
 	reconcileOnce(t, ctx, reconciler, root)
 	storedD := getDependencyApplication(t, ctx, reconciler.Client, d.Name)
-	if !containsString(storedD.Finalizers, applicationv1.ApplicationFinalizer) || !storedD.DeletionTimestamp.IsZero() {
+	if !controllerutil.ContainsFinalizer(storedD, applicationv1.ApplicationFinalizer) || !storedD.DeletionTimestamp.IsZero() {
 		t.Fatalf("D was not finalized before deletion: %#v", storedD.ObjectMeta)
 	}
 	storedE := getDependencyApplication(t, ctx, reconciler.Client, e.Name)
@@ -872,8 +837,4 @@ func assertDependencyCondition(t *testing.T, app *applicationv1.OneKSApplication
 	if condition == nil || condition.Status != status || condition.Reason != reason {
 		t.Fatalf("DependenciesReady = %#v, want status=%s reason=%s", condition, status, reason)
 	}
-}
-
-func reflectSpecsEqual(first, second applicationv1.OneKSApplicationSpec) bool {
-	return reflect.DeepEqual(first, second)
 }

@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
 	"github.com/go-logr/logr/funcr"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -38,6 +38,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -116,7 +117,7 @@ func TestExecuteAddsFinalizerBeforeCreatingChildren(t *testing.T) {
 
 	reconcileOnce(t, ctx, reconciler, app)
 	stored := getApplication(t, ctx, reconciler.Client, app)
-	if !containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) {
+	if !controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) {
 		t.Fatalf("controller finalizer was not added: %#v", stored.Finalizers)
 	}
 	if len(recorder.childWrites) != 0 {

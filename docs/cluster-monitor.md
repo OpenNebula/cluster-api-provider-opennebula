@@ -2,7 +2,7 @@
 
 `cmd/monitor` is a separate binary intended to run in each workload cluster.
 It uses Kubernetes shared informers (`List` followed by `Watch`) for Nodes,
-Pods, root `oneks.opennebula.io/v1alpha5` OneKSApplications, and an optional set of
+Pods, root `oneks.opennebula.io/v1beta1` OneKSApplications, and an optional set of
 resources selected by a live ConfigMap. The application
 controller remains the only component that executes application plans; the
 monitor only projects selected scalar values to OneKS. It does not evaluate

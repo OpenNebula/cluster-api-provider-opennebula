@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"testing"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -63,9 +63,7 @@ func TestEarlyManagedNoMatchAllowsDependencyBootstrapAndGatesRootEffects(t *test
 	assertManagedDependencyPendingStatus(t, stored, plan.Name)
 
 	effects.writes = nil
-	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(root)}); err != nil {
-		t.Fatalf("reconcile unready dependency: %v", err)
-	}
+	reconcileOnce(t, ctx, reconciler, root)
 	assertNoRootEffects(t, effects)
 	if gate.gets != 2 {
 		t.Fatalf("dependency-gated observation performed a managed API GET on retry: %d GETs", gate.gets)
@@ -94,9 +92,7 @@ func TestAvailableForeignManagedObjectConflictsBeforeRootEffects(t *testing.T) {
 	gate.noMatchGets = 1
 	gate.foreign = dependencyProvidedBundle(false, root)
 
-	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(root)}); err != nil {
-		t.Fatalf("reconcile foreign managed object: %v", err)
-	}
+	reconcileOnce(t, ctx, reconciler, root)
 	assertNoRootEffects(t, effects)
 	stored := getApplication(t, ctx, reconciler.Client, root)
 	if stored.Status.LastError == nil || stored.Status.LastError.Reason != "OwnershipConflict" {
@@ -114,9 +110,7 @@ func TestAvailableAbsentManagedObjectProceedsAfterDependenciesReady(t *testing.T
 	reconciler, effects, gate := dependencyProvidedManagedReconciler(t, root, dependency)
 	gate.noMatchGets = 1
 
-	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(root)}); err != nil {
-		t.Fatalf("reconcile available managed API: %v", err)
-	}
+	reconcileOnce(t, ctx, reconciler, root)
 	if len(effects.writes) == 0 || effects.writes[0] != "create:Bundle" {
 		t.Fatalf("managed reconciliation did not proceed: %#v", effects.writes)
 	}
@@ -150,7 +144,7 @@ func dependencyProvidedManagedRoot(t *testing.T) (*applicationv1.OneKSApplicatio
 	root.Spec.ManagedResources = []applicationv1.ManagedResourceSpec{{
 		ID: "runai-ca-cert", Scope: applicationv1.ManagedResourceScopeCluster,
 		APIVersion: dependencyProvidedBundleGVK.GroupVersion().String(), Kind: dependencyProvidedBundleGVK.Kind,
-		APIResource: "bundles", Name: "runai-ca-cert",
+		Name:         "runai-ca-cert",
 		ManifestJSON: `{"apiVersion":"trust.cert-manager.io/v1alpha1","kind":"Bundle","metadata":{"name":"runai-ca-cert"},"spec":{"sources":[]}}`,
 		Readiness: applicationv1.ManagedResourceReadiness{
 			TimeoutSeconds: 60,
@@ -204,7 +198,7 @@ func assertManagedDependencyPendingStatus(t *testing.T, app *applicationv1.OneKS
 		ConditionDependenciesReady: {metav1.ConditionFalse, "DependencyPending"},
 		ConditionResourcesReady:    {metav1.ConditionUnknown, "DependenciesPending"},
 	} {
-		condition := conditionByType(app.Status.Conditions, conditionType)
+		condition := meta.FindStatusCondition(app.Status.Conditions, conditionType)
 		if condition == nil || condition.Status != want.status || condition.Reason != want.reason {
 			t.Fatalf("condition %s = %#v, want status=%s reason=%s", conditionType, condition, want.status, want.reason)
 		}

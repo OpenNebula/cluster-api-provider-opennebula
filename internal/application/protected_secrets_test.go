@@ -24,15 +24,17 @@ import (
 	"strings"
 	"testing"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 func TestProtectedSecretPlanRejectsCrossCollectionResourceIDCollisions(t *testing.T) {
@@ -72,7 +74,7 @@ func TestManagedTargetNamespaceBootstrapUsesNormalResourceDAG(t *testing.T) {
 
 	reconcileOnce(t, ctx, reconciler, app)
 	stored := getApplication(t, ctx, reconciler.Client, app)
-	if !containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) {
+	if !controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) {
 		t.Fatalf("managed namespace bootstrap did not progress to finalizer: %#v", stored.Finalizers)
 	}
 	if stored.Status.LastError != nil && stored.Status.LastError.Reason == "TargetNamespaceMissing" {
@@ -101,7 +103,7 @@ func TestMissingTargetNamespaceWithoutManagedTargetPreservesFailure(t *testing.T
 	if stored.Status.LastError == nil || stored.Status.LastError.Reason != "TargetNamespaceMissing" {
 		t.Fatalf("missing target namespace status = %#v", stored.Status)
 	}
-	if !containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) || len(recorder.childWrites) != 0 {
+	if !controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) || len(recorder.childWrites) != 0 {
 		t.Fatalf("missing unmanaged namespace caused progression: finalizers=%#v writes=%#v", stored.Finalizers, recorder.childWrites)
 	}
 }
@@ -152,7 +154,7 @@ func TestInputSecretInvalidKeepsPlanValid(t *testing.T) {
 		ConditionProtectedSecretsReady: metav1.ConditionFalse,
 		ConditionReady:                 metav1.ConditionFalse,
 	} {
-		condition := conditionByType(stored.Status.Conditions, conditionType)
+		condition := meta.FindStatusCondition(stored.Status.Conditions, conditionType)
 		if condition == nil || condition.Status != want {
 			t.Fatalf("condition %s = %#v, want %s", conditionType, condition, want)
 		}
@@ -268,7 +270,7 @@ func TestProtectedSecretPlanProtectedFieldsAffectDigestWithoutSorting(t *testing
 		},
 	}
 	for index, mutate := range mutations {
-		copy := cloneJSON(t, base)
+		copy := *base.DeepCopy()
 		mutate(&copy)
 		if got := digestSpec(t, copy); got == baseDigest {
 			t.Fatalf("mutation %d did not affect protected plan digest", index)
@@ -398,10 +400,7 @@ func TestProtectedSecretPlanRunAIProtectedSecretsMaterializeWithoutLeakingValues
 		t.Fatalf("HelmChart authSecret = %q, found %v, err %v", authSecretName, found, err)
 	}
 
-	canonical, err := CanonicalPlan(app.Spec)
-	if err != nil {
-		t.Fatal(err)
-	}
+	canonical := canonicalSpec(t, app.Spec)
 	stored := getApplication(t, ctx, reconciler.Client, app)
 	serializedSpec, _ := json.Marshal(stored.Spec)
 	serializedStatus, _ := json.Marshal(stored.Status)
@@ -434,7 +433,7 @@ func TestProtectedSecretPlanPreflightsEveryTargetBeforeMutation(t *testing.T) {
 	}
 	reconcileOnce(t, ctx, reconciler, app)
 	stored := getApplication(t, ctx, reconciler.Client, app)
-	if !containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) {
+	if !controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) {
 		t.Fatal("current plan did not acquire its cleanup finalizer")
 	}
 	if stored.Status.LastError == nil || stored.Status.LastError.Reason != "OwnershipConflict" {
@@ -445,7 +444,7 @@ func TestProtectedSecretPlanPreflightsEveryTargetBeforeMutation(t *testing.T) {
 	}
 }
 
-func TestProtectedSecretPlanRepairsOwnedTargetDriftAndObserveNeverMutates(t *testing.T) {
+func TestProtectedSecretPlanRepairsOwnedTargetDrift(t *testing.T) {
 	ctx := context.Background()
 	app := validBoundProtectedRootPlan(t)
 	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
@@ -467,16 +466,6 @@ func TestProtectedSecretPlanRepairsOwnedTargetDriftAndObserveNeverMutates(t *tes
 		t.Fatalf("Secret update not recorded: %#v", recorder.childWrites)
 	}
 
-	observe := validBoundProtectedRootPlan(t)
-	observe.Spec.ExecutionMode = applicationv1.ExecutionModeObserve
-	refreshOwnedPlan(t, observe)
-	observeInput := inputSecretFor(observe, map[string][]byte{"adminPassword": []byte("SENTINEL_OBSERVE")})
-	reconciler, recorder = testReconciler(t, observe, observeInput)
-	reconcileOnce(t, ctx, reconciler, observe)
-	stored := getApplication(t, ctx, reconciler.Client, observe)
-	if stored.Status.Phase != applicationv1.PhaseObserving || len(stored.Finalizers) != 0 || len(recorder.childWrites) != 0 {
-		t.Fatalf("Observe mutated protected state: status=%#v writes=%#v", stored.Status, recorder.childWrites)
-	}
 }
 
 func TestProtectedSecretPlanProtectedCreateAlreadyExistsRaceRereadsOwnership(t *testing.T) {
@@ -635,7 +624,7 @@ func TestCurrentPlanBindsInputUIDBeforeExecution(t *testing.T) {
 
 	reconcileOnce(t, ctx, reconciler, app)
 	stored := getApplication(t, ctx, reconciler.Client, app)
-	if !containsString(stored.Finalizers, applicationv1.ApplicationFinalizer) {
+	if !controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) {
 		t.Fatalf("v5 finalizer was not acquired before input binding")
 	}
 	if stored.Status.SecretInputUID != "" || len(recorder.childWrites) != 0 {
@@ -669,7 +658,7 @@ func TestCurrentPlanHelmOnlyRootDoesNotRequireProtectedSecrets(t *testing.T) {
 
 	assertPlanValid(t, app)
 	if usesProtectedSecrets(app) {
-		t.Fatal("Helm-only v1alpha5 Root entered protected Secret lifecycle")
+		t.Fatal("Helm-only v1beta1 Root entered protected Secret lifecycle")
 	}
 }
 
@@ -686,10 +675,10 @@ func TestCurrentPlanWaitsForInputSecretWithoutExecuting(t *testing.T) {
 	}
 }
 
-func TestGeneratedCRDEnforcesPlanV1Alpha5InputBinding(t *testing.T) {
+func TestGeneratedCRDEnforcesPlanV1Beta1InputBinding(t *testing.T) {
 	text := string(generatedApplicationCRD(t))
 	for _, required := range []string{
-		"oneks.opennebula.io/plan-v1alpha5",
+		"oneks.opennebula.io/plan-v1beta1",
 		"secretInputUID:",
 	} {
 		if !strings.Contains(text, required) {
@@ -794,7 +783,7 @@ func dockerProtectedSecret(id, namespace, name string) applicationv1.ProtectedSe
 func managedTargetNamespaceResource() applicationv1.ManagedResourceSpec {
 	return applicationv1.ManagedResourceSpec{
 		ID: "target-namespace", Scope: applicationv1.ManagedResourceScopeCluster,
-		APIVersion: "v1", Kind: "Namespace", APIResource: "namespaces", Name: "catalogue-workloads",
+		APIVersion: "v1", Kind: "Namespace", Name: "catalogue-workloads",
 		ManifestJSON:   `{"apiVersion":"v1","kind":"Namespace","metadata":{"name":"` + "catalogue-workloads" + `"}}`,
 		Readiness:      applicationv1.ManagedResourceReadiness{TimeoutSeconds: 60},
 		DeletionPolicy: applicationv1.DeletionPolicyDelete,
@@ -830,7 +819,7 @@ func getSecret(t *testing.T, ctx context.Context, kubeClient client.Client, name
 
 func assertConditionReason(t *testing.T, app *applicationv1.OneKSApplication, conditionType, reason string) {
 	t.Helper()
-	condition := conditionByType(app.Status.Conditions, conditionType)
+	condition := meta.FindStatusCondition(app.Status.Conditions, conditionType)
 	if condition == nil || condition.Reason != reason {
 		t.Fatalf("condition %s = %#v, want reason %s", conditionType, condition, reason)
 	}

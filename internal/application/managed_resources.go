@@ -22,7 +22,7 @@ import (
 	"regexp"
 	"unicode/utf8"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -60,9 +60,7 @@ func validateManagedResources(resources []applicationv1.ManagedResourceSpec) *Pl
 		if resource.Kind == "Secret" {
 			return invalid("UnsupportedManagedSecret", "%s may not manage Secret objects", path)
 		}
-		if resource.APIResource != "" && (!validUTF8Bytes(resource.APIResource, 1, 128) || len(validation.IsDNS1123Subdomain(resource.APIResource)) != 0) {
-			return invalid("InvalidManagedAPIResource", "%s.apiResource is invalid", path)
-		}
+
 		if !validUTF8Bytes(resource.Name, 1, 253) || len(validation.IsDNS1123Subdomain(resource.Name)) != 0 {
 			return invalid("InvalidManagedResourceName", "%s.name is not a DNS-1123 subdomain", path)
 		}
@@ -174,7 +172,7 @@ func validateManagedReadiness(readiness applicationv1.ManagedResourceReadiness, 
 	requiredIdentities := make(map[string]struct{}, len(readiness.RequiredResources))
 	for index, reference := range readiness.RequiredResources {
 		itemPath := fmt.Sprintf("%s.requiredResources[%d]", path, index)
-		if !validGroupVersionKind(reference.APIVersion, reference.Kind) || !validObjectReference(reference.APIResource, reference.Namespace, reference.Name) {
+		if !validGroupVersionKind(reference.APIVersion, reference.Kind) || !validObjectReference(reference.Namespace, reference.Name) {
 			return invalid("InvalidRequiredResource", "%s is invalid", itemPath)
 		}
 		identity := reference.APIVersion + "\x00" + reference.Kind + "\x00" + reference.Namespace + "\x00" + reference.Name
@@ -199,10 +197,7 @@ func validGroupVersionKind(apiVersion, kind string) bool {
 	return err == nil
 }
 
-func validObjectReference(apiResource, namespace, name string) bool {
-	if apiResource != "" && (!validUTF8Bytes(apiResource, 1, 128) || len(validation.IsDNS1123Subdomain(apiResource)) != 0) {
-		return false
-	}
+func validObjectReference(namespace, name string) bool {
 	if namespace != "" && !validNamespace(namespace) {
 		return false
 	}

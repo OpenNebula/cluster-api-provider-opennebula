@@ -20,34 +20,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 	"time"
 
-	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1alpha5"
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 )
 
-const (
-	HelmChartNamespace = "kube-system"
-	defaultRequeue     = 15 * time.Second
-)
-
-var helmChartGVK = schema.GroupVersionKind{
-	Group: "helm.cattle.io", Version: "v1", Kind: "HelmChart",
-}
+const defaultRequeue = 15 * time.Second
 
 type Reconciler struct {
 	client.Client
@@ -57,24 +48,6 @@ type Reconciler struct {
 	RequeueAfter time.Duration
 	DNSLookup    func(context.Context, string) ([]string, error)
 	Now          func() time.Time
-}
-
-type observation struct {
-	resources    []applicationv1.ResourceStatus
-	managed      componentObservation
-	protected    componentObservation
-	helm         *unstructured.Unstructured
-	helmState    componentObservation
-	current      string
-	completed    int32
-	allResources bool
-}
-
-type componentObservation struct {
-	ready   bool
-	failed  bool
-	reason  string
-	message string
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (result ctrl.Result, reconcileErr error) {
@@ -97,12 +70,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (resul
 			"success", reconcileErr == nil,
 		)
 	}()
-	return r.reconcileApplication(ctx, app)
-}
-
-func (r *Reconciler) reconcileApplication(ctx context.Context, app *applicationv1.OneKSApplication) (ctrl.Result, error) {
 	deleting := !app.DeletionTimestamp.IsZero()
-	hasCleanupFinalizer := containsString(app.Finalizers, applicationv1.ApplicationFinalizer)
+	hasCleanupFinalizer := controllerutil.ContainsFinalizer(app, applicationv1.ApplicationFinalizer)
 	var validationError *PlanError
 	if deleting && hasCleanupFinalizer {
 		validationError = ValidateDeletionPlan(app)
@@ -110,12 +79,23 @@ func (r *Reconciler) reconcileApplication(ctx context.Context, app *applicationv
 		validationError = ValidatePlan(app, ValidationConfig{ClusterID: r.ClusterID})
 	}
 	if validationError != nil {
-		return r.recordTerminal(ctx, app, validationError.Reason, validationError.Message, false)
+		return r.recordFailure(ctx, app, validationError.Reason, validationError.Message, failureInvalidPlan)
 	}
-	if !deleting && app.Spec.ExecutionMode == applicationv1.ExecutionModeExecute &&
-		!hasCleanupFinalizer {
+	if deleting {
+		if err := r.preflightOwnership(ctx, app, true, managedAPIsRequired); err != nil {
+			return r.handleOwnershipError(ctx, app, err)
+		}
+		return r.reconcileDelete(ctx, app)
+	}
+	return r.reconcileNormal(ctx, app)
+}
+
+func (r *Reconciler) reconcileNormal(ctx context.Context, app *applicationv1.OneKSApplication) (ctrl.Result, error) {
+	if !controllerutil.ContainsFinalizer(app, applicationv1.ApplicationFinalizer) {
+		withFinalizer := app.DeepCopy()
+		controllerutil.AddFinalizer(withFinalizer, applicationv1.ApplicationFinalizer)
 		updated, err := r.patchApplicationFinalizers(
-			ctx, app, append(append([]string(nil), app.Finalizers...), applicationv1.ApplicationFinalizer),
+			ctx, app, withFinalizer.Finalizers,
 		)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("add application finalizer: %w", err)
@@ -124,47 +104,47 @@ func (r *Reconciler) reconcileApplication(ctx context.Context, app *applicationv
 		r.event(updated, corev1.EventTypeNormal, "FinalizerAdded", "Application cleanup finalizer added")
 		return ctrl.Result{Requeue: true}, nil
 	}
-	if !deleting {
-		bound, err := r.bindSecretInput(ctx, app)
-		if err != nil {
-			var invalidInput *InputSecretValidationError
-			if errors.As(err, &invalidInput) {
-				return r.recordTerminal(ctx, app, "InputSecretInvalid", invalidInput.Error(), false)
-			}
-			return ctrl.Result{}, err
+	bound, err := r.bindSecretInput(ctx, app)
+	if err != nil {
+		var invalidInput *InputSecretValidationError
+		if errors.As(err, &invalidInput) {
+			return r.recordFailure(ctx, app, "InputSecretInvalid", invalidInput.Error(), failureExecution)
 		}
-		if bound {
-			return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
+		return ctrl.Result{}, err
+	}
+	if bound {
+		return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
+	}
+
+	if !app.Spec.Release.CreateNamespace {
+		err := r.checkTargetNamespace(ctx, app.Spec.Release.TargetNamespace)
+		if err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, fmt.Errorf("check target namespace: %w", err)
+		}
+		if apierrors.IsNotFound(err) && !managesTargetNamespace(app) {
+			result, statusErr := r.recordFailure(
+				ctx, app, "TargetNamespaceMissing",
+				fmt.Sprintf("target namespace %s is missing", app.Spec.Release.TargetNamespace), failureExecution,
+			)
+			if statusErr != nil {
+				return ctrl.Result{}, statusErr
+			}
+			result.RequeueAfter = r.requeueDuration()
+			return result, nil
 		}
 	}
 
-	if !deleting && !app.Spec.Release.CreateNamespace {
-		if err := r.checkTargetNamespace(ctx, app.Spec.Release.TargetNamespace); err != nil {
-			if apierrors.IsNotFound(err) {
-				if !managesTargetNamespace(app) {
-					result, statusErr := r.recordTerminal(
-						ctx, app, "TargetNamespaceMissing",
-						fmt.Sprintf("target namespace %s is missing", app.Spec.Release.TargetNamespace), false,
-					)
-					if statusErr != nil {
-						return ctrl.Result{}, statusErr
-					}
-					result.RequeueAfter = r.requeueDuration()
-					return result, nil
-				}
-			} else {
-				return ctrl.Result{}, fmt.Errorf("check target namespace: %w", err)
-			}
-		}
-	}
+	return r.reconcileExecute(ctx, app)
+}
 
+func (r *Reconciler) reconcileExecute(ctx context.Context, app *applicationv1.OneKSApplication) (ctrl.Result, error) {
 	externalMode := ""
 	externalSelectionToPersist := ""
-	if !deleting && app.Spec.ExecutionMode == applicationv1.ExecutionModeExecute && usesExternalDetection(app) {
+	if usesExternalDetection(app) {
 		var selectionErr error
 		externalMode, selectionErr = externalSelection(app)
 		if selectionErr != nil {
-			result, statusErr := r.recordTerminal(ctx, app, "ExternalSelectionInvalid", selectionErr.Error(), false)
+			result, statusErr := r.recordFailure(ctx, app, "ExternalSelectionInvalid", selectionErr.Error(), failureExecution)
 			if statusErr == nil {
 				result.RequeueAfter = r.requeueDuration()
 			}
@@ -181,7 +161,7 @@ func (r *Reconciler) reconcileApplication(ctx context.Context, app *applicationv
 			case externalDetectionAbsent:
 				externalSelectionToPersist = ExternalSelectionManaged
 			case externalDetectionUnusable:
-				result, statusErr := r.recordTerminal(ctx, app, "ExternalDependencyUnusable", detection.message, false)
+				result, statusErr := r.recordFailure(ctx, app, "ExternalDependencyUnusable", detection.message, failureExecution)
 				if statusErr == nil {
 					result.RequeueAfter = r.requeueDuration()
 				}
@@ -190,38 +170,6 @@ func (r *Reconciler) reconcileApplication(ctx context.Context, app *applicationv
 		}
 	}
 
-	if deleting {
-		if app.Spec.ExecutionMode == applicationv1.ExecutionModeObserve {
-			return ctrl.Result{}, nil
-		}
-		if err := r.preflightOwnership(ctx, app, true, managedAPIsRequired); err != nil {
-			return r.handleOwnershipError(ctx, app, err)
-		}
-		return r.reconcileDelete(ctx, app)
-	}
-
-	if app.Spec.ExecutionMode == applicationv1.ExecutionModeObserve {
-		return r.reconcileObserve(ctx, app)
-	}
-	return r.reconcileExecute(ctx, app, externalMode, externalSelectionToPersist)
-}
-
-func (r *Reconciler) reconcileObserve(ctx context.Context, app *applicationv1.OneKSApplication) (ctrl.Result, error) {
-	dependencies, err := r.observeDependencies(ctx, app)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.preflightOwnership(ctx, app, false, managedAPIsRequired); err != nil {
-		return r.handleOwnershipError(ctx, app, err)
-	}
-	return r.reconcileStatus(ctx, app, true, dependencies)
-}
-
-func (r *Reconciler) reconcileExecute(
-	ctx context.Context,
-	app *applicationv1.OneKSApplication,
-	externalMode, externalSelectionToPersist string,
-) (ctrl.Result, error) {
 	if externalMode != ExternalSelectionExternal && externalSelectionToPersist != ExternalSelectionExternal {
 		if err := r.preflightOwnership(ctx, app, false, managedAPIsMayBeUnavailable); err != nil {
 			return r.handleOwnershipError(ctx, app, err)
@@ -248,7 +196,7 @@ func (r *Reconciler) reconcileExecute(
 				current: materialized.terminating,
 				reason:  "DependencyTerminating", message: fmt.Sprintf("Dependency application %s is terminating", materialized.terminating),
 			}
-			return r.reconcileStatus(ctx, app, false, dependencies)
+			return r.reconcileStatus(ctx, app, dependencies)
 		}
 		if materialized.conflict != nil {
 			dependencies := dependencyObservation{
@@ -256,14 +204,14 @@ func (r *Reconciler) reconcileExecute(
 				reason:   "DependencyConflict", message: materialized.conflict.Error(), current: materialized.conflict.Name,
 			}
 			r.event(app, corev1.EventTypeWarning, dependencies.reason, dependencies.message)
-			return r.reconcileStatus(ctx, app, false, dependencies)
+			return r.reconcileStatus(ctx, app, dependencies)
 		}
 		if materialized.raced {
 			dependencies, observeErr := r.observeDependencies(ctx, app)
 			if observeErr != nil {
 				return ctrl.Result{}, observeErr
 			}
-			return r.reconcileStatus(ctx, app, false, dependencies)
+			return r.reconcileStatus(ctx, app, dependencies)
 		}
 	}
 
@@ -272,10 +220,10 @@ func (r *Reconciler) reconcileExecute(
 		return ctrl.Result{}, err
 	}
 	if !dependencies.ready {
-		return r.reconcileStatus(ctx, app, false, dependencies)
+		return r.reconcileStatus(ctx, app, dependencies)
 	}
 	if externalMode == ExternalSelectionExternal {
-		return r.reconcileStatus(ctx, app, false, dependencies)
+		return r.reconcileStatus(ctx, app, dependencies)
 	}
 	if isRootApplication(app) {
 		if err := r.preflightOwnership(ctx, app, false, managedAPIsRequired); err != nil {
@@ -283,18 +231,24 @@ func (r *Reconciler) reconcileExecute(
 		}
 	}
 
-	resourcesReady := true
+	observed := observation{allResources: true, current: app.Spec.Release.ReleaseName}
 	if isRootApplication(app) {
-		resourcesReady, err = r.reconcileManagedResources(ctx, app)
+		applied, err := r.applyManagedResources(ctx, app)
+		if err != nil {
+			return r.handleOwnershipError(ctx, app, err)
+		}
+		if !applied {
+			return r.reconcileStatus(ctx, app, dependencies)
+		}
+		observed, err = r.observeManagedResources(ctx, app, true)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
 	}
-	if err != nil {
-		return r.handleOwnershipError(ctx, app, err)
-	}
-	if !resourcesReady {
-		return r.reconcileStatus(ctx, app, false, dependencies)
-	}
-	if usesProtectedSecrets(app) {
-		protectedReady, protectedErr := r.reconcileProtectedSecrets(ctx, app)
+	protectedApplied := true
+	if observed.allResources && usesProtectedSecrets(app) {
+		var protectedErr error
+		protectedApplied, protectedErr = r.applyProtectedSecrets(ctx, app)
 		if protectedErr != nil {
 			var conflict *OwnershipConflictError
 			if errors.As(protectedErr, &conflict) {
@@ -302,19 +256,25 @@ func (r *Reconciler) reconcileExecute(
 			}
 			var invalidInput *InputSecretValidationError
 			if errors.As(protectedErr, &invalidInput) {
-				return r.recordTerminal(ctx, app, "InputSecretInvalid", invalidInput.Error(), false)
+				return r.recordFailure(ctx, app, "InputSecretInvalid", invalidInput.Error(), failureExecution)
 			}
 			return ctrl.Result{}, protectedErr
 		}
-		if !protectedReady {
-			return r.reconcileStatus(ctx, app, false, dependencies)
+	}
+	observed, err = r.observeProtected(ctx, app, observed)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if observed.allResources && protectedApplied {
+		if err := r.reconcileHelmChart(ctx, app); err != nil {
+			return r.handleOwnershipError(ctx, app, err)
 		}
 	}
-
-	if err := r.reconcileHelmChart(ctx, app); err != nil {
-		return r.handleOwnershipError(ctx, app, err)
+	observed, err = r.observeHelm(ctx, app, observed)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
-	return r.reconcileStatus(ctx, app, false, dependencies)
+	return r.recordObservedStatus(ctx, app, dependencies, observed)
 }
 
 func (r *Reconciler) handleOwnershipError(
@@ -324,7 +284,7 @@ func (r *Reconciler) handleOwnershipError(
 ) (ctrl.Result, error) {
 	var conflict *OwnershipConflictError
 	if errors.As(err, &conflict) {
-		return r.recordTerminal(ctx, app, "OwnershipConflict", conflict.Error(), true)
+		return r.recordFailure(ctx, app, "OwnershipConflict", conflict.Error(), failureOwnership)
 	}
 	return ctrl.Result{}, err
 }
@@ -360,7 +320,6 @@ func (r *Reconciler) preflightOwnership(ctx context.Context, app *applicationv1.
 			return err
 		}
 		if selection == ExternalSelectionExternal ||
-			(app.Spec.ExecutionMode == applicationv1.ExecutionModeObserve && selection != ExternalSelectionManaged) ||
 			(deleting && selection != ExternalSelectionManaged) {
 			return nil
 		}
@@ -379,321 +338,6 @@ func (r *Reconciler) preflightOwnership(ctx context.Context, app *applicationv1.
 	return nil
 }
 
-func (r *Reconciler) reconcileHelmChart(ctx context.Context, app *applicationv1.OneKSApplication) error {
-	desired := desiredHelmChart(app)
-	current := helmChartObject(desired.GetName())
-	err := r.authoritativeReader().Get(ctx, client.ObjectKeyFromObject(desired), current)
-	if apierrors.IsNotFound(err) {
-		ctrl.LoggerFrom(ctx).V(1).Info(
-			"reconciling Helm release",
-			"action", "create", "release", app.Spec.Release.ReleaseName,
-			"releaseNamespace", app.Spec.Release.TargetNamespace,
-		)
-		if err := r.Create(ctx, desired, client.FieldOwner(applicationv1.FieldManager)); err != nil {
-			if apierrors.IsAlreadyExists(err) {
-				return &OwnershipConflictError{Kind: "HelmChart", Namespace: desired.GetNamespace(), Name: desired.GetName()}
-			}
-			return fmt.Errorf("create HelmChart %s/%s: %w", desired.GetNamespace(), desired.GetName(), err)
-		}
-		ctrl.LoggerFrom(ctx).Info(
-			"Helm release created",
-			"release", app.Spec.Release.ReleaseName,
-			"releaseNamespace", app.Spec.Release.TargetNamespace,
-		)
-		r.event(app, corev1.EventTypeNormal, "HelmChartCreated", fmt.Sprintf("HelmChart %s/%s created", desired.GetNamespace(), desired.GetName()))
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("get HelmChart %s/%s: %w", desired.GetNamespace(), desired.GetName(), err)
-	}
-	if !ownershipMatches(app, current) {
-		return &OwnershipConflictError{Kind: "HelmChart", Namespace: desired.GetNamespace(), Name: desired.GetName()}
-	}
-	if helmChartNeedsApply(current, desired) {
-		// SSA honors resourceVersion as an optimistic precondition.
-		desired.SetResourceVersion(current.GetResourceVersion())
-		ctrl.LoggerFrom(ctx).V(1).Info(
-			"reconciling Helm release",
-			"action", "update", "release", app.Spec.Release.ReleaseName,
-			"releaseNamespace", app.Spec.Release.TargetNamespace,
-		)
-		if err := r.Patch(ctx, desired, client.Apply, client.FieldOwner(applicationv1.FieldManager)); err != nil {
-			return fmt.Errorf("apply HelmChart %s/%s: %w", desired.GetNamespace(), desired.GetName(), err)
-		}
-		ctrl.LoggerFrom(ctx).Info(
-			"Helm release applied",
-			"release", app.Spec.Release.ReleaseName,
-			"releaseNamespace", app.Spec.Release.TargetNamespace,
-		)
-		r.event(app, corev1.EventTypeNormal, "HelmChartApplied", fmt.Sprintf("HelmChart %s/%s applied", desired.GetNamespace(), desired.GetName()))
-	}
-	return nil
-}
-
-func desiredHelmChart(app *applicationv1.OneKSApplication) *unstructured.Unstructured {
-	object := helmChartObject(app.Spec.Release.ReleaseName)
-	object.SetLabels(ownershipLabels(app))
-	object.SetAnnotations(map[string]string{ChartIDAnnotation: app.Spec.Release.ChartID})
-	spec := map[string]any{
-		"chart":   app.Spec.Release.Chart,
-		"version": app.Spec.Release.Version, "targetNamespace": app.Spec.Release.TargetNamespace,
-		"createNamespace": app.Spec.Release.CreateNamespace, "valuesContent": app.Spec.Release.ValuesContent,
-	}
-	if app.Spec.Release.RepositoryURL != "" {
-		spec["repo"] = app.Spec.Release.RepositoryURL
-	}
-	if app.Spec.Release.AuthSecret != nil {
-		spec["authSecret"] = map[string]any{"name": app.Spec.Release.AuthSecret.Name}
-	}
-	object.Object["spec"] = spec
-	return object
-}
-
-func helmChartObject(name string) *unstructured.Unstructured {
-	object := &unstructured.Unstructured{}
-	object.SetGroupVersionKind(helmChartGVK)
-	object.SetNamespace(HelmChartNamespace)
-	object.SetName(name)
-	return object
-}
-
-func helmChartNeedsApply(current, desired *unstructured.Unstructured) bool {
-	currentSpec, _, _ := unstructured.NestedMap(current.Object, "spec")
-	desiredSpec, _, _ := unstructured.NestedMap(desired.Object, "spec")
-	return !reflect.DeepEqual(currentSpec, desiredSpec) ||
-		!labelSubsetMatches(current.GetLabels(), desired.GetLabels()) ||
-		current.GetAnnotations()[ChartIDAnnotation] != desired.GetAnnotations()[ChartIDAnnotation]
-}
-
-func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.OneKSApplication, observeOnly bool, dependencies dependencyObservation) (ctrl.Result, error) {
-	managedReadinessEnabled := dependencies.ready || observeOnly
-	observed, err := r.observe(ctx, app, managedReadinessEnabled)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	status := baseStatus(app)
-	status.Resources = observed.resources
-	status.Progress = applicationv1.ApplicationProgress{
-		Completed: observed.completed + dependencies.completed, Total: applicationProgressTotal(app), Current: observed.current,
-	}
-	if !dependencies.ready && dependencies.current != "" {
-		status.Progress.Current = dependencies.current
-	}
-	status.HelmChartRef = nil
-	if observed.helm != nil {
-		status.HelmChartRef = &applicationv1.HelmChartReference{
-			Namespace: observed.helm.GetNamespace(), Name: observed.helm.GetName(),
-			UID: string(observed.helm.GetUID()), ResourceVersion: observed.helm.GetResourceVersion(),
-		}
-	}
-	setCondition(&status, app.Generation, ConditionPlanValid, metav1.ConditionTrue, "Validated", "Plan digest and schema are valid")
-	dependencyCondition := conditionStatus(dependencies.ready)
-	setCondition(&status, app.Generation, ConditionDependenciesReady, dependencyCondition, dependencies.reason, dependencies.message)
-	resourcesReady := observed.allResources
-	if isRootApplication(app) {
-		resourcesReady = observed.managed.ready
-	}
-	resourceCondition := conditionStatus(resourcesReady)
-	resourceReason := conditionText(resourceCondition, "ResourcesReady", "ResourcesPending")
-	resourceMessage := conditionText(resourceCondition, "All managed resources are ready", "Managed resources are not ready")
-	if !isRootApplication(app) {
-		resourceMessage = conditionText(resourceCondition, "Dependency has no managed resources", "Dependency resources are not ready")
-	} else if observed.managed.failed {
-		resourceReason = observed.managed.reason
-		resourceMessage = observed.managed.message
-	} else if !dependencies.ready {
-		resourceCondition = metav1.ConditionUnknown
-		resourceReason = "DependenciesPending"
-		resourceMessage = "Managed resources are gated by direct dependencies"
-	}
-	setCondition(&status, app.Generation, ConditionResourcesReady, resourceCondition, resourceReason, resourceMessage)
-	if usesProtectedSecrets(app) {
-		protectedCondition := conditionStatus(observed.protected.ready)
-		setCondition(
-			&status, app.Generation, ConditionProtectedSecretsReady, protectedCondition,
-			conditionText(protectedCondition, "ProtectedSecretsReady", observed.protected.reason),
-			conditionText(protectedCondition, "All protected Secrets are ready", observed.protected.message),
-		)
-	}
-	helmCondition := conditionStatus(observed.helmState.ready)
-	helmReason := conditionText(helmCondition, "HelmReleaseReady", observed.helmState.reason)
-	helmMessage := conditionText(helmCondition, "Helm release is ready", observed.helmState.message)
-	if observed.helmState.ready && observed.helmState.reason == "ExternalDependencyReady" {
-		helmReason = observed.helmState.reason
-		helmMessage = observed.helmState.message
-	}
-	setCondition(&status, app.Generation, ConditionHelmReleaseReady, helmCondition, helmReason, helmMessage)
-	setCondition(&status, app.Generation, ConditionOwnershipConflict, metav1.ConditionFalse, "NoConflict", "Managed children have exact OneKS ownership")
-
-	ready := dependencies.ready && observed.allResources && observed.helmState.ready
-	readyCondition := conditionStatus(ready)
-	readyReason := "ApplicationProgressing"
-	readyMessage := "Application installation is in progress"
-	if observed.managed.failed {
-		readyReason = observed.managed.reason
-		readyMessage = observed.managed.message
-	} else if observed.protected.failed {
-		readyReason = observed.protected.reason
-		readyMessage = observed.protected.message
-	} else if observed.helmState.failed {
-		readyReason = observed.helmState.reason
-		readyMessage = observed.helmState.message
-	} else if !dependencies.ready {
-		readyReason = dependencies.reason
-		readyMessage = dependencies.message
-	}
-	setCondition(&status, app.Generation, ConditionReady, readyCondition, conditionText(readyCondition, "ApplicationReady", readyReason), conditionText(readyCondition, "Application resources and Helm release are ready", readyMessage))
-	clearLastError(&status)
-
-	if observeOnly {
-		status.Phase = applicationv1.PhaseObserving
-	} else if dependencies.terminal {
-		status.Phase = applicationv1.PhaseFailed
-		setLastError(&status, dependencies.reason, dependencies.message)
-	} else if observed.managed.failed {
-		status.Phase = applicationv1.PhaseFailed
-		setLastError(&status, observed.managed.reason, observed.managed.message)
-	} else if observed.protected.failed {
-		status.Phase = applicationv1.PhaseFailed
-		setLastError(&status, observed.protected.reason, observed.protected.message)
-	} else if observed.helmState.failed {
-		status.Phase = applicationv1.PhaseFailed
-		setLastError(&status, observed.helmState.reason, observed.helmState.message)
-	} else if ready {
-		status.Phase = applicationv1.PhaseReady
-	} else {
-		status.Phase = applicationv1.PhaseInstalling
-	}
-	if err := r.updateStatus(ctx, app, status); err != nil {
-		return ctrl.Result{}, err
-	}
-	return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
-}
-
-func (r *Reconciler) observe(ctx context.Context, app *applicationv1.OneKSApplication, managedReadinessEnabled bool) (observation, error) {
-	if isRootApplication(app) {
-		result, err := r.observeManagedResources(ctx, app, managedReadinessEnabled)
-		if err != nil {
-			return result, err
-		}
-		result.managed.ready = result.allResources
-		if usesProtectedSecrets(app) {
-			protected, protectedErr := r.observeProtectedSecrets(ctx, app, result.managed.ready)
-			if protectedErr != nil {
-				return result, protectedErr
-			}
-			result.resources = append(result.resources, protected.statuses...)
-			result.completed += protected.completed
-			result.protected = componentObservation{
-				ready: protected.ready, failed: protected.failed,
-				reason: protected.reason, message: protected.message,
-			}
-			result.allResources = result.managed.ready && protected.ready
-			if result.managed.ready && !protected.ready && protected.current != "" {
-				result.current = protected.current
-			}
-		}
-		return r.observeHelm(ctx, app, result)
-	}
-	result := observation{allResources: true, current: app.Spec.Release.ReleaseName}
-	return r.observeHelm(ctx, app, result)
-}
-
-func (r *Reconciler) observeHelm(ctx context.Context, app *applicationv1.OneKSApplication, result observation) (observation, error) {
-	if usesExternalDetection(app) {
-		selection, err := externalSelection(app)
-		if err != nil {
-			return result, err
-		}
-		if selection != ExternalSelectionManaged {
-			detection, detectionErr := r.detectExternalDependency(ctx, app)
-			if detectionErr != nil {
-				return result, detectionErr
-			}
-			if detection.state == externalDetectionUsable {
-				result.helmState.ready = true
-				result.completed++
-				result.helmState.reason = "ExternalDependencyReady"
-				result.helmState.message = detection.message
-				return result, nil
-			}
-			result.helmState.failed = true
-			if selection == ExternalSelectionExternal {
-				result.helmState.reason = "ExternalDependencyLost"
-				result.helmState.message = "Previously selected external prerequisite is no longer usable: " + detection.message
-			} else {
-				result.helmState.reason = "ExternalDependencyUnusable"
-				result.helmState.message = detection.message
-			}
-			return result, nil
-		}
-	}
-	helm := helmChartObject(app.Spec.Release.ReleaseName)
-	if err := r.Get(ctx, client.ObjectKeyFromObject(helm), helm); err != nil {
-		if apierrors.IsNotFound(err) {
-			result.helmState.reason = "HelmChartNotFound"
-			result.helmState.message = "HelmChart is absent"
-			return result, nil
-		}
-		return result, fmt.Errorf("observe HelmChart %s/%s: %w", HelmChartNamespace, app.Spec.Release.ReleaseName, err)
-	}
-	result.helm = helm
-	if failed, message := chartCondition(helm, "Failed", "HelmChart reported failure"); failed {
-		result.helmState.failed = true
-		result.helmState.reason = "HelmChartFailed"
-		result.helmState.message = message
-		return result, nil
-	}
-
-	jobName, _, _ := unstructured.NestedString(helm.Object, "status", "jobName")
-	if strings.TrimSpace(jobName) == "" {
-		result.helmState.reason = "InstallerJobPending"
-		result.helmState.message = "HelmChart has not reported an installer Job"
-		return result, nil
-	}
-	job := &batchv1.Job{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: helm.GetNamespace(), Name: strings.TrimSpace(jobName)}, job); err != nil {
-		if apierrors.IsNotFound(err) {
-			if app.Status.Phase == applicationv1.PhaseReady {
-				result.helmState.ready = true
-				result.completed++
-				result.helmState.reason = "PreviouslyReady"
-				result.helmState.message = "Installer Job is gone after a previously ready release"
-				return result, nil
-			}
-			result.helmState.reason = "InstallerJobNotFound"
-			result.helmState.message = "Helm installer Job is absent"
-			return result, nil
-		}
-		return result, fmt.Errorf("observe Helm installer Job %s/%s: %w", helm.GetNamespace(), jobName, err)
-	}
-	completed := false
-	for _, condition := range job.Status.Conditions {
-		if condition.Status != corev1.ConditionTrue {
-			continue
-		}
-		if condition.Type == batchv1.JobFailed {
-			result.helmState.failed = true
-			result.helmState.reason = "InstallerJobFailed"
-			result.helmState.message = firstNonEmpty(condition.Message, condition.Reason, "Helm installer Job failed")
-			return result, nil
-		}
-		if condition.Type == batchv1.JobComplete {
-			completed = true
-		}
-	}
-	if completed {
-		result.helmState.ready = true
-		result.completed++
-		result.helmState.reason = "InstallerJobComplete"
-		result.helmState.message = "Helm installer Job completed"
-		return result, nil
-	}
-	result.helmState.reason = "InstallerJobPending"
-	result.helmState.message = "Helm installer Job is pending"
-	return result, nil
-}
-
 func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.OneKSApplication) (ctrl.Result, error) {
 	status := baseStatus(app)
 	status.Phase = applicationv1.PhaseDeleting
@@ -709,44 +353,12 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 		return ctrl.Result{}, err
 	}
 
-	var helm *unstructured.Unstructured
-	var err error
-	if ownsHelmLifecycle(app) {
-		helm = helmChartObject(app.Spec.Release.ReleaseName)
-		err = r.authoritativeReader().Get(ctx, client.ObjectKeyFromObject(helm), helm)
+	pending, err := r.reconcileDeleteHelmChart(ctx, app)
+	if err != nil {
+		return r.handleOwnershipError(ctx, app, err)
 	}
-	if helm != nil && err == nil && app.Spec.DeletionPolicy == applicationv1.DeletionPolicyDelete {
-		if !ownershipMatches(app, helm) {
-			conflict := (&OwnershipConflictError{Kind: "HelmChart", Namespace: helm.GetNamespace(), Name: helm.GetName()}).Error()
-			return r.recordTerminal(ctx, app, "OwnershipConflict", conflict, true)
-		}
-		if deletionTimestamp := helm.GetDeletionTimestamp(); deletionTimestamp != nil && !deletionTimestamp.IsZero() {
-			return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
-		}
-		if err := r.executePreUninstallActions(ctx, app); err != nil {
-			return ctrl.Result{}, err
-		}
-		ctrl.LoggerFrom(ctx).V(1).Info(
-			"deleting Helm release",
-			"release", app.Spec.Release.ReleaseName,
-			"releaseNamespace", app.Spec.Release.TargetNamespace,
-		)
-		deleteErr := r.Delete(ctx, helm, deletePreconditions(helm)...)
-		if deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
-			return ctrl.Result{}, fmt.Errorf("delete HelmChart %s/%s: %w", helm.GetNamespace(), helm.GetName(), deleteErr)
-		}
-		if deleteErr == nil {
-			ctrl.LoggerFrom(ctx).Info(
-				"Helm release deletion requested",
-				"release", app.Spec.Release.ReleaseName,
-				"releaseNamespace", app.Spec.Release.TargetNamespace,
-			)
-		}
-		r.event(app, corev1.EventTypeNormal, "HelmChartDeleted", fmt.Sprintf("HelmChart %s/%s deletion requested", helm.GetNamespace(), helm.GetName()))
+	if pending {
 		return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
-	}
-	if err != nil && !apierrors.IsNotFound(err) {
-		return ctrl.Result{}, fmt.Errorf("get deleting HelmChart: %w", err)
 	}
 
 	if usesProtectedSecrets(app) {
@@ -776,7 +388,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 		}
 	}
 
-	if app.Spec.ExecutionMode == applicationv1.ExecutionModeExecute && containsString(app.Finalizers, applicationv1.ApplicationFinalizer) {
+	if controllerutil.ContainsFinalizer(app, applicationv1.ApplicationFinalizer) {
 		retry, err := r.releaseDependencies(ctx, app)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -793,42 +405,11 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 	return ctrl.Result{}, nil
 }
 
-func (r *Reconciler) executePreUninstallActions(ctx context.Context, app *applicationv1.OneKSApplication) error {
-	if app.Spec.Role != applicationv1.ApplicationRoleDependency || app.Spec.Uninstall == nil {
-		return nil
-	}
-	for index, action := range app.Spec.Uninstall.PreActions {
-		target := &unstructured.Unstructured{}
-		target.SetAPIVersion(action.Resource.APIVersion)
-		target.SetKind(action.Resource.Kind)
-		target.SetNamespace(action.Resource.Namespace)
-		target.SetName(action.Resource.Name)
-		if err := r.authoritativeReader().Get(ctx, client.ObjectKeyFromObject(target), target); err != nil {
-			return fmt.Errorf("get pre-uninstall action %d target %s %s/%s: %w", index, action.Resource.Kind, action.Resource.Namespace, action.Resource.Name, err)
-		}
-		patch := client.RawPatch(types.MergePatchType, []byte(action.PatchJSON))
-		ctrl.LoggerFrom(ctx).V(1).Info(
-			"executing pre-uninstall action",
-			"action", index, "type", action.Type,
-			"apiVersion", action.Resource.APIVersion, "kind", action.Resource.Kind,
-			"resourceNamespace", action.Resource.Namespace, "name", action.Resource.Name,
-		)
-		if err := r.Patch(ctx, target, patch); err != nil {
-			return fmt.Errorf("patch pre-uninstall action %d target %s %s/%s: %w", index, action.Resource.Kind, action.Resource.Namespace, action.Resource.Name, err)
-		}
-		ctrl.LoggerFrom(ctx).Info(
-			"pre-uninstall action applied",
-			"action", index, "type", action.Type,
-			"apiVersion", action.Resource.APIVersion, "kind", action.Resource.Kind,
-			"resourceNamespace", action.Resource.Namespace, "name", action.Resource.Name,
-		)
-	}
-	return nil
-}
-
 func (r *Reconciler) removeApplicationFinalizer(ctx context.Context, app *applicationv1.OneKSApplication) error {
+	updated := app.DeepCopy()
+	controllerutil.RemoveFinalizer(updated, applicationv1.ApplicationFinalizer)
 	_, err := r.patchApplicationFinalizers(
-		ctx, app, removeString(app.Finalizers, applicationv1.ApplicationFinalizer),
+		ctx, app, updated.Finalizers,
 	)
 	if err != nil {
 		current := &applicationv1.OneKSApplication{}
@@ -861,63 +442,6 @@ func (r *Reconciler) patchApplicationFinalizers(
 		return nil, err
 	}
 	return updated, nil
-}
-
-func (r *Reconciler) recordTerminal(ctx context.Context, app *applicationv1.OneKSApplication, reason, message string, ownershipConflict bool) (ctrl.Result, error) {
-	status := baseStatus(app)
-	status.Phase = applicationv1.PhaseFailed
-	status.Progress = applicationv1.ApplicationProgress{Total: applicationProgressTotal(app)}
-	setLastError(&status, reason, message)
-	planCondition := metav1.ConditionTrue
-	if !ownershipConflict && reason != "TargetNamespaceMissing" && reason != "InputSecretInvalid" &&
-		reason != "ExternalDependencyUnusable" && reason != "ExternalSelectionInvalid" {
-		planCondition = metav1.ConditionFalse
-	}
-	setCondition(&status, app.Generation, ConditionPlanValid, planCondition, reason, message)
-	if len(app.Spec.Dependencies) == 0 {
-		setCondition(&status, app.Generation, ConditionDependenciesReady, metav1.ConditionTrue, "NoDependencies", "Application has no direct dependencies")
-	} else {
-		setCondition(&status, app.Generation, ConditionDependenciesReady, metav1.ConditionFalse, "DependenciesPending", "Direct dependencies have not been evaluated")
-	}
-	if usesProtectedSecrets(app) {
-		setCondition(&status, app.Generation, ConditionProtectedSecretsReady, metav1.ConditionFalse, reason, message)
-	}
-	conflictCondition := conditionStatus(ownershipConflict)
-	setCondition(&status, app.Generation, ConditionOwnershipConflict, conflictCondition, reason, message)
-	setCondition(&status, app.Generation, ConditionReady, metav1.ConditionFalse, reason, message)
-	if err := r.updateStatus(ctx, app, status); err != nil {
-		return ctrl.Result{}, err
-	}
-	r.event(app, corev1.EventTypeWarning, reason, truncate(message, 512))
-	return ctrl.Result{}, nil
-}
-
-func (r *Reconciler) updateStatus(ctx context.Context, app *applicationv1.OneKSApplication, status applicationv1.OneKSApplicationStatus) error {
-	normalizeStatus(&status)
-	if reflect.DeepEqual(app.Status, status) {
-		ctrl.LoggerFrom(ctx).V(1).Info(
-			"application status unchanged",
-			"phase", status.Phase,
-			"observedGeneration", status.ObservedGeneration,
-		)
-		return nil
-	}
-	updated := app.DeepCopy()
-	updated.Status = status
-	if err := r.Status().Update(ctx, updated); err != nil {
-		return fmt.Errorf("update OneKSApplication status: %w", err)
-	}
-	app.Status = status
-	app.ResourceVersion = updated.ResourceVersion
-	ctrl.LoggerFrom(ctx).Info(
-		"application status updated",
-		"phase", status.Phase,
-		"observedGeneration", status.ObservedGeneration,
-		"completed", status.Progress.Completed,
-		"total", status.Progress.Total,
-		"current", status.Progress.Current,
-	)
-	return nil
 }
 
 func (r *Reconciler) SetupWithManager(manager ctrl.Manager) error {
@@ -981,38 +505,6 @@ func (r *Reconciler) requestsForJob(ctx context.Context, _ client.Object) []ctrl
 	return requests
 }
 
-func chartCondition(chart *unstructured.Unstructured, conditionType, fallback string) (bool, string) {
-	conditions, found, _ := unstructured.NestedSlice(chart.Object, "status", "conditions")
-	if !found {
-		return false, ""
-	}
-	for _, item := range conditions {
-		condition, ok := item.(map[string]any)
-		if ok && condition["type"] == conditionType && condition["status"] == string(corev1.ConditionTrue) {
-			return true, firstNonEmpty(fmt.Sprint(condition["message"]), fmt.Sprint(condition["reason"]), fallback)
-		}
-	}
-	return false, ""
-}
-
-func conditionText(status metav1.ConditionStatus, positive, negative string) string {
-	if status == metav1.ConditionTrue {
-		return positive
-	}
-	return firstNonEmpty(negative, "Pending")
-}
-
-func conditionStatus(value bool) metav1.ConditionStatus {
-	if value {
-		return metav1.ConditionTrue
-	}
-	return metav1.ConditionFalse
-}
-
-func clearLastError(status *applicationv1.OneKSApplicationStatus) {
-	status.LastError = &applicationv1.ApplicationError{}
-}
-
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" && value != "<nil>" {
@@ -1020,25 +512,6 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func containsString(values []string, expected string) bool {
-	for _, value := range values {
-		if value == expected {
-			return true
-		}
-	}
-	return false
-}
-
-func removeString(values []string, removed string) []string {
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		if value != removed {
-			result = append(result, value)
-		}
-	}
-	return result
 }
 
 func deletePreconditions(object client.Object) []client.DeleteOption {

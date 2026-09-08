@@ -14,10 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package v1alpha5 contains the OneKS application API.
+// Package v1beta1 contains the OneKS application API.
 // +kubebuilder:object:generate=true
 // +groupName=oneks.opennebula.io
-package v1alpha5
+package v1beta1
 
 import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	GroupVersion  = schema.GroupVersion{Group: "oneks.opennebula.io", Version: "v1alpha5"}
+	GroupVersion  = schema.GroupVersion{Group: "oneks.opennebula.io", Version: "v1beta1"}
 	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion}
 	AddToScheme   = SchemeBuilder.AddToScheme
 )
