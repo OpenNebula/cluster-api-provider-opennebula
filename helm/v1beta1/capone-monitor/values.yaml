@@ -1,0 +1,13 @@
+image:
+  repository: ghcr.io/opennebula/cluster-api-provider-opennebula-monitor
+  tag: ""
+  pullPolicy: IfNotPresent
+
+monitor:
+  endpoint: ""
+  clusterID: ""
+  key: ""
+  authSecretName: ""
+  authSecretKey: ONE_AUTH
+  httpTimeout: 10s
+  healthAddress: ":8081"

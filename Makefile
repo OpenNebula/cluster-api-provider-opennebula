@@ -44,6 +44,8 @@ CLOSEST_TAG ?= $(shell git -C $(SELF) describe --tags --abbrev=0)
 IMG_URL ?= ghcr.io/opennebula/cluster-api-provider-opennebula
 IMG     ?= $(IMG_URL):latest
 E2E_IMG ?= $(IMG_URL):e2e
+MONITOR_IMG_URL ?= ghcr.io/opennebula/cluster-api-provider-opennebula-monitor
+MONITOR_IMG     ?= $(MONITOR_IMG_URL):latest
 
 # CONTAINER_TOOL defines the container tool to be used for building images.
 # Be aware that the target commands are only tested with Docker which is
@@ -130,19 +132,31 @@ lint-fix: $(GOLANGCI_LINT)
 
 # Build
 
-.PHONY: build run docker-build docker-push docker-build-e2e docker-release
+.PHONY: build build-monitor run run-monitor docker-build docker-build-monitor docker-push docker-push-monitor docker-build-e2e docker-release
 
 build: manifests generate fmt vet
 	go build -o bin/manager cmd/main.go
 
+build-monitor: fmt vet
+	go build -o bin/monitor ./cmd/monitor
+
 run: manifests generate fmt vet
 	go run cmd/main.go
+
+run-monitor: fmt vet
+	go run ./cmd/monitor
 
 docker-build:
 	$(CONTAINER_TOOL) build -t $(IMG) .
 
+docker-build-monitor:
+	$(CONTAINER_TOOL) build -t $(MONITOR_IMG) -f Dockerfile.monitor .
+
 docker-push: docker-build
 	$(CONTAINER_TOOL) push $(IMG)
+
+docker-push-monitor: docker-build-monitor
+	$(CONTAINER_TOOL) push $(MONITOR_IMG)
 
 docker-build-e2e:
 	$(CONTAINER_TOOL) build -t $(E2E_IMG) .
@@ -181,7 +195,7 @@ release: charts $(KUSTOMIZE)
 
 # Helm
 
-.PHONY: charts
+.PHONY: charts monitor-chart
 
 define chart-generator-tool
 charts: $(CHARTS_DIR)/$(CLOSEST_TAG)/$(1)-$(subst v,,$(CLOSEST_TAG)).tgz
@@ -214,6 +228,19 @@ endef
 
 $(eval $(call chart-generator-tool,capone-kadm,default))
 $(eval $(call chart-generator-tool,capone-rke2,rke2))
+
+MONITOR_VERSION ?= 0.1.0
+MONITOR_RELEASE_TAG   ?= monitor-v$(MONITOR_VERSION)
+MONITOR_CHART_PACKAGE := $(CHARTS_DIR)/$(MONITOR_RELEASE_TAG)/capone-monitor-$(MONITOR_VERSION).tgz
+MONITOR_CHART_SOURCES := $(shell find helm/v1beta1/capone-monitor -type f)
+
+monitor-chart: $(MONITOR_CHART_PACKAGE)
+
+$(MONITOR_CHART_PACKAGE): $(MONITOR_CHART_SOURCES) $(HELM)
+	install -m u=rwx,go=rx -d $(CHARTS_DIR)/$(MONITOR_RELEASE_TAG)
+	$(HELM) package -d $(CHARTS_DIR)/$(MONITOR_RELEASE_TAG) \
+		--version $(MONITOR_VERSION) --app-version v$(MONITOR_VERSION) \
+		helm/v1beta1/capone-monitor
 
 # Deployment
 
