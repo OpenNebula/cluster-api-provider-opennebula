@@ -5,6 +5,6 @@ metadata:
   namespace: {{ .Release.Namespace | quote }}
 data:
   MONITOR_ENDPOINT: {{ required "monitor.endpoint is required" .Values.monitor.endpoint | quote }}
-  MONITOR_CLUSTER_ID: {{ required "monitor.clusterID is required" .Values.monitor.clusterID | quote }}
+  ONE_XMLRPC: {{ required "monitor.openNebulaEndpoint is required" .Values.monitor.openNebulaEndpoint | quote }}
   MONITOR_HTTP_TIMEOUT: {{ required "monitor.httpTimeout is required" .Values.monitor.httpTimeout | quote }}
   MONITOR_HEALTH_ADDRESS: {{ required "monitor.healthAddress is required" .Values.monitor.healthAddress | quote }}

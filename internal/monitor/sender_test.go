@@ -33,7 +33,7 @@ func TestHTTPEncryptedSenderSendsNodeEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	sender, err := NewHTTPEncryptedSender(Config{
-		Endpoint: "http://oneks.example/api/v1", ClusterID: "42", Key: key,
+		Endpoint: "http://oneks.example/api/v1", Key: key,
 		AuthFile: authFile, HTTPTimeout: time.Second,
 	})
 	if err != nil {
@@ -56,12 +56,12 @@ func TestHTTPEncryptedSenderSendsNodeEvent(t *testing.T) {
 			Body:       io.NopCloser(strings.NewReader("")),
 		}, nil
 	})
-	if err := sender.Send(context.Background(), Event{
+	if err := sender.Send(context.Background(), NodeGroupEventDestination{ClusterID: 42, GroupID: 16}, Event{
 		Event: "node_ready", Payload: NodeReadyPayload{VMID: 2, Ready: true},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if path != "/api/v1/clusters/42/events" {
+	if path != "/api/v1/clusters/42/nodegroups/16/events" {
 		t.Fatalf("request path = %q", path)
 	}
 	if plaintext != `{"event":"node_ready","payload":{"vm_id":2,"ready":true}}` {

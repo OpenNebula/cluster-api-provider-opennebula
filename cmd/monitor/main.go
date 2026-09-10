@@ -51,14 +51,15 @@ func main() {
 		log.Error(err, "unable to create encrypted event sender")
 		os.Exit(1)
 	}
-	watcher, err := monitor.New(client, sender)
+	nodes, err := monitor.NewNodeMonitor(client, sender, config)
 	if err != nil {
-		log.Error(err, "unable to create monitor")
+		log.Error(err, "unable to create node monitor")
 		os.Exit(1)
 	}
+	manager := monitor.NewManager(nodes)
 
 	ctx := ctrl.SetupSignalHandler()
-	health := &http.Server{Addr: config.HealthAddress, Handler: healthHandler(watcher)}
+	health := &http.Server{Addr: config.HealthAddress, Handler: healthHandler(manager)}
 	go func() {
 		<-ctx.Done()
 		_ = health.Close()
@@ -70,19 +71,19 @@ func main() {
 		}
 	}()
 
-	if err := watcher.Run(ctx); err != nil {
+	if err := manager.Run(ctx); err != nil {
 		log.Error(err, "monitor stopped with an error")
 		os.Exit(1)
 	}
 }
 
-func healthHandler(watcher *monitor.Monitor) http.Handler {
+func healthHandler(manager *monitor.Manager) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprintln(w, "ok")
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		if !watcher.Ready() {
+		if !manager.Ready() {
 			http.Error(w, "informer cache is not synchronized", http.StatusServiceUnavailable)
 			return
 		}

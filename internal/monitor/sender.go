@@ -27,7 +27,21 @@ import (
 )
 
 type Sender interface {
-	Send(context.Context, Event) error
+	Send(context.Context, Destination, any) error
+}
+
+type Destination interface {
+	path() string
+}
+
+type NodeGroupEventDestination struct {
+	ClusterID int
+	GroupID   int
+}
+
+func (d NodeGroupEventDestination) path() string {
+	return "/clusters/" + url.PathEscape(fmt.Sprint(d.ClusterID)) +
+		"/nodegroups/" + url.PathEscape(fmt.Sprint(d.GroupID)) + "/events"
 }
 
 type encryptedEnvelope struct {
@@ -54,8 +68,7 @@ func NewHTTPEncryptedSender(config Config) (*HTTPEncryptedSender, error) {
 		return nil, fmt.Errorf("create AES-GCM: %w", err)
 	}
 	return &HTTPEncryptedSender{
-		endpoint: strings.TrimRight(config.Endpoint, "/") + "/clusters/" +
-			url.PathEscape(config.ClusterID) + "/events",
+		endpoint: strings.TrimRight(config.Endpoint, "/"),
 		authFile: config.AuthFile,
 		aead:     aead,
 		client: &http.Client{
@@ -67,7 +80,7 @@ func NewHTTPEncryptedSender(config Config) (*HTTPEncryptedSender, error) {
 	}, nil
 }
 
-func (s *HTTPEncryptedSender) Send(ctx context.Context, event Event) error {
+func (s *HTTPEncryptedSender) Send(ctx context.Context, destination Destination, payload any) error {
 	credential, err := readCredential(s.authFile)
 	if err != nil {
 		return fmt.Errorf("resolve monitor authentication: %w", err)
@@ -76,31 +89,32 @@ func (s *HTTPEncryptedSender) Send(ctx context.Context, event Event) error {
 	if !ok || user == "" || password == "" {
 		return fmt.Errorf("monitor authentication credential must have the form username:password-or-token")
 	}
-	plaintext, err := json.Marshal(event)
+	plaintext, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("encode event: %w", err)
+		return fmt.Errorf("encode payload: %w", err)
 	}
 	nonce := make([]byte, s.aead.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return fmt.Errorf("generate event nonce: %w", err)
+		return fmt.Errorf("generate payload nonce: %w", err)
 	}
 	sealed := s.aead.Seal(nil, nonce, plaintext, nil)
 	body, err := json.Marshal(encryptedEnvelope{
 		Payload: base64.StdEncoding.EncodeToString(append(nonce, sealed...)),
 	})
 	if err != nil {
-		return fmt.Errorf("encode encrypted event: %w", err)
+		return fmt.Errorf("encode encrypted payload: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint, bytes.NewReader(body))
+	endpoint := s.endpoint + destination.path()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("create event request: %w", err)
+		return fmt.Errorf("create payload request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "capone-cluster-monitor")
 	req.SetBasicAuth(user, password)
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("send event: %w", err)
+		return fmt.Errorf("send payload: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {

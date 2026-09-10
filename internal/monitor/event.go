@@ -37,12 +37,14 @@ func nodeReadyEvent(node *corev1.Node) (Event, error) {
 	if err != nil {
 		return Event{}, fmt.Errorf("invalid OpenNebula VM ID in provider ID %q: %w", node.Spec.ProviderID, err)
 	}
-	ready := false
+	return Event{Event: "node_ready", Payload: NodeReadyPayload{VMID: vmID, Ready: nodeReady(node)}}, nil
+}
+
+func nodeReady(node *corev1.Node) bool {
 	for _, condition := range node.Status.Conditions {
 		if condition.Type == corev1.NodeReady {
-			ready = condition.Status == corev1.ConditionTrue
-			break
+			return condition.Status == corev1.ConditionTrue
 		}
 	}
-	return Event{Event: "node_ready", Payload: NodeReadyPayload{VMID: vmID, Ready: ready}}, nil
+	return false
 }

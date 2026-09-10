@@ -14,63 +14,54 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes/fake"
 )
 
-type senderFunc func(context.Context, Event) error
+type componentStub struct {
+	ready   bool
+	started chan<- struct{}
+}
 
-func (f senderFunc) Send(ctx context.Context, event Event) error { return f(ctx, event) }
+func (c componentStub) Run(ctx context.Context) error {
+	c.started <- struct{}{}
+	<-ctx.Done()
+	return nil
+}
 
-func TestMonitorDoesNotSendDeletedNodeEvents(t *testing.T) {
-	node := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: "worker-1"},
-		Spec:       corev1.NodeSpec{ProviderID: "one://2"},
+func (c componentStub) Ready() bool { return c.ready }
+
+func TestManagerCoordinatesComponents(t *testing.T) {
+	started := make(chan struct{}, 2)
+	manager := NewManager(
+		componentStub{ready: true, started: started},
+		componentStub{ready: true, started: started},
+	)
+	if !manager.Ready() {
+		t.Fatal("manager with ready components is not ready")
 	}
-	client := fake.NewSimpleClientset(node)
-	events := make(chan Event, 2)
-	monitor, err := New(client, senderFunc(func(_ context.Context, event Event) error {
-		events <- event
-		return nil
-	}))
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- monitor.Run(ctx) }()
-	t.Cleanup(func() {
-		cancel()
-		if err := <-done; err != nil {
-			t.Errorf("monitor stopped: %v", err)
-		}
-	})
+	go func() { done <- manager.Run(ctx) }()
 
-	select {
-	case <-events:
-	case <-time.After(3 * time.Second):
-		t.Fatal("added node event was not sent")
-	}
-	node.Status.Conditions = []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}
-	if _, err := client.CoreV1().Nodes().Update(ctx, node, metav1.UpdateOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case event := <-events:
-		if !event.Payload.Ready {
-			t.Fatalf("updated node event is not ready: %#v", event)
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("component was not started")
 		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("updated node event was not sent")
 	}
-	if err := client.CoreV1().Nodes().Delete(ctx, node.Name, metav1.DeleteOptions{}); err != nil {
-		t.Fatal(err)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("manager stopped with an error: %v", err)
 	}
-	select {
-	case event := <-events:
-		t.Fatalf("unexpected deleted node event: %#v", event)
-	case <-time.After(100 * time.Millisecond):
+}
+
+func TestManagerIsNotReadyWithoutReadyComponents(t *testing.T) {
+	if NewManager().Ready() {
+		t.Fatal("empty manager is ready")
+	}
+	started := make(chan struct{}, 1)
+	if NewManager(componentStub{started: started}).Ready() {
+		t.Fatal("manager with an unready component is ready")
 	}
 }
