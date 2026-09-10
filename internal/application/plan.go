@@ -537,6 +537,8 @@ func containsSensitiveValue(value any, sensitivity valuesSensitivity) bool {
 				nestedSensitivity = valuesSensitivityReference
 			case strings.EqualFold(key, "secretTargets"):
 				nestedSensitivity = valuesSensitivityNormal
+			case strings.EqualFold(key, "includeAll") && isBooleanValue(nested):
+				nestedSensitivity = valuesSensitivityNormal
 			case isValuesReferenceContainer(key):
 				nestedSensitivity = valuesSensitivityReference
 			case isValuesReferenceLeaf(key) && isScalarValue(nested):
@@ -589,6 +591,11 @@ func isScalarValue(value any) bool {
 	default:
 		return true
 	}
+}
+
+func isBooleanValue(value any) bool {
+	_, ok := value.(bool)
+	return ok
 }
 
 func validUTF8Bytes(value string, minimum, maximum int) bool {
