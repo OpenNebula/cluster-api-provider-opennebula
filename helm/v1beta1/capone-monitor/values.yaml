@@ -5,10 +5,26 @@ image:
 
 monitor:
   endpoint: ""
+  clusterID: ""
   openNebulaEndpoint: ""
   key: ""
   authSecretName: ""
   authSecretKey: ONE_AUTH
   httpTimeout: 10s
   podPollInterval: 10s
+  resourceConfigNamespace: kube-system
+  resourceConfigName: capone-resource-monitor
+  resourcePollInterval: 10s
   healthAddress: ":8081"
+
+resourceConfig:
+  create: true
+  # Add exact resources using the same format as the f-7910 monitor, for example:
+  # monitorYaml: |
+  #   - apiVersion: apps/v1
+  #     resource: deployments
+  #     namespace: payments
+  #     name: api
+  #     path: status.readyReplicas
+  monitorYaml: |
+    []

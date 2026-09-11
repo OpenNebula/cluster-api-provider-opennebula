@@ -41,6 +41,11 @@ func TestPodSnapshotsGroupPodsByGroupAndVM(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: "queued", Namespace: "payments"},
 			Status:     corev1.PodStatus{Phase: corev1.PodPending, Reason: "Unschedulable"},
 		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "scheduled-pending", Namespace: "payments"},
+			Spec:       corev1.PodSpec{NodeName: "worker-1"},
+			Status:     corev1.PodStatus{Phase: corev1.PodPending},
+		},
 	}
 	resolver := destinationResolverFunc(func(_ context.Context, vmID int) (NodeGroupEventDestination, error) {
 		return NodeGroupEventDestination{ClusterID: 0, GroupID: vmID - 1}, nil

@@ -1,4 +1,5 @@
-The CAPONE node event monitor is running in namespace {{ .Release.Namespace }}.
+The CAPONE node event and resource observation monitor is running in namespace {{ .Release.Namespace }}.
 
 Endpoint: {{ .Values.monitor.endpoint }}
+Cluster ID: {{ .Values.monitor.clusterID }}
 OpenNebula endpoint: {{ .Values.monitor.openNebulaEndpoint }}

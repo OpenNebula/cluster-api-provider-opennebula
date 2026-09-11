@@ -162,6 +162,9 @@ func podSnapshots(
 
 	for i := range pods {
 		pod := &pods[i]
+		if pod.Status.Phase == corev1.PodPending {
+			continue
+		}
 		node, found := resolvedNodes[pod.Spec.NodeName]
 		if !found {
 			continue

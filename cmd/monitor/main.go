@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -46,6 +47,11 @@ func main() {
 		log.Error(err, "unable to create Kubernetes client")
 		os.Exit(1)
 	}
+	dynamicClient, err := dynamic.NewForConfig(restConfig)
+	if err != nil {
+		log.Error(err, "unable to create dynamic Kubernetes client")
+		os.Exit(1)
+	}
 	sender, err := monitor.NewHTTPEncryptedSender(config)
 	if err != nil {
 		log.Error(err, "unable to create encrypted event sender")
@@ -61,7 +67,8 @@ func main() {
 		log.Error(err, "unable to create pod monitor")
 		os.Exit(1)
 	}
-	manager := monitor.NewManager(nodes, pods)
+	observations := monitor.NewObservationMonitor(client, dynamicClient, sender, config)
+	manager := monitor.NewManager(nodes, pods, observations)
 
 	ctx := ctrl.SetupSignalHandler()
 	health := &http.Server{Addr: config.HealthAddress, Handler: healthHandler(manager)}

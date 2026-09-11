@@ -5,7 +5,22 @@ metadata:
   namespace: {{ .Release.Namespace | quote }}
 data:
   MONITOR_ENDPOINT: {{ required "monitor.endpoint is required" .Values.monitor.endpoint | quote }}
+  MONITOR_CLUSTER_ID: {{ required "monitor.clusterID is required" .Values.monitor.clusterID | quote }}
   ONE_XMLRPC: {{ required "monitor.openNebulaEndpoint is required" .Values.monitor.openNebulaEndpoint | quote }}
   MONITOR_HTTP_TIMEOUT: {{ required "monitor.httpTimeout is required" .Values.monitor.httpTimeout | quote }}
   MONITOR_POD_POLL_INTERVAL: {{ required "monitor.podPollInterval is required" .Values.monitor.podPollInterval | quote }}
+  MONITOR_RESOURCE_CONFIG_NAMESPACE: {{ .Values.monitor.resourceConfigNamespace | default "kube-system" | quote }}
+  MONITOR_RESOURCE_CONFIG_NAME: {{ .Values.monitor.resourceConfigName | default "capone-resource-monitor" | quote }}
+  MONITOR_RESOURCE_POLL_INTERVAL: {{ required "monitor.resourcePollInterval is required" .Values.monitor.resourcePollInterval | quote }}
   MONITOR_HEALTH_ADDRESS: {{ required "monitor.healthAddress is required" .Values.monitor.healthAddress | quote }}
+{{- if .Values.resourceConfig.create }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.monitor.resourceConfigName | default "capone-resource-monitor" | quote }}
+  namespace: {{ .Values.monitor.resourceConfigNamespace | default "kube-system" | quote }}
+data:
+  monitor.yaml: |
+{{ .Values.resourceConfig.monitorYaml | default "[]" | indent 4 }}
+{{- end }}

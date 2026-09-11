@@ -69,6 +69,12 @@ func TestHTTPEncryptedSenderSendsNodeEvent(t *testing.T) {
 	}
 }
 
+func TestClusterObservationsDestinationPath(t *testing.T) {
+	if got := (ClusterObservationsDestination{ClusterID: "42"}).path(); got != "/clusters/42/observations" {
+		t.Fatalf("destination path = %q", got)
+	}
+}
+
 func TestClusterPodsDestinationPath(t *testing.T) {
 	if got := (ClusterPodsDestination{ClusterID: 42}).path(); got != "/clusters/42/pods" {
 		t.Fatalf("destination path = %q", got)

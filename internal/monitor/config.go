@@ -20,24 +20,34 @@ import (
 )
 
 type Config struct {
-	Endpoint           string
-	OpenNebulaEndpoint string
-	Key                []byte
-	AuthFile           string
-	HTTPTimeout        time.Duration
-	PodPollInterval    time.Duration
-	HealthAddress      string
+	Endpoint                string
+	ClusterID               string
+	OpenNebulaEndpoint      string
+	Key                     []byte
+	AuthFile                string
+	HTTPTimeout             time.Duration
+	PodPollInterval         time.Duration
+	ResourceConfigNamespace string
+	ResourceConfigName      string
+	ResourcePollInterval    time.Duration
+	HealthAddress           string
 }
 
 func ConfigFromEnv() (Config, error) {
 	c := Config{
-		Endpoint:           strings.TrimSpace(os.Getenv("MONITOR_ENDPOINT")),
-		OpenNebulaEndpoint: strings.TrimSpace(os.Getenv("ONE_XMLRPC")),
-		AuthFile:           strings.TrimSpace(os.Getenv("MONITOR_AUTH_FILE")),
-		HealthAddress:      strings.TrimSpace(os.Getenv("MONITOR_HEALTH_ADDRESS")),
+		Endpoint:                strings.TrimSpace(os.Getenv("MONITOR_ENDPOINT")),
+		ClusterID:               strings.TrimSpace(os.Getenv("MONITOR_CLUSTER_ID")),
+		OpenNebulaEndpoint:      strings.TrimSpace(os.Getenv("ONE_XMLRPC")),
+		AuthFile:                strings.TrimSpace(os.Getenv("MONITOR_AUTH_FILE")),
+		ResourceConfigNamespace: strings.TrimSpace(os.Getenv("MONITOR_RESOURCE_CONFIG_NAMESPACE")),
+		ResourceConfigName:      strings.TrimSpace(os.Getenv("MONITOR_RESOURCE_CONFIG_NAME")),
+		HealthAddress:           strings.TrimSpace(os.Getenv("MONITOR_HEALTH_ADDRESS")),
 	}
 	if c.Endpoint == "" {
 		return Config{}, fmt.Errorf("MONITOR_ENDPOINT is required")
+	}
+	if c.ClusterID == "" {
+		return Config{}, fmt.Errorf("MONITOR_CLUSTER_ID is required")
 	}
 	if c.OpenNebulaEndpoint == "" {
 		return Config{}, fmt.Errorf("ONE_XMLRPC is required")
@@ -71,6 +81,21 @@ func ConfigFromEnv() (Config, error) {
 	c.PodPollInterval, err = time.ParseDuration(podPollInterval)
 	if err != nil || c.PodPollInterval <= 0 {
 		return Config{}, fmt.Errorf("MONITOR_POD_POLL_INTERVAL must be a positive duration: %q", podPollInterval)
+	}
+	pollInterval := strings.TrimSpace(os.Getenv("MONITOR_RESOURCE_POLL_INTERVAL"))
+	if pollInterval == "" {
+		c.ResourcePollInterval = 10 * time.Second
+	} else {
+		c.ResourcePollInterval, err = time.ParseDuration(pollInterval)
+		if err != nil || c.ResourcePollInterval <= 0 {
+			return Config{}, fmt.Errorf("MONITOR_RESOURCE_POLL_INTERVAL must be a positive duration: %q", pollInterval)
+		}
+	}
+	if c.ResourceConfigNamespace == "" {
+		c.ResourceConfigNamespace = "kube-system"
+	}
+	if c.ResourceConfigName == "" {
+		c.ResourceConfigName = "capone-resource-monitor"
 	}
 	return c, nil
 }
