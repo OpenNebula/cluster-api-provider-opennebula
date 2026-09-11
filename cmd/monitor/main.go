@@ -56,7 +56,12 @@ func main() {
 		log.Error(err, "unable to create node monitor")
 		os.Exit(1)
 	}
-	manager := monitor.NewManager(nodes)
+	pods, err := monitor.NewPodMonitor(client, sender, config)
+	if err != nil {
+		log.Error(err, "unable to create pod monitor")
+		os.Exit(1)
+	}
+	manager := monitor.NewManager(nodes, pods)
 
 	ctx := ctrl.SetupSignalHandler()
 	health := &http.Server{Addr: config.HealthAddress, Handler: healthHandler(manager)}

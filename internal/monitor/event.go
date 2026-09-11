@@ -29,15 +29,23 @@ type NodeReadyPayload struct {
 }
 
 func nodeReadyEvent(node *corev1.Node) (Event, error) {
-	providerID, found := strings.CutPrefix(node.Spec.ProviderID, "one://")
+	vmID, err := vmIDFromProviderID(node.Spec.ProviderID)
+	if err != nil {
+		return Event{}, err
+	}
+	return Event{Event: "node_ready", Payload: NodeReadyPayload{VMID: vmID, Ready: nodeReady(node)}}, nil
+}
+
+func vmIDFromProviderID(value string) (int, error) {
+	providerID, found := strings.CutPrefix(value, "one://")
 	if !found {
-		return Event{}, fmt.Errorf("unsupported provider ID %q", node.Spec.ProviderID)
+		return 0, fmt.Errorf("unsupported provider ID %q", value)
 	}
 	vmID, err := strconv.Atoi(providerID)
 	if err != nil {
-		return Event{}, fmt.Errorf("invalid OpenNebula VM ID in provider ID %q: %w", node.Spec.ProviderID, err)
+		return 0, fmt.Errorf("invalid OpenNebula VM ID in provider ID %q: %w", value, err)
 	}
-	return Event{Event: "node_ready", Payload: NodeReadyPayload{VMID: vmID, Ready: nodeReady(node)}}, nil
+	return vmID, nil
 }
 
 func nodeReady(node *corev1.Node) bool {

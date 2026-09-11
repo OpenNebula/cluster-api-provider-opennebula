@@ -69,6 +69,12 @@ func TestHTTPEncryptedSenderSendsNodeEvent(t *testing.T) {
 	}
 }
 
+func TestClusterPodsDestinationPath(t *testing.T) {
+	if got := (ClusterPodsDestination{ClusterID: 42}).path(); got != "/clusters/42/pods" {
+		t.Fatalf("destination path = %q", got)
+	}
+}
+
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }

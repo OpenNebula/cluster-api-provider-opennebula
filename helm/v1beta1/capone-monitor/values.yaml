@@ -10,4 +10,5 @@ monitor:
   authSecretName: ""
   authSecretKey: ONE_AUTH
   httpTimeout: 10s
+  podPollInterval: 10s
   healthAddress: ":8081"

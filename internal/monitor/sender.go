@@ -44,6 +44,14 @@ func (d NodeGroupEventDestination) path() string {
 		"/nodegroups/" + url.PathEscape(fmt.Sprint(d.GroupID)) + "/events"
 }
 
+type ClusterPodsDestination struct {
+	ClusterID int
+}
+
+func (d ClusterPodsDestination) path() string {
+	return "/clusters/" + url.PathEscape(fmt.Sprint(d.ClusterID)) + "/pods"
+}
+
 type encryptedEnvelope struct {
 	Payload string `json:"payload"`
 }

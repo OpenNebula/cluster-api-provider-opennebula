@@ -25,6 +25,7 @@ type Config struct {
 	Key                []byte
 	AuthFile           string
 	HTTPTimeout        time.Duration
+	PodPollInterval    time.Duration
 	HealthAddress      string
 }
 
@@ -65,6 +66,11 @@ func ConfigFromEnv() (Config, error) {
 	c.HTTPTimeout, err = time.ParseDuration(timeout)
 	if err != nil || c.HTTPTimeout <= 0 {
 		return Config{}, fmt.Errorf("MONITOR_HTTP_TIMEOUT must be a positive duration: %q", timeout)
+	}
+	podPollInterval := strings.TrimSpace(os.Getenv("MONITOR_POD_POLL_INTERVAL"))
+	c.PodPollInterval, err = time.ParseDuration(podPollInterval)
+	if err != nil || c.PodPollInterval <= 0 {
+		return Config{}, fmt.Errorf("MONITOR_POD_POLL_INTERVAL must be a positive duration: %q", podPollInterval)
 	}
 	return c, nil
 }
