@@ -195,25 +195,20 @@ func (r *Reconciler) reconcileExecute(ctx context.Context, app *applicationv1.On
 	if dependencies.stop || !dependencies.ready || external.mode == ExternalSelectionExternal {
 		return r.reconcileStatus(ctx, app, dependencies)
 	}
-	if isRootApplication(app) {
-		if err := r.preflightInstallOwnership(ctx, app, managedAPIsRequired); err != nil {
-			return r.handleOwnershipError(ctx, app, err)
-		}
+	if err := r.preflightInstallOwnership(ctx, app, managedAPIsRequired); err != nil {
+		return r.handleOwnershipError(ctx, app, err)
 	}
 
-	observed := observation{allResources: true, current: app.Spec.Release.ReleaseName}
-	if isRootApplication(app) {
-		applied, err := r.applyManagedResources(ctx, app)
-		if err != nil {
-			return r.handleOwnershipError(ctx, app, err)
-		}
-		if !applied {
-			return r.reconcileStatus(ctx, app, dependencies)
-		}
-		observed, err = r.observeManagedResources(ctx, app, true)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
+	applied, err := r.applyManagedResources(ctx, app)
+	if err != nil {
+		return r.handleOwnershipError(ctx, app, err)
+	}
+	if !applied {
+		return r.reconcileStatus(ctx, app, dependencies)
+	}
+	observed, err := r.observeManagedResources(ctx, app, true)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 	protectedApplied := true
 	if observed.allResources && usesProtectedSecrets(app) {

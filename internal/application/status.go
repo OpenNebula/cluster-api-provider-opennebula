@@ -77,9 +77,9 @@ func baseStatus(app *applicationv1.OneKSApplication) applicationv1.OneKSApplicat
 }
 
 func applicationProgressTotal(app *applicationv1.OneKSApplication) int32 {
-	total := 1 + len(app.Spec.Dependencies)
+	total := 1 + len(app.Spec.Dependencies) + len(app.Spec.ManagedResources)
 	if app.Spec.Role == applicationv1.ApplicationRoleRoot {
-		total += len(app.Spec.ManagedResources) + len(app.Spec.ProtectedSecrets)
+		total += len(app.Spec.ProtectedSecrets)
 	}
 	return int32(total)
 }
@@ -167,16 +167,11 @@ func (r *Reconciler) recordObservedStatus(ctx context.Context, app *applicationv
 	}
 	setCondition(&status, app.Generation, ConditionPlanValid, metav1.ConditionTrue, "Validated", "Plan schema is valid")
 	setCondition(&status, app.Generation, ConditionDependenciesReady, conditionStatus(dependencies.ready), dependencies.reason, dependencies.message)
-	resourcesReady := observed.allResources
-	if isRootApplication(app) {
-		resourcesReady = observed.managed.ready
-	}
+	resourcesReady := observed.managed.ready
 	resourceCondition := conditionStatus(resourcesReady)
 	resourceReason := conditionText(resourceCondition, "ResourcesReady", "ResourcesPending")
 	resourceMessage := conditionText(resourceCondition, "All managed resources are ready", "Managed resources are not ready")
-	if !isRootApplication(app) {
-		resourceMessage = conditionText(resourceCondition, "Dependency has no managed resources", "Dependency resources are not ready")
-	} else if observed.managed.failed {
+	if observed.managed.failed {
 		resourceReason = observed.managed.reason
 		resourceMessage = observed.managed.message
 	} else if !dependencies.ready {
@@ -238,18 +233,14 @@ func (observed observation) firstFailure() componentObservation {
 }
 
 func (r *Reconciler) observe(ctx context.Context, app *applicationv1.OneKSApplication, managedReadinessEnabled bool) (observation, error) {
-	if isRootApplication(app) {
-		result, err := r.observeManagedResources(ctx, app, managedReadinessEnabled)
-		if err != nil {
-			return result, err
-		}
-		result, err = r.observeProtected(ctx, app, result)
-		if err != nil {
-			return result, err
-		}
-		return r.observeHelm(ctx, app, result)
+	result, err := r.observeManagedResources(ctx, app, managedReadinessEnabled)
+	if err != nil {
+		return result, err
 	}
-	result := observation{allResources: true, current: app.Spec.Release.ReleaseName}
+	result, err = r.observeProtected(ctx, app, result)
+	if err != nil {
+		return result, err
+	}
 	return r.observeHelm(ctx, app, result)
 }
 

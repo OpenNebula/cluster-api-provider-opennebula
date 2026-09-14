@@ -61,11 +61,9 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 	status := baseStatus(app)
 	status.Phase = applicationv1.PhaseDeleting
 	status.Progress = applicationv1.ApplicationProgress{Total: applicationProgressTotal(app), Current: app.Spec.Release.ReleaseName}
-	if isRootApplication(app) {
-		status.Resources = deletingManagedResourceStatuses(app)
-		if usesProtectedSecrets(app) {
-			status.Resources = append(status.Resources, deletingProtectedSecretStatuses(app)...)
-		}
+	status.Resources = deletingManagedResourceStatuses(app)
+	if usesProtectedSecrets(app) {
+		status.Resources = append(status.Resources, deletingProtectedSecretStatuses(app)...)
 	}
 	if err := r.updateStatus(ctx, app, status); err != nil {
 		return ctrl.Result{}, err
@@ -75,9 +73,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 	if usesProtectedSecrets(app) {
 		steps = append(steps, r.reconcileDeleteProtectedSecrets, r.reconcileDeleteSecretInput)
 	}
-	if isRootApplication(app) {
-		steps = append(steps, r.reconcileDeleteManagedResources)
-	}
+	steps = append(steps, r.reconcileDeleteManagedResources)
 	if controllerutil.ContainsFinalizer(app, applicationv1.ApplicationFinalizer) {
 		steps = append(steps, r.releaseDependencies)
 	}

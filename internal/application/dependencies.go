@@ -77,7 +77,8 @@ func dependencyPlanChildSpec(clusterID string, plan applicationv1.DependencyPlan
 		PlanVersion: applicationv1.PlanVersion,
 		Release:     plan.Release,
 		Role:        applicationv1.ApplicationRoleDependency, Dependencies: plan.Dependencies,
-		DependencyPlans: nil, Uninstall: plan.Uninstall, ExternalDetection: plan.ExternalDetection,
+		DependencyPlans: nil, ManagedResources: plan.ManagedResources,
+		Uninstall: plan.Uninstall, ExternalDetection: plan.ExternalDetection,
 		DeletionPolicy: plan.DeletionPolicy,
 	}
 }

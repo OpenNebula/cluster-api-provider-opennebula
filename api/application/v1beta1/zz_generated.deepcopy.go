@@ -109,6 +109,13 @@ func (in *DependencyPlan) DeepCopyInto(out *DependencyPlan) {
 		*out = make([]DependencyReference, len(*in))
 		copy(*out, *in)
 	}
+	if in.ManagedResources != nil {
+		in, out := &in.ManagedResources, &out.ManagedResources
+		*out = make([]ManagedResourceSpec, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
 	if in.Uninstall != nil {
 		in, out := &in.Uninstall, &out.Uninstall
 		*out = new(UninstallSpec)

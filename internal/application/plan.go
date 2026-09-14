@@ -50,6 +50,9 @@ func validatePlan(app *applicationv1.OneKSApplication, clusterID string) *PlanEr
 	if app.Spec.ClusterID != clusterID {
 		return invalid("ClusterIDMismatch", "spec.clusterID does not match this controller")
 	}
+	if app.Spec.ExternalDetection != nil && len(app.Spec.ManagedResources) != 0 {
+		return invalid("InvalidExternalDetection", "externalDetection must not be combined with managedResources")
+	}
 	if err := validateRelease(app.Spec.Release, app.Spec.CatalogueChartID, "release"); err != nil {
 		return err
 	}
@@ -159,6 +162,12 @@ func validateRootDependencyGraph(rootDependencies []applicationv1.DependencyRefe
 }
 
 func validateDependencyPlan(plan applicationv1.DependencyPlan, path string) *PlanError {
+	if err := validateManagedResources(plan.ManagedResources); err != nil {
+		return invalid(err.Reason, "%s: %s", path, err.Message)
+	}
+	if plan.ExternalDetection != nil && len(plan.ManagedResources) != 0 {
+		return invalid("InvalidExternalDetection", "%s.externalDetection must not be combined with managedResources", path)
+	}
 	if err := validateRelease(plan.Release, plan.CatalogueChartID, path+".release"); err != nil {
 		return err
 	}

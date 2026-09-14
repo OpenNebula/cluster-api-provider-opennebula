@@ -52,7 +52,7 @@ const (
 // OneKSApplicationSpec is an immutable, compiled application plan.
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable"
 // +kubebuilder:validation:XValidation:rule="has(self.role)",message="plan-v1beta1 requires role"
-// +kubebuilder:validation:XValidation:rule="self.role != 'Dependency' || ((!has(self.dependencyPlans) || size(self.dependencyPlans) == 0) && (!has(self.managedResources) || size(self.managedResources) == 0) && !has(self.secretInputRef) && (!has(self.protectedSecrets) || size(self.protectedSecrets) == 0) && !has(self.release.authSecret))",message="Dependency must not contain Root-only dependencyPlans, managed resources, or protected Secret fields"
+// +kubebuilder:validation:XValidation:rule="self.role != 'Dependency' || ((!has(self.dependencyPlans) || size(self.dependencyPlans) == 0) && !has(self.secretInputRef) && (!has(self.protectedSecrets) || size(self.protectedSecrets) == 0) && !has(self.release.authSecret))",message="Dependency must not contain Root-only dependencyPlans or protected Secret fields"
 // +kubebuilder:validation:XValidation:rule="((size(self.release.repositoryURL) == 0 && self.release.chart.matches('^oci://[^[:space:]]+$')) || (self.release.repositoryURL.matches('^https://[^[:space:]]+$') && !self.release.chart.startsWith('oci://')))",message="release must use either an HTTPS repositoryURL with a non-OCI chart or an empty repositoryURL with an OCI chart"
 // +kubebuilder:validation:XValidation:rule="!has(self.release.authSecret) || self.release.repositoryURL.matches('^https://[^[:space:]]+$')",message="release.authSecret requires an HTTPS repositoryURL"
 // +kubebuilder:validation:XValidation:rule="!has(self.release.authSecret) || (has(self.protectedSecrets) && self.protectedSecrets.filter(p, p.builderType == 'basicAuthSecret' && p.__namespace__ == 'kube-system' && p.name == self.release.authSecret.name).size() == 1)",message="release.authSecret must match exactly one protected basicAuthSecret in kube-system"
@@ -66,6 +66,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.managedResources) || !has(self.protectedSecrets) || self.protectedSecrets.all(p, self.managedResources.filter(m, m.id == p.id).size() == 0)",message="protected Secret IDs must not collide with managed resource IDs"
 // +kubebuilder:validation:XValidation:rule="!has(self.uninstall) || self.role == 'Dependency' || !has(self.uninstall.preActions)",message="uninstall.preActions is permitted only for Dependency applications"
 // +kubebuilder:validation:XValidation:rule="!has(self.externalDetection) || (has(self.role) && self.role == 'Dependency')",message="top-level externalDetection is permitted only for Dependency applications"
+// +kubebuilder:validation:XValidation:rule="!has(self.externalDetection) || !has(self.managedResources) || size(self.managedResources) == 0",message="externalDetection must not be combined with managedResources"
 type OneKSApplicationSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
@@ -389,6 +390,7 @@ type DependencyReference struct {
 // +kubebuilder:validation:XValidation:rule="self.dependencies.all(d, self.dependencies.filter(x, x.name == d.name).size() == 1)",message="dependency names must be unique"
 // +kubebuilder:validation:XValidation:rule="self.dependencies.all(d, d.name != self.name)",message="dependency plan must not directly reference itself"
 // +kubebuilder:validation:XValidation:rule="!has(self.release.authSecret)",message="dependency plans do not permit release.authSecret"
+// +kubebuilder:validation:XValidation:rule="!has(self.externalDetection) || !has(self.managedResources) || size(self.managedResources) == 0",message="externalDetection must not be combined with managedResources"
 type DependencyPlan struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
@@ -400,7 +402,9 @@ type DependencyPlan struct {
 	CatalogueChartID string      `json:"catalogueChartID"`
 	Release          ReleaseSpec `json:"release"`
 	// +kubebuilder:validation:MaxItems=16
-	Dependencies      []DependencyReference  `json:"dependencies"`
+	Dependencies []DependencyReference `json:"dependencies"`
+	// +kubebuilder:validation:MaxItems=16
+	ManagedResources  []ManagedResourceSpec  `json:"managedResources,omitempty"`
 	Uninstall         *UninstallSpec         `json:"uninstall,omitempty"`
 	ExternalDetection *ExternalDetectionSpec `json:"externalDetection,omitempty"`
 	// +kubebuilder:validation:Enum=Delete;Retain

@@ -69,9 +69,6 @@ func emptyManagedResource(resource applicationv1.ManagedResourceSpec) *unstructu
 }
 
 func (r *Reconciler) preflightManagedOwnership(ctx context.Context, app *applicationv1.OneKSApplication, deleting bool, managedAPIs managedAPIPreflightMode) error {
-	if !isRootApplication(app) {
-		return nil
-	}
 	reader := r.authoritativeReader()
 	for _, resource := range app.Spec.ManagedResources {
 		if deleting && resource.DeletionPolicy == applicationv1.DeletionPolicyRetain {

@@ -126,6 +126,150 @@ spec:
                       required:
                       - detector
                       type: object
+                    managedResources:
+                      items:
+                        properties:
+                          apiVersion:
+                            maxLength: 128
+                            minLength: 1
+                            type: string
+                          deletionPolicy:
+                            enum:
+                            - Delete
+                            - Retain
+                            type: string
+                          dependsOn:
+                            items:
+                              maxLength: 63
+                              type: string
+                            maxItems: 16
+                            type: array
+                          id:
+                            maxLength: 63
+                            minLength: 1
+                            type: string
+                          kind:
+                            maxLength: 128
+                            minLength: 1
+                            type: string
+                          manifestJSON:
+                            maxLength: 131072
+                            minLength: 2
+                            type: string
+                          name:
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                          namespace:
+                            maxLength: 63
+                            type: string
+                          readiness:
+                            properties:
+                              checks:
+                                items:
+                                  properties:
+                                    hostname:
+                                      maxLength: 253
+                                      minLength: 1
+                                      type: string
+                                    service:
+                                      properties:
+                                        name:
+                                          maxLength: 253
+                                          minLength: 1
+                                          type: string
+                                        namespace:
+                                          maxLength: 63
+                                          minLength: 1
+                                          type: string
+                                      required:
+                                      - name
+                                      - namespace
+                                      type: object
+                                    type:
+                                      enum:
+                                      - DNSMatchesService
+                                      type: string
+                                  required:
+                                  - hostname
+                                  - service
+                                  - type
+                                  type: object
+                                maxItems: 16
+                                type: array
+                              conditions:
+                                items:
+                                  properties:
+                                    status:
+                                      enum:
+                                      - "True"
+                                      - "False"
+                                      - Unknown
+                                      type: string
+                                    type:
+                                      maxLength: 128
+                                      minLength: 1
+                                      type: string
+                                  required:
+                                  - status
+                                  - type
+                                  type: object
+                                maxItems: 16
+                                type: array
+                              requiredResources:
+                                items:
+                                  properties:
+                                    apiVersion:
+                                      maxLength: 128
+                                      minLength: 1
+                                      type: string
+                                    kind:
+                                      maxLength: 128
+                                      minLength: 1
+                                      type: string
+                                    name:
+                                      maxLength: 253
+                                      minLength: 1
+                                      type: string
+                                    namespace:
+                                      maxLength: 63
+                                      type: string
+                                  required:
+                                  - apiVersion
+                                  - kind
+                                  - name
+                                  type: object
+                                maxItems: 16
+                                type: array
+                              timeoutSeconds:
+                                format: int32
+                                maximum: 86400
+                                minimum: 1
+                                type: integer
+                            required:
+                            - checks
+                            - conditions
+                            - requiredResources
+                            - timeoutSeconds
+                            type: object
+                          scope:
+                            enum:
+                            - namespaced
+                            - cluster
+                            type: string
+                        required:
+                        - apiVersion
+                        - deletionPolicy
+                        - dependsOn
+                        - id
+                        - kind
+                        - manifestJSON
+                        - name
+                        - readiness
+                        - scope
+                        type: object
+                      maxItems: 16
+                      type: array
                     name:
                       maxLength: 63
                       minLength: 1
@@ -314,6 +458,9 @@ spec:
                     rule: self.dependencies.all(d, d.name != self.name)
                   - message: dependency plans do not permit release.authSecret
                     rule: '!has(self.release.authSecret)'
+                  - message: externalDetection must not be combined with managedResources
+                    rule: '!has(self.externalDetection) || !has(self.managedResources)
+                      || size(self.managedResources) == 0'
                 maxItems: 16
                 type: array
               externalDetection:
@@ -760,10 +907,9 @@ spec:
               rule: self == oldSelf
             - message: plan-v1beta1 requires role
               rule: has(self.role)
-            - message: Dependency must not contain Root-only dependencyPlans, managed
-                resources, or protected Secret fields
+            - message: Dependency must not contain Root-only dependencyPlans or protected
+                Secret fields
               rule: self.role != 'Dependency' || ((!has(self.dependencyPlans) || size(self.dependencyPlans)
-                == 0) && (!has(self.managedResources) || size(self.managedResources)
                 == 0) && !has(self.secretInputRef) && (!has(self.protectedSecrets)
                 || size(self.protectedSecrets) == 0) && !has(self.release.authSecret))
             - message: release must use either an HTTPS repositoryURL with a non-OCI
@@ -816,6 +962,9 @@ spec:
                 applications
               rule: '!has(self.externalDetection) || (has(self.role) && self.role
                 == ''Dependency'')'
+            - message: externalDetection must not be combined with managedResources
+              rule: '!has(self.externalDetection) || !has(self.managedResources) ||
+                size(self.managedResources) == 0'
           status:
             properties:
               conditions:

@@ -30,9 +30,6 @@ import (
 var kubernetesKindPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*$`)
 
 func managesTargetNamespace(app *applicationv1.OneKSApplication) bool {
-	if !isRootApplication(app) {
-		return false
-	}
 	matches := 0
 	for _, resource := range app.Spec.ManagedResources {
 		if resource.Scope == applicationv1.ManagedResourceScopeCluster &&
