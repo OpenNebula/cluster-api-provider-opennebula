@@ -38,9 +38,7 @@ type ResourceObservation struct {
 	CreatedAt string `json:"createdAt,omitempty"`
 }
 
-type ObservationSnapshot struct {
-	Observations []ResourceObservation `json:"observations"`
-}
+type ObservationSnapshot []ResourceObservation
 
 type ObservationMonitor struct {
 	client        kubernetes.Interface
@@ -119,15 +117,13 @@ func (m *ObservationMonitor) poll(ctx context.Context) error {
 	}
 	m.ready.Store(true)
 
-	snapshot := ObservationSnapshot{
-		Observations: make([]ResourceObservation, 0, len(pods.Items)+len(m.active)),
-	}
+	snapshot := make(ObservationSnapshot, 0, len(pods.Items)+len(m.active))
 	for i := range pods.Items {
 		pod := &pods.Items[i]
 		if pod.Status.Phase != corev1.PodPending {
 			continue
 		}
-		snapshot.Observations = append(snapshot.Observations, newResourceObservation(ResourceSpec{
+		snapshot = append(snapshot, newResourceObservation(ResourceSpec{
 			APIVersion: "v1",
 			Resource:   "pods",
 			Namespace:  pod.Namespace,
@@ -147,14 +143,14 @@ func (m *ObservationMonitor) poll(ctx context.Context) error {
 			observationFailed = true
 			continue
 		}
-		snapshot.Observations = append(snapshot.Observations, observation)
+		snapshot = append(snapshot, observation)
 	}
 	if observationFailed {
 		return errors.Join(pollErrors...)
 	}
 
 	log := ctrl.LoggerFrom(ctx).WithName("observation-monitor")
-	log.Info("sending observation snapshot", "clusterID", m.destination.ClusterID, "observations", len(snapshot.Observations))
+	log.Info("sending observation snapshot", "clusterID", m.destination.ClusterID, "observations", len(snapshot))
 	if err := m.sender.Send(ctx, m.destination, snapshot); err != nil {
 		pollErrors = append(pollErrors, fmt.Errorf("send observation snapshot: %w", err))
 	}

@@ -11,10 +11,10 @@ monitor:
   authSecretName: ""
   authSecretKey: ONE_AUTH
   httpTimeout: 10s
-  podPollInterval: 10s
+  podPollInterval: 60s
   resourceConfigNamespace: kube-system
   resourceConfigName: capone-resource-monitor
-  resourcePollInterval: 10s
+  resourcePollInterval: 60s
   healthAddress: ":8081"
 
 resourceConfig:

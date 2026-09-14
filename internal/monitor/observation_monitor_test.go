@@ -72,25 +72,25 @@ func TestObservationPollIncludesPendingPodsAndConfiguredResources(t *testing.T) 
 	if err := monitor.poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !monitor.Ready() || len(snapshot.Observations) != 2 {
+	if !monitor.Ready() || len(snapshot) != 2 {
 		t.Fatalf("ready=%t snapshot=%#v", monitor.Ready(), snapshot)
 	}
-	pending := snapshot.Observations[0]
+	pending := snapshot[0]
 	if pending.Resource != "pods" || pending.Namespace != "payments" || pending.Name != "queued" ||
 		pending.Path != "status.phase" || pending.Value != "Pending" ||
 		pending.CreatedAt != "2026-09-10T11:12:13Z" {
 		t.Fatalf("unexpected Pending Pod observation: %#v", pending)
 	}
-	configured := snapshot.Observations[1]
+	configured := snapshot[1]
 	if configured.Resource != "deployments" || configured.Name != "api" || configured.Value != int64(2) ||
 		configured.CreatedAt != "2026-09-10T11:12:13Z" {
 		t.Fatalf("unexpected configured observation: %#v", configured)
 	}
-	encoded, err := json.Marshal(ObservationSnapshot{Observations: []ResourceObservation{pending}})
+	encoded, err := json.Marshal(ObservationSnapshot{pending})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"observations":[{"resource":"pods","namespace":"payments","name":"queued","path":"status.phase","value":"Pending","createdAt":"2026-09-10T11:12:13Z"}]}`
+	want := `[{"resource":"pods","namespace":"payments","name":"queued","path":"status.phase","value":"Pending","createdAt":"2026-09-10T11:12:13Z"}]`
 	if string(encoded) != want {
 		t.Fatalf("observation payload = %s, want %s", encoded, want)
 	}
@@ -134,8 +134,15 @@ func TestObservationPollSendsEmptySnapshot(t *testing.T) {
 		senderFunc(func(_ context.Context, _ Destination, payload any) error {
 			attempts++
 			snapshot, ok := payload.(ObservationSnapshot)
-			if !ok || len(snapshot.Observations) != 0 {
+			if !ok || len(snapshot) != 0 {
 				t.Fatalf("unexpected empty snapshot: %#v", payload)
+			}
+			encoded, err := json.Marshal(snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(encoded) != `[]` {
+				t.Fatalf("empty observation payload = %s, want []", encoded)
 			}
 			return nil
 		}),
