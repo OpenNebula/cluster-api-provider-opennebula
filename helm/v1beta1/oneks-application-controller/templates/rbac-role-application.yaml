@@ -1,0 +1,18 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: oneks-application-controller
+  namespace: oneks-system
+rules:
+- apiGroups: ["oneks.opennebula.io"]
+  resources: ["oneksapplications"]
+  # Create materializes shared Dependency applications, patch persists
+  # application finalizers, and delete garbage-collects unreferenced shared
+  # Dependency applications. CRD CEL validation keeps the spec immutable.
+  verbs: ["get", "list", "watch", "create", "patch", "delete"]
+- apiGroups: ["oneks.opennebula.io"]
+  resources: ["oneksapplications/status"]
+  verbs: ["get", "patch", "update"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch", "update"]

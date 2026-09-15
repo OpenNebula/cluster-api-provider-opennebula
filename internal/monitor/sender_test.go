@@ -75,6 +75,12 @@ func TestClusterObservationsDestinationPath(t *testing.T) {
 	}
 }
 
+func TestClusterEventDestinationPath(t *testing.T) {
+	if got := (ClusterEventDestination{ClusterID: "cluster/42"}).path(); got != "/clusters/cluster%2F42/events" {
+		t.Fatalf("unexpected cluster event path %q", got)
+	}
+}
+
 func TestClusterPodsDestinationPath(t *testing.T) {
 	if got := (ClusterPodsDestination{ClusterID: 42}).path(); got != "/clusters/42/pods" {
 		t.Fatalf("destination path = %q", got)

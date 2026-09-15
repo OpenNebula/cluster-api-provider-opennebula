@@ -68,7 +68,12 @@ func main() {
 		os.Exit(1)
 	}
 	observations := monitor.NewObservationMonitor(client, dynamicClient, sender, config)
-	manager := monitor.NewManager(nodes, pods, observations)
+	applications, err := monitor.NewApplicationMonitor(dynamicClient, sender, config)
+	if err != nil {
+		log.Error(err, "unable to create application monitor")
+		os.Exit(1)
+	}
+	manager := monitor.NewManager(nodes, pods, observations, applications)
 
 	ctx := ctrl.SetupSignalHandler()
 	health := &http.Server{Addr: config.HealthAddress, Handler: healthHandler(manager)}

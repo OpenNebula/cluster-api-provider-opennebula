@@ -1,0 +1,6 @@
+apiVersion: v2
+name: oneks-application-controller
+description: Isolated in-cluster executor for compiled OneKS application plans
+type: application
+version: 0.1.0
+appVersion: "v0.1.0"

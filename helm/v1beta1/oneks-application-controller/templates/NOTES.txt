@@ -1,0 +1,4 @@
+The OneKS application controller is installed in oneks-system.
+
+Check it with:
+  kubectl -n oneks-system get pods -l app.kubernetes.io/name=oneks-application-controller

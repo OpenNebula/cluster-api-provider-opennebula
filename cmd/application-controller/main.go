@@ -1,0 +1,162 @@
+/*
+Copyright 2026, OpenNebula Project, OpenNebula Systems.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
+	"github.com/OpenNebula/cluster-api-provider-opennebula/internal/application"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+)
+
+const defaultReconciliationPoll = 15 * time.Second
+
+type config struct {
+	clusterID          string
+	metricsAddress     string
+	healthAddress      string
+	reconciliationPoll time.Duration
+}
+
+func configFromEnv() (config, error) {
+	result := config{
+		clusterID:      strings.TrimSpace(os.Getenv("APPLICATION_CLUSTER_ID")),
+		metricsAddress: strings.TrimSpace(os.Getenv("APPLICATION_METRICS_ADDRESS")),
+		healthAddress:  strings.TrimSpace(os.Getenv("APPLICATION_HEALTH_ADDRESS")),
+	}
+	if result.clusterID == "" {
+		return config{}, fmt.Errorf("APPLICATION_CLUSTER_ID is required")
+	}
+	if result.metricsAddress == "" {
+		result.metricsAddress = "0"
+	}
+	if result.healthAddress == "" {
+		result.healthAddress = ":8081"
+	}
+	poll := strings.TrimSpace(os.Getenv("APPLICATION_RECONCILIATION_POLL"))
+	if poll == "" {
+		result.reconciliationPoll = defaultReconciliationPoll
+		return result, nil
+	}
+	var err error
+	result.reconciliationPoll, err = time.ParseDuration(poll)
+	if err != nil || result.reconciliationPoll <= 0 {
+		return config{}, fmt.Errorf("APPLICATION_RECONCILIATION_POLL must be a positive duration: %q", poll)
+	}
+	return result, nil
+}
+
+func main() {
+	logging := zap.Options{Development: false}
+	logging.BindFlags(flag.CommandLine)
+	flag.Parse()
+
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&logging)))
+	config, err := configFromEnv()
+	if err != nil {
+		ctrl.Log.WithName("setup").Error(err, "invalid application controller configuration")
+		os.Exit(1)
+	}
+	if err := run(config); err != nil {
+		ctrl.Log.WithName("setup").Error(err, "application controller stopped")
+		os.Exit(1)
+	}
+}
+
+func run(config config) error {
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(batchv1.AddToScheme(scheme))
+	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
+	utilruntime.Must(applicationv1.AddToScheme(scheme))
+
+	manager, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+		Scheme:                 scheme,
+		Metrics:                metricsserver.Options{BindAddress: config.metricsAddress},
+		HealthProbeBindAddress: config.healthAddress,
+		Cache:                  controllerCacheOptions(),
+		Client: client.Options{Cache: &client.CacheOptions{
+			DisableFor:   []client.Object{&corev1.Namespace{}, &corev1.ConfigMap{}},
+			Unstructured: true,
+		}},
+	})
+	if err != nil {
+		return fmt.Errorf("create manager: %w", err)
+	}
+
+	reconciler := &application.Reconciler{
+		Client: manager.GetClient(), APIReader: manager.GetAPIReader(),
+		Recorder: manager.GetEventRecorderFor(applicationv1.FieldManager), ClusterID: config.clusterID,
+		RequeueAfter: config.reconciliationPoll,
+	}
+	if err := reconciler.SetupWithManager(manager); err != nil {
+		return fmt.Errorf("register application reconciler: %w", err)
+	}
+	if err := manager.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		return fmt.Errorf("register health check: %w", err)
+	}
+	if err := manager.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+		return fmt.Errorf("register readiness check: %w", err)
+	}
+	return manager.Start(ctrl.SetupSignalHandler())
+}
+
+func controllerCacheOptions() cache.Options {
+	helmChart := &unstructured.Unstructured{}
+	helmChart.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "helm.cattle.io", Version: "v1", Kind: "HelmChart",
+	})
+	return cache.Options{
+		DefaultNamespaces: map[string]cache.Config{
+			applicationv1.ApplicationNamespace: {},
+		},
+		ByObject: map[client.Object]cache.ByObject{
+			&corev1.ConfigMap{}: {
+				Namespaces: map[string]cache.Config{},
+				Label: labels.SelectorFromSet(labels.Set{
+					application.LabelManagedBy: application.ManagedByValue,
+				}),
+			},
+			helmChart: {
+				Namespaces: map[string]cache.Config{application.HelmChartNamespace: {}},
+			},
+			&batchv1.Job{}: {
+				Namespaces: map[string]cache.Config{application.HelmChartNamespace: {}},
+			},
+		},
+	}
+}

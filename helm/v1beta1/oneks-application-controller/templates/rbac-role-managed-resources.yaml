@@ -1,0 +1,50 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: oneks-application-controller-managed-resources
+rules:
+- apiGroups: [""]
+  resources: ["namespaces", "configmaps"]
+  verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+- apiGroups: ["helm.cattle.io"]
+  resources: ["helmchartconfigs"]
+  verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+- apiGroups: ["cert-manager.io"]
+  resources: ["clusterissuers", "certificates"]
+  verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+- apiGroups: ["trust.cert-manager.io"]
+  resources: ["bundles"]
+  verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  # Get reads readiness metadata and immutable input/target Secrets. Create,
+  # update, and delete implement protected Secret lifecycle without patching.
+  verbs: ["get", "create", "update", "delete"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingressclasses"]
+  verbs: ["get"]
+- apiGroups: ["longhorn.io"]
+  resources: ["settings"]
+  resourceNames: ["deleting-confirmation-flag"]
+  verbs: ["get", "patch"]
+- apiGroups: ["apiextensions.k8s.io"]
+  resources: ["customresourcedefinitions"]
+  resourceNames:
+  - certificates.cert-manager.io
+  - certificaterequests.cert-manager.io
+  - issuers.cert-manager.io
+  - clusterissuers.cert-manager.io
+  verbs: ["get"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["list"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["list"]
+- apiGroups: [""]
+  resources: ["endpoints"]
+  resourceNames: ["cert-manager-webhook"]
+  verbs: ["get"]
