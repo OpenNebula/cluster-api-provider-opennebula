@@ -42,6 +42,8 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
+var ctx = context.Background()
+
 func TestExecuteCreatesManagedResourceBeforeHelmChartAndBecomesReady(t *testing.T) {
 	var logs strings.Builder
 	logger := funcr.New(func(prefix, args string) {
@@ -51,8 +53,7 @@ func TestExecuteCreatesManagedResourceBeforeHelmChartAndBecomesReady(t *testing.
 		logs.WriteByte('\n')
 	}, funcr.Options{})
 	ctx := ctrllog.IntoContext(context.Background(), logger)
-	app := goldenApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
+	app := withApplicationFinalizer(goldenApplication(t))
 	reconciler, recorder := testReconciler(t, app)
 
 	reconcileOnce(t, ctx, reconciler, app)
@@ -63,20 +64,12 @@ func TestExecuteCreatesManagedResourceBeforeHelmChartAndBecomesReady(t *testing.
 		t.Fatalf("unexpected child write order: %s", got)
 	}
 
-	if err := reconciler.Get(ctx, client.ObjectKeyFromObject(helm), helm); err != nil {
-		t.Fatalf("get HelmChart: %v", err)
-	}
+	requireNoError(t, reconciler.Get(ctx, client.ObjectKeyFromObject(helm), helm), "get HelmChart")
 	helm.Object["status"] = map[string]any{"jobName": "helm-install-oneks-prometheus"}
-	if err := reconciler.Update(ctx, helm); err != nil {
-		t.Fatalf("set HelmChart status: %v", err)
-	}
+	requireNoError(t, reconciler.Update(ctx, helm), "set HelmChart status")
 	job := completedJob("helm-install-oneks-prometheus")
-	if err := reconciler.Create(ctx, job); err != nil {
-		t.Fatalf("create installer Job: %v", err)
-	}
-	reconcileOnce(t, ctx, reconciler, app)
-
-	stored := getApplication(t, ctx, reconciler.Client, app)
+	requireNoError(t, reconciler.Create(ctx, job), "create installer Job")
+	stored := reconcileAndGet(t, ctx, reconciler, app)
 	if stored.Status.Phase != applicationv1.PhaseReady {
 		t.Fatalf("expected Ready, got %#v", stored.Status)
 	}
@@ -127,24 +120,18 @@ func TestDesiredHelmChartPreservesNamespaceContract(t *testing.T) {
 }
 
 func TestExecuteAddsFinalizerBeforeCreatingChildren(t *testing.T) {
-	ctx := context.Background()
 	app := goldenApplication(t)
 	reconciler, recorder := testReconciler(t, app)
 
-	reconcileOnce(t, ctx, reconciler, app)
-	stored := getApplication(t, ctx, reconciler.Client, app)
+	stored := reconcileAndGet(t, ctx, reconciler, app)
 	if !controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) {
 		t.Fatalf("controller finalizer was not added: %#v", stored.Finalizers)
 	}
-	if len(recorder.childWrites) != 0 {
-		t.Fatalf("children were written before the finalizer: %#v", recorder.childWrites)
-	}
+	assertNoChildWrites(t, recorder)
 }
 
 func TestTargetNamespaceAPIErrorIsRetriedWithoutSideEffects(t *testing.T) {
-	ctx := context.Background()
-	app := goldenApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
+	app := withApplicationFinalizer(goldenApplication(t))
 	reconciler, recorder := testReconciler(t, app)
 	reconciler.Client = &namespaceErrorClient{
 		Client: reconciler.Client,
@@ -162,15 +149,11 @@ func TestTargetNamespaceAPIErrorIsRetriedWithoutSideEffects(t *testing.T) {
 	if stored.Status.Phase != "" || stored.Status.LastError != nil {
 		t.Fatalf("transient API error wrote terminal status: %#v", stored.Status)
 	}
-	if len(recorder.childWrites) != 0 {
-		t.Fatalf("namespace API error caused a side effect: %#v", recorder.childWrites)
-	}
+	assertNoChildWrites(t, recorder)
 }
 
 func TestDeletingOwnedApplicationIgnoresRootLabelAndControllerConfigDrift(t *testing.T) {
-	ctx := context.Background()
-	app := goldenApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
+	app := withApplicationFinalizer(goldenApplication(t))
 	app.Labels[LabelProducer] = "drifted-producer"
 	now := metav1.NewTime(time.Now())
 	app.DeletionTimestamp = &now
@@ -190,7 +173,6 @@ func TestDeletingOwnedApplicationIgnoresRootLabelAndControllerConfigDrift(t *tes
 }
 
 func TestDeletingInvalidApplicationWithoutOurFinalizerNeverCleansChildren(t *testing.T) {
-	ctx := context.Background()
 	app := goldenApplication(t)
 	app.Finalizers = []string{"example.test/hold"}
 	now := metav1.NewTime(time.Now())
@@ -199,16 +181,12 @@ func TestDeletingInvalidApplicationWithoutOurFinalizerNeverCleansChildren(t *tes
 	reconciler, recorder := testReconciler(t, app, helm)
 
 	reconcileOnce(t, ctx, reconciler, app)
-	if len(recorder.childWrites) != 0 {
-		t.Fatalf("invalid unfinalized application cleaned children: %#v", recorder.childWrites)
-	}
+	assertNoChildWrites(t, recorder)
 	assertExists(t, ctx, reconciler.Client, helmChartObject(helm.GetName()), HelmChartNamespace, helm.GetName())
 }
 
 func TestOwnershipRaceBeforeDeleteBlocksDeletion(t *testing.T) {
-	ctx := context.Background()
-	app := goldenApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
+	app := withApplicationFinalizer(goldenApplication(t))
 	now := metav1.NewTime(time.Now())
 	app.DeletionTimestamp = &now
 	helm := desiredHelmChart(app)
@@ -217,13 +195,9 @@ func TestOwnershipRaceBeforeDeleteBlocksDeletion(t *testing.T) {
 	reconciler.Client = &ownershipRaceClient{Client: reconciler.Client, helmName: helm.GetName()}
 
 	reconcileOnce(t, ctx, reconciler, app)
-	if len(recorder.childWrites) != 0 {
-		t.Fatalf("ownership race deleted a child: %#v", recorder.childWrites)
-	}
+	assertNoChildWrites(t, recorder)
 	stored := getApplication(t, ctx, reconciler.Client, app)
-	if stored.Status.LastError == nil || stored.Status.LastError.Reason != "OwnershipConflict" {
-		t.Fatalf("ownership race was not reported: %#v", stored.Status)
-	}
+	assertLastErrorReason(t, stored, "OwnershipConflict")
 }
 
 func completedJob(name string) *batchv1.Job {
@@ -340,21 +314,11 @@ func (c *namespaceErrorClient) Get(ctx context.Context, key client.ObjectKey, ob
 func testReconciler(t *testing.T, objects ...client.Object) (*Reconciler, *recordingClient) {
 	t.Helper()
 	scheme := runtime.NewScheme()
-	if err := corev1.AddToScheme(scheme); err != nil {
-		t.Fatalf("add core scheme: %v", err)
-	}
-	if err := batchv1.AddToScheme(scheme); err != nil {
-		t.Fatalf("add batch scheme: %v", err)
-	}
-	if err := appsv1.AddToScheme(scheme); err != nil {
-		t.Fatalf("add apps scheme: %v", err)
-	}
-	if err := apiextensionsv1.AddToScheme(scheme); err != nil {
-		t.Fatalf("add apiextensions scheme: %v", err)
-	}
-	if err := applicationv1.AddToScheme(scheme); err != nil {
-		t.Fatalf("add application scheme: %v", err)
-	}
+	requireNoError(t, corev1.AddToScheme(scheme), "add core scheme")
+	requireNoError(t, batchv1.AddToScheme(scheme), "add batch scheme")
+	requireNoError(t, appsv1.AddToScheme(scheme), "add apps scheme")
+	requireNoError(t, apiextensionsv1.AddToScheme(scheme), "add apiextensions scheme")
+	requireNoError(t, applicationv1.AddToScheme(scheme), "add application scheme")
 	base := fake.NewClientBuilder().WithScheme(scheme).
 		WithStatusSubresource(&applicationv1.OneKSApplication{}).
 		WithObjects(append(objects, &corev1.Namespace{
@@ -367,6 +331,10 @@ func testReconciler(t *testing.T, objects ...client.Object) (*Reconciler, *recor
 	}, recorder
 }
 
+func authoritativeClient(reconciler *Reconciler, objects ...client.Object) client.Client {
+	return fake.NewClientBuilder().WithScheme(reconciler.Client.Scheme()).WithObjects(objects...).Build()
+}
+
 func reconcileOnce(t *testing.T, ctx context.Context, reconciler *Reconciler, app *applicationv1.OneKSApplication) ctrl.Result {
 	t.Helper()
 	result, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(app)})
@@ -376,12 +344,16 @@ func reconcileOnce(t *testing.T, ctx context.Context, reconciler *Reconciler, ap
 	return result
 }
 
+func reconcileAndGet(t *testing.T, ctx context.Context, reconciler *Reconciler, app *applicationv1.OneKSApplication) *applicationv1.OneKSApplication {
+	t.Helper()
+	reconcileOnce(t, ctx, reconciler, app)
+	return getApplication(t, ctx, reconciler.Client, app)
+}
+
 func getApplication(t *testing.T, ctx context.Context, kubeClient client.Client, app *applicationv1.OneKSApplication) *applicationv1.OneKSApplication {
 	t.Helper()
 	stored := &applicationv1.OneKSApplication{}
-	if err := kubeClient.Get(ctx, client.ObjectKeyFromObject(app), stored); err != nil {
-		t.Fatalf("get application: %v", err)
-	}
+	requireNoError(t, kubeClient.Get(ctx, client.ObjectKeyFromObject(app), stored), "get application")
 	return stored
 }
 

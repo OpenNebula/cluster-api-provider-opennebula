@@ -38,7 +38,6 @@ var dependencyProvidedBundleGVK = schema.GroupVersionKind{
 }
 
 func TestEarlyManagedNoMatchAllowsDependencyBootstrapAndGatesRootEffects(t *testing.T) {
-	ctx := context.Background()
 	root, plan := dependencyProvidedManagedRoot(t)
 	root.Status.LastError = &applicationv1.ApplicationError{Reason: "SensitiveValuesContent", Message: "stale validation error"}
 	root.Status.Conditions = []metav1.Condition{{
@@ -71,7 +70,6 @@ func TestEarlyManagedNoMatchAllowsDependencyBootstrapAndGatesRootEffects(t *test
 }
 
 func TestStrictManagedNoMatchBlocksEveryRootEffectAfterDependenciesReady(t *testing.T) {
-	ctx := context.Background()
 	root, plan := dependencyProvidedManagedRoot(t)
 	dependency := readyDependencyForRoot(root, plan)
 	reconciler, effects, gate := dependencyProvidedManagedReconciler(t, root, dependency)
@@ -85,7 +83,6 @@ func TestStrictManagedNoMatchBlocksEveryRootEffectAfterDependenciesReady(t *test
 }
 
 func TestAvailableForeignManagedObjectConflictsBeforeRootEffects(t *testing.T) {
-	ctx := context.Background()
 	root, plan := dependencyProvidedManagedRoot(t)
 	dependency := readyDependencyForRoot(root, plan)
 	reconciler, effects, gate := dependencyProvidedManagedReconciler(t, root, dependency)
@@ -95,16 +92,13 @@ func TestAvailableForeignManagedObjectConflictsBeforeRootEffects(t *testing.T) {
 	reconcileOnce(t, ctx, reconciler, root)
 	assertNoRootEffects(t, effects)
 	stored := getApplication(t, ctx, reconciler.Client, root)
-	if stored.Status.LastError == nil || stored.Status.LastError.Reason != "OwnershipConflict" {
-		t.Fatalf("foreign managed object status = %#v, want OwnershipConflict", stored.Status)
-	}
+	assertLastErrorReason(t, stored, "OwnershipConflict")
 	if gate.gets < 2 {
 		t.Fatalf("strict preflight did not re-read managed API after early NoMatch: %d GETs", gate.gets)
 	}
 }
 
 func TestAvailableAbsentManagedObjectProceedsAfterDependenciesReady(t *testing.T) {
-	ctx := context.Background()
 	root, plan := dependencyProvidedManagedRoot(t)
 	dependency := readyDependencyForRoot(root, plan)
 	reconciler, effects, gate := dependencyProvidedManagedReconciler(t, root, dependency)
@@ -120,7 +114,6 @@ func TestAvailableAbsentManagedObjectProceedsAfterDependenciesReady(t *testing.T
 }
 
 func TestEarlyManagedPreflightDoesNotDeferOtherAPIErrors(t *testing.T) {
-	ctx := context.Background()
 	root, plan := dependencyProvidedManagedRoot(t)
 	reconciler, effects, gate := dependencyProvidedManagedReconciler(t, root)
 	apiErr := errors.New("simulated managed API failure")
@@ -137,8 +130,7 @@ func TestEarlyManagedPreflightDoesNotDeferOtherAPIErrors(t *testing.T) {
 func dependencyProvidedManagedRoot(t *testing.T) (*applicationv1.OneKSApplication, applicationv1.DependencyPlan) {
 	t.Helper()
 	plan := dependencyPlanForTest("trust-manager", "trust-manager", nil)
-	root := validBoundProtectedRootPlan(t)
-	root.Finalizers = []string{applicationv1.ApplicationFinalizer}
+	root := withApplicationFinalizer(validBoundProtectedRootPlan(t))
 	root.Spec.Dependencies = []applicationv1.DependencyReference{dependencyReferenceForPlan(plan)}
 	root.Spec.DependencyPlans = []applicationv1.DependencyPlan{plan}
 	root.Spec.ManagedResources = []applicationv1.ManagedResourceSpec{{

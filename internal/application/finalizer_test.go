@@ -31,7 +31,6 @@ import (
 )
 
 func TestSparseCurrentPlanApplicationFinalizersUseMetadataPatches(t *testing.T) {
-	ctx := context.Background()
 	app := runAIProtectedPlan(t)
 	app.Spec.Dependencies = []applicationv1.DependencyReference{}
 	app.Spec.DependencyPlans = []applicationv1.DependencyPlan{}
@@ -47,9 +46,7 @@ func TestSparseCurrentPlanApplicationFinalizersUseMetadataPatches(t *testing.T) 
 		t.Fatal(err)
 	}
 	var wire map[string]any
-	if err := json.Unmarshal(serialized, &wire); err != nil {
-		t.Fatal(err)
-	}
+	requireNoError(t, json.Unmarshal(serialized, &wire), "decode patched application")
 	wireSpec := wire["spec"].(map[string]any)
 	for _, field := range []string{"dependencies", "dependencyPlans", "managedResources"} {
 		if _, exists := wireSpec[field]; exists {
@@ -62,18 +59,14 @@ func TestSparseCurrentPlanApplicationFinalizersUseMetadataPatches(t *testing.T) 
 		Client: reconciler.Client, key: client.ObjectKeyFromObject(app),
 	}
 	reconciler.Client = recorder
-	reconcileOnce(t, ctx, reconciler, app)
-
-	stored := getApplication(t, ctx, reconciler.Client, app)
+	stored := reconcileAndGet(t, ctx, reconciler, app)
 	if !controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) {
 		t.Fatalf("application finalizer was not added: %#v", stored.Finalizers)
 	}
 	assertApplicationSpecJSONUnchanged(t, wantSpecJSON, stored.Spec)
 	assertMetadataOnlyApplicationPatches(t, recorder, 1)
 
-	if err := reconciler.removeApplicationFinalizer(ctx, stored); err != nil {
-		t.Fatalf("remove application finalizer: %v", err)
-	}
+	requireNoError(t, reconciler.removeApplicationFinalizer(ctx, stored), "remove application finalizer")
 	stored = getApplication(t, ctx, reconciler.Client, app)
 	if controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) {
 		t.Fatalf("application finalizer remains: %#v", stored.Finalizers)
@@ -83,15 +76,11 @@ func TestSparseCurrentPlanApplicationFinalizersUseMetadataPatches(t *testing.T) 
 }
 
 func TestRemoveApplicationFinalizerNormally(t *testing.T) {
-	ctx := context.Background()
-	app := goldenApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
+	app := withApplicationFinalizer(goldenApplication(t))
 	reconciler, _ := testReconciler(t, app)
 	stored := getApplication(t, ctx, reconciler.Client, app)
 
-	if err := reconciler.removeApplicationFinalizer(ctx, stored); err != nil {
-		t.Fatalf("remove application finalizer: %v", err)
-	}
+	requireNoError(t, reconciler.removeApplicationFinalizer(ctx, stored), "remove application finalizer")
 	stored = getApplication(t, ctx, reconciler.Client, app)
 	if controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) {
 		t.Fatalf("application finalizer remains: %#v", stored.Finalizers)
@@ -109,7 +98,6 @@ func TestRemoveApplicationFinalizerHandlesPatchConflictAuthoritatively(t *testin
 		{"reader failure", "error", true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := context.Background()
 			reconciler, stored, patchErr := finalizerErrorReconciler(t)
 			scheme := reconciler.Client.Scheme()
 			switch test.authoritative {
@@ -182,9 +170,7 @@ func (c *applicationFinalizerMutationClient) Update(ctx context.Context, object 
 
 func finalizerErrorReconciler(t *testing.T) (*Reconciler, *applicationv1.OneKSApplication, error) {
 	t.Helper()
-	ctx := context.Background()
-	app := goldenApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
+	app := withApplicationFinalizer(goldenApplication(t))
 	reconciler, _ := testReconciler(t, app)
 	stored := getApplication(t, ctx, reconciler.Client, app)
 	patchErr := apierrors.NewConflict(applicationv1.GroupVersion.WithResource("oneksapplications").GroupResource(), stored.Name, errors.New("simulated finalizer patch race"))

@@ -1,7 +1,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: oneks-application-controller
+  name: {{ include "oneks-application-controller.name" . }}
   namespace: oneks-system
 rules:
 - apiGroups: ["oneks.opennebula.io"]
@@ -16,3 +16,17 @@ rules:
 - apiGroups: [""]
   resources: ["events"]
   verbs: ["create", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "oneks-application-controller.name" . }}
+  namespace: oneks-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "oneks-application-controller.name" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "oneks-application-controller.name" . }}
+  namespace: oneks-system

@@ -22,6 +22,18 @@ import (
 	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
 )
 
+func withApplicationFinalizer(app *applicationv1.OneKSApplication) *applicationv1.OneKSApplication {
+	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
+	return app
+}
+
+func requireNoError(t *testing.T, err error, operation string) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("%s: %v", operation, err)
+	}
+}
+
 func assertPlanValid(t *testing.T, app *applicationv1.OneKSApplication) {
 	t.Helper()
 	if err := validatePlan(app, app.Spec.ClusterID); err != nil {
@@ -41,4 +53,19 @@ func assertPlanErrorForCluster(t *testing.T, app *applicationv1.OneKSApplication
 		t.Fatalf("plan error = %#v, want reason %s", err, reason)
 	}
 	return err
+}
+
+func assertLastErrorReason(t *testing.T, app *applicationv1.OneKSApplication, reason string) *applicationv1.ApplicationError {
+	t.Helper()
+	if app.Status.LastError == nil || app.Status.LastError.Reason != reason {
+		t.Fatalf("last error = %#v, want reason %s", app.Status.LastError, reason)
+	}
+	return app.Status.LastError
+}
+
+func assertNoChildWrites(t *testing.T, recorder *recordingClient) {
+	t.Helper()
+	if len(recorder.childWrites) != 0 {
+		t.Fatalf("unexpected child writes: %#v", recorder.childWrites)
+	}
 }

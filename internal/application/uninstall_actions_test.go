@@ -46,9 +46,7 @@ func TestDependencyPlanUninstallMaterializesIntoV1Beta1Child(t *testing.T) {
 		t.Fatalf("materialize Longhorn dependency: result %#v, err %v", materialized, err)
 	}
 	child := &applicationv1.OneKSApplication{}
-	if err := reconciler.Get(context.Background(), types.NamespacedName{Namespace: applicationv1.ApplicationNamespace, Name: plan.Name}, child); err != nil {
-		t.Fatal(err)
-	}
+	requireNoError(t, reconciler.Get(ctx, types.NamespacedName{Namespace: applicationv1.ApplicationNamespace, Name: plan.Name}, child), "get materialized dependency")
 	if child.Spec.PlanVersion != applicationv1.PlanVersion || child.Spec.Role != applicationv1.ApplicationRoleDependency || child.Spec.Uninstall == nil {
 		t.Fatalf("materialized dependency lacks v1beta1 uninstall action: %#v", child.Spec)
 	}
@@ -96,7 +94,6 @@ func TestStructurallyValidNonLonghornUninstallActionIsAccepted(t *testing.T) {
 }
 
 func TestDependencyDeletionRunsPatchBeforeHelmChartDelete(t *testing.T) {
-	ctx := context.Background()
 	app, helm, setting := deletingLonghornDependency(t, applicationv1.DeletionPolicyDelete)
 	reconciler, recorder := testReconciler(t, app, helm, setting)
 	writes := &uninstallWriteClient{Client: recorder.Client}
@@ -112,7 +109,6 @@ func TestDependencyDeletionRunsPatchBeforeHelmChartDelete(t *testing.T) {
 }
 
 func TestDependencyPreUninstallPatchFailureKeepsHelmAndFinalizer(t *testing.T) {
-	ctx := context.Background()
 	app, helm, setting := deletingLonghornDependency(t, applicationv1.DeletionPolicyDelete)
 	reconciler, recorder := testReconciler(t, app, helm, setting)
 	patchErr := errors.New("simulated patch failure")
@@ -131,7 +127,6 @@ func TestDependencyPreUninstallPatchFailureKeepsHelmAndFinalizer(t *testing.T) {
 }
 
 func TestDependencyTerminatingHelmSkipsPreActionAndRepeatedDelete(t *testing.T) {
-	ctx := context.Background()
 	app, helm, _ := deletingLonghornDependency(t, applicationv1.DeletionPolicyDelete)
 	helm.SetFinalizers([]string{"helmcharts.helm.cattle.io/uninstall"})
 	now := metav1.Now()
@@ -154,7 +149,6 @@ func TestDependencyTerminatingHelmSkipsPreActionAndRepeatedDelete(t *testing.T) 
 }
 
 func TestDependencyPreUninstallRunsOnceThenCleanupContinuesAfterHelmDisappears(t *testing.T) {
-	ctx := context.Background()
 	app, helm, setting := deletingLonghornDependency(t, applicationv1.DeletionPolicyDelete)
 	helm.SetFinalizers([]string{"helmcharts.helm.cattle.io/uninstall"})
 	reconciler, recorder := testReconciler(t, app, helm, setting)
@@ -169,16 +163,12 @@ func TestDependencyPreUninstallRunsOnceThenCleanupContinuesAfterHelmDisappears(t
 		t.Fatalf("initial pre-uninstall write order = %s", got)
 	}
 	terminating := helmChartObject(helm.GetName())
-	if err := recorder.Client.Get(ctx, client.ObjectKeyFromObject(terminating), terminating); err != nil {
-		t.Fatalf("get terminating HelmChart: %v", err)
-	}
+	requireNoError(t, recorder.Client.Get(ctx, client.ObjectKeyFromObject(terminating), terminating), "get terminating HelmChart")
 	if timestamp := terminating.GetDeletionTimestamp(); timestamp == nil || timestamp.IsZero() {
 		t.Fatalf("initial Delete did not leave a terminating HelmChart: %#v", terminating.Object)
 	}
 
-	if err := recorder.Client.Delete(ctx, setting); err != nil {
-		t.Fatalf("remove preAction target: %v", err)
-	}
+	requireNoError(t, recorder.Client.Delete(ctx, setting), "remove preAction target")
 	writes.getErr = errors.New("preAction API disappeared")
 	result, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(app)})
 	if err != nil || result.RequeueAfter == 0 {
@@ -206,7 +196,6 @@ func TestDependencyPreUninstallRunsOnceThenCleanupContinuesAfterHelmDisappears(t
 }
 
 func TestDependencyPreUninstallSkipsWhenHelmAbsentOrRetained(t *testing.T) {
-	ctx := context.Background()
 	t.Run("Helm absent", func(t *testing.T) {
 		app, _, setting := deletingLonghornDependency(t, applicationv1.DeletionPolicyDelete)
 		reconciler, recorder := testReconciler(t, app, setting)
@@ -246,13 +235,12 @@ func longhornUninstall() *applicationv1.UninstallSpec {
 
 func deletingLonghornDependency(t *testing.T, policy applicationv1.DeletionPolicy) (*applicationv1.OneKSApplication, *unstructured.Unstructured, *unstructured.Unstructured) {
 	t.Helper()
-	app := validDependencyPlanApplication(t)
+	app := withApplicationFinalizer(validDependencyPlanApplication(t))
 	app.Spec.Release.ReleaseName = "oneks-longhorn"
 	app.Spec.Release.TargetNamespace = "longhorn-system"
 	app.Name = dependencyApplicationName(app.Spec.Release.ReleaseName)
 	app.Spec.Uninstall = longhornUninstall()
 	app.Spec.DeletionPolicy = policy
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	now := metav1.NewTime(time.Now())
 	app.DeletionTimestamp = &now
 	app.Labels = producerLabels(app)

@@ -1,5 +1,5 @@
 image:
-  repository: ghcr.io/jaimecb/cluster-api-provider-opennebula-monitor
+  repository: ghcr.io/opennebula/cluster-api-provider-opennebula-monitor
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -19,12 +19,11 @@ monitor:
 
 resourceConfig:
   create: true
-  # Add exact resources using the same format as the f-7910 monitor, for example:
   # monitorYaml: |
   #   - apiVersion: apps/v1
   #     resource: deployments
-  #     namespace: payments
-  #     name: api
+  #     namespace: capone-system
+  #     name: capone-controller-manager
   #     path: status.readyReplicas
   monitorYaml: |
     []

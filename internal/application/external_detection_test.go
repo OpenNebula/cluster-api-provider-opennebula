@@ -48,13 +48,11 @@ func TestExternalDetectionMaterializes(t *testing.T) {
 }
 
 func TestUsableExternalSelectionIsRestartStableAndNeverCreatesHelm(t *testing.T) {
-	ctx := context.Background()
 	app := externalDependencyApplication(t)
 	objects := append([]client.Object{app}, usableCertManagerObjects()...)
-	reconciler, recorder := externalTestReconciler(t, objects...)
+	reconciler, recorder := testReconciler(t, objects...)
 
-	reconcileOnce(t, ctx, reconciler, app)
-	stored := getApplication(t, ctx, reconciler.Client, app)
+	stored := reconcileAndGet(t, ctx, reconciler, app)
 	if !controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) || stored.Annotations[ExternalSelectionAnnotation] != "" {
 		t.Fatalf("selection was persisted before cleanup finalizer: finalizers=%#v annotations=%#v", stored.Finalizers, stored.Annotations)
 	}
@@ -80,7 +78,7 @@ func TestUsableExternalSelectionIsRestartStableAndNeverCreatesHelm(t *testing.T)
 	}
 
 	// A fresh reconciler adopts the persisted selection and still creates no HelmChart.
-	restarted, restartedRecorder := externalTestReconciler(t, append([]client.Object{stored}, usableCertManagerObjects()...)...)
+	restarted, restartedRecorder := testReconciler(t, append([]client.Object{stored}, usableCertManagerObjects()...)...)
 	reconcileOnce(t, ctx, restarted, stored)
 	if got := getApplication(t, ctx, restarted.Client, stored).Annotations[ExternalSelectionAnnotation]; got != ExternalSelectionExternal {
 		t.Fatalf("restart changed External selection to %q", got)
@@ -91,12 +89,9 @@ func TestUsableExternalSelectionIsRestartStableAndNeverCreatesHelm(t *testing.T)
 }
 
 func TestAbsentExternalSelectsManagedFallbackAndStaysManaged(t *testing.T) {
-	ctx := context.Background()
-	app := externalDependencyApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
-	reconciler, _ := externalTestReconciler(t, app)
-	reconcileOnce(t, ctx, reconciler, app)
-	stored := getApplication(t, ctx, reconciler.Client, app)
+	app := withApplicationFinalizer(externalDependencyApplication(t))
+	reconciler, _ := testReconciler(t, app)
+	stored := reconcileAndGet(t, ctx, reconciler, app)
 	if got := stored.Annotations[ExternalSelectionAnnotation]; got != ExternalSelectionManaged {
 		t.Fatalf("selection = %q, want Managed", got)
 	}
@@ -104,7 +99,7 @@ func TestAbsentExternalSelectsManagedFallbackAndStaysManaged(t *testing.T) {
 	// A fresh reconciler must ignore newly usable external evidence and continue
 	// the normal managed lifecycle selected before the restart.
 	restartedObjects := append([]client.Object{stored}, usableCertManagerObjects()...)
-	restarted, restartedRecorder := externalTestReconciler(t, restartedObjects...)
+	restarted, restartedRecorder := testReconciler(t, restartedObjects...)
 	reconcileOnce(t, ctx, restarted, stored)
 	restartedStored := getApplication(t, ctx, restarted.Client, stored)
 	if got := restartedStored.Annotations[ExternalSelectionAnnotation]; got != ExternalSelectionManaged {
@@ -117,17 +112,12 @@ func TestAbsentExternalSelectsManagedFallbackAndStaysManaged(t *testing.T) {
 }
 
 func TestCorruptPersistedExternalSelectionFailsClosed(t *testing.T) {
-	ctx := context.Background()
-	app := externalDependencyApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
+	app := withApplicationFinalizer(externalDependencyApplication(t))
 	app.Annotations = map[string]string{ExternalSelectionAnnotation: "Corrupt"}
-	reconciler, recorder := externalTestReconciler(t, app)
+	reconciler, recorder := testReconciler(t, app)
 
-	reconcileOnce(t, ctx, reconciler, app)
-	stored := getApplication(t, ctx, reconciler.Client, app)
-	if stored.Status.LastError == nil || stored.Status.LastError.Reason != "ExternalSelectionInvalid" {
-		t.Fatalf("corrupt selection status = %#v", stored.Status)
-	}
+	stored := reconcileAndGet(t, ctx, reconciler, app)
+	assertLastErrorReason(t, stored, "ExternalSelectionInvalid")
 	assertExternalCondition(t, stored, ConditionPlanValid, metav1.ConditionTrue, "ExternalSelectionInvalid")
 	assertExternalCondition(t, stored, ConditionReady, metav1.ConditionFalse, "ExternalSelectionInvalid")
 	if got := stored.Annotations[ExternalSelectionAnnotation]; got != "Corrupt" {
@@ -139,29 +129,23 @@ func TestCorruptPersistedExternalSelectionFailsClosed(t *testing.T) {
 }
 
 func TestPresentButUnusableExternalFailsWithoutOwnedEffects(t *testing.T) {
-	ctx := context.Background()
-	app := externalDependencyApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
+	app := withApplicationFinalizer(externalDependencyApplication(t))
 	crd := establishedCRD(certManagerCRDNames[0])
-	reconciler, recorder := externalTestReconciler(t, app, crd)
+	reconciler, recorder := testReconciler(t, app, crd)
 	result := reconcileOnce(t, ctx, reconciler, app)
 	if result.RequeueAfter == 0 {
 		t.Fatal("present-but-unusable detection did not request retry")
 	}
 	stored := getApplication(t, ctx, reconciler.Client, app)
-	if stored.Status.LastError == nil || stored.Status.LastError.Reason != "ExternalDependencyUnusable" {
-		t.Fatalf("unexpected status: %#v", stored.Status)
-	}
+	assertLastErrorReason(t, stored, "ExternalDependencyUnusable")
 	if stored.Annotations[ExternalSelectionAnnotation] != "" || containsWrite(recorder.childWrites, "HelmChart") {
 		t.Fatalf("unusable external prerequisite selected lifecycle or wrote Helm: annotations=%#v writes=%#v", stored.Annotations, recorder.childWrites)
 	}
 }
 
 func TestExternalDetectionAPIFailureIsRetryableWithoutOwnedEffects(t *testing.T) {
-	ctx := context.Background()
-	app := externalDependencyApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
-	reconciler, recorder := externalTestReconciler(t, app)
+	app := withApplicationFinalizer(externalDependencyApplication(t))
+	reconciler, recorder := testReconciler(t, app)
 	readErr := errors.New("simulated detector API failure")
 	reconciler.APIReader = &externalGetErrorReader{Reader: reconciler.Client, err: readErr}
 	_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(app)})
@@ -174,13 +158,10 @@ func TestExternalDetectionAPIFailureIsRetryableWithoutOwnedEffects(t *testing.T)
 }
 
 func TestExternallySelectedPrerequisiteLossNeverFallsBack(t *testing.T) {
-	ctx := context.Background()
-	app := externalDependencyApplication(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
+	app := withApplicationFinalizer(externalDependencyApplication(t))
 	app.Annotations = map[string]string{ExternalSelectionAnnotation: ExternalSelectionExternal}
-	reconciler, recorder := externalTestReconciler(t, app)
-	reconcileOnce(t, ctx, reconciler, app)
-	stored := getApplication(t, ctx, reconciler.Client, app)
+	reconciler, recorder := testReconciler(t, app)
+	stored := reconcileAndGet(t, ctx, reconciler, app)
 	if stored.Status.LastError == nil || stored.Status.LastError.Reason != "ExternalDependencyLost" || stored.Status.Phase != applicationv1.PhaseFailed {
 		t.Fatalf("external loss status = %#v", stored.Status)
 	}
@@ -196,14 +177,12 @@ func TestExternallySelectedPrerequisiteLossNeverFallsBack(t *testing.T) {
 }
 
 func TestExternalDependencyDeletionNeverTouchesExternalInstallation(t *testing.T) {
-	ctx := context.Background()
-	app := externalDependencyApplication(t)
+	app := withApplicationFinalizer(externalDependencyApplication(t))
 	now := metav1.Now()
 	app.DeletionTimestamp = &now
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	app.Annotations = map[string]string{ExternalSelectionAnnotation: ExternalSelectionExternal}
 	objects := append([]client.Object{app}, usableCertManagerObjects()...)
-	reconciler, recorder := externalTestReconciler(t, objects...)
+	reconciler, recorder := testReconciler(t, objects...)
 	reconcileOnce(t, ctx, reconciler, app)
 	if containsWrite(recorder.childWrites, "HelmChart") || containsWrite(recorder.childWrites, "Deployment") || containsWrite(recorder.childWrites, "Pod") {
 		t.Fatalf("external deletion touched external installation: %#v", recorder.childWrites)
@@ -213,9 +192,7 @@ func TestExternalDependencyDeletionNeverTouchesExternalInstallation(t *testing.T
 			t.Fatalf("external CRD %s was touched: %v", crdName, err)
 		}
 	}
-	if err := reconciler.Get(ctx, types.NamespacedName{Name: certManagerNamespace}, &corev1.Namespace{}); err != nil {
-		t.Fatalf("external namespace was touched: %v", err)
-	}
+	requireNoError(t, reconciler.Get(ctx, types.NamespacedName{Name: certManagerNamespace}, &corev1.Namespace{}), "external namespace was touched")
 	for _, component := range []string{"controller", "webhook"} {
 		key := types.NamespacedName{Namespace: certManagerNamespace, Name: "cert-manager-" + component}
 		if err := reconciler.Get(ctx, key, &appsv1.Deployment{}); err != nil {
@@ -226,18 +203,13 @@ func TestExternalDependencyDeletionNeverTouchesExternalInstallation(t *testing.T
 		}
 	}
 	webhookKey := types.NamespacedName{Namespace: certManagerNamespace, Name: certManagerWebhookName}
-	if err := reconciler.Get(ctx, webhookKey, &corev1.Service{}); err != nil {
-		t.Fatalf("external webhook Service was touched: %v", err)
-	}
-	if err := reconciler.Get(ctx, webhookKey, &corev1.Endpoints{}); err != nil {
-		t.Fatalf("external webhook Endpoints were touched: %v", err)
-	}
+	requireNoError(t, reconciler.Get(ctx, webhookKey, &corev1.Service{}), "external webhook Service was touched")
+	requireNoError(t, reconciler.Get(ctx, webhookKey, &corev1.Endpoints{}), "external webhook Endpoints were touched")
 }
 
 func TestCertManagerDetectorUsesOnlyScopedKubernetesReads(t *testing.T) {
-	ctx := context.Background()
 	app := externalDependencyApplication(t)
-	reconciler, _ := externalTestReconciler(t, append([]client.Object{app}, usableCertManagerObjects()...)...)
+	reconciler, _ := testReconciler(t, append([]client.Object{app}, usableCertManagerObjects()...)...)
 	spy := &externalReadSpy{Reader: reconciler.Client}
 	reconciler.APIReader = spy
 	result, err := reconciler.detectExternalDependency(ctx, app)
@@ -264,10 +236,9 @@ func TestCertManagerDetectorUsesOnlyScopedKubernetesReads(t *testing.T) {
 }
 
 func TestCertManagerNamespaceAloneIsAbsent(t *testing.T) {
-	ctx := context.Background()
 	app := externalDependencyApplication(t)
 	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: certManagerNamespace}}
-	reconciler, _ := externalTestReconciler(t, app, namespace)
+	reconciler, _ := testReconciler(t, app, namespace)
 
 	result, err := reconciler.detectExternalDependency(ctx, app)
 	if err != nil {
@@ -291,11 +262,6 @@ func externalDependencyApplication(t *testing.T) *applicationv1.OneKSApplication
 	app.UID = types.UID("uid-cert-manager")
 	app.Labels = producerLabels(app)
 	return app
-}
-
-func externalTestReconciler(t *testing.T, objects ...client.Object) (*Reconciler, *recordingClient) {
-	t.Helper()
-	return testReconciler(t, objects...)
 }
 
 func usableCertManagerObjects() []client.Object {

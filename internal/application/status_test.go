@@ -17,7 +17,6 @@ limitations under the License.
 package application
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -50,7 +49,6 @@ func TestObservedStatusPreservesFailurePriorities(t *testing.T) {
 				protected: componentObservation{failed: test.protectedFailed, reason: "ProtectedFailed", message: "protected"},
 				helmState: componentObservation{failed: true, reason: "HelmFailed", message: "helm"},
 			}
-			ctx := context.Background()
 			if _, err := r.recordObservedStatus(ctx, app, dependencies, observed); err != nil {
 				t.Fatal(err)
 			}

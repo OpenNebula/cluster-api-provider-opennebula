@@ -55,9 +55,7 @@ func TestGeneratedCRDUsesOnlyCurrentPlanVersion(t *testing.T) {
 		}
 	}
 	external := &apiextensionsv1.CustomResourceDefinition{}
-	if err := yaml.Unmarshal(payload, external); err != nil {
-		t.Fatalf("decode generated OneKSApplication CRD: %v", err)
-	}
+	requireNoError(t, yaml.Unmarshal(payload, external), "decode generated OneKSApplication CRD")
 	if len(external.Spec.Versions) != 1 || external.Spec.Versions[0].Name != "v1beta1" || !external.Spec.Versions[0].Storage || !external.Spec.Versions[0].Served {
 		t.Fatal("CRD must serve and store only v1beta1")
 	}
@@ -127,9 +125,7 @@ func TestGeneratedCRDUsesOnlyCurrentPlanVersion(t *testing.T) {
 		t.Fatal("generated dependency plan schema still exposes removed resources")
 	}
 	internal := &apiextensions.CustomResourceDefinition{}
-	if err := apiextensionsv1.Convert_v1_CustomResourceDefinition_To_apiextensions_CustomResourceDefinition(external, internal, nil); err != nil {
-		t.Fatalf("convert generated OneKSApplication CRD: %v", err)
-	}
+	requireNoError(t, apiextensionsv1.Convert_v1_CustomResourceDefinition_To_apiextensions_CustomResourceDefinition(external, internal, nil), "convert generated OneKSApplication CRD")
 	internal.Status.StoredVersions = []string{"v1beta1"}
 	if errors := apiextensionsvalidation.ValidateCustomResourceDefinition(context.Background(), internal); len(errors) != 0 {
 		t.Fatalf("generated OneKSApplication CRD is invalid: %v", errors.ToAggregate())
@@ -397,16 +393,13 @@ func TestCurrentPlanRejectsUnresolvedDependencyContracts(t *testing.T) {
 }
 
 func TestCurrentPlanNamespacePrecheckUsesTargetAndSkipsCreation(t *testing.T) {
-	ctx := context.Background()
 	missing := validDependencyPlanApplication(t)
 	missing.Spec.Release.CreateNamespace = false
 	reconciler, _ := testReconciler(t, missing)
 	reconcileOnce(t, ctx, reconciler, missing)
 	reconcileOnce(t, ctx, reconciler, missing)
 	stored := &applicationv1.OneKSApplication{}
-	if err := reconciler.Get(ctx, types.NamespacedName{Namespace: missing.Namespace, Name: missing.Name}, stored); err != nil {
-		t.Fatalf("get application: %v", err)
-	}
+	requireNoError(t, reconciler.Get(ctx, types.NamespacedName{Namespace: missing.Namespace, Name: missing.Name}, stored), "get application")
 	if stored.Status.LastError == nil || stored.Status.LastError.Reason != "TargetNamespaceMissing" || !strings.Contains(stored.Status.LastError.Message, "monitoring") {
 		t.Fatalf("missing target namespace status did not name monitoring: %#v", stored.Status.LastError)
 	}
@@ -415,9 +408,7 @@ func TestCurrentPlanNamespacePrecheckUsesTargetAndSkipsCreation(t *testing.T) {
 	reconciler, _ = testReconciler(t, creating)
 	reconcileOnce(t, ctx, reconciler, creating)
 	stored = &applicationv1.OneKSApplication{}
-	if err := reconciler.Get(ctx, types.NamespacedName{Namespace: creating.Namespace, Name: creating.Name}, stored); err != nil {
-		t.Fatalf("get namespace-creating application: %v", err)
-	}
+	requireNoError(t, reconciler.Get(ctx, types.NamespacedName{Namespace: creating.Namespace, Name: creating.Name}, stored), "get namespace-creating application")
 	if stored.Status.LastError != nil && stored.Status.LastError.Reason == "TargetNamespaceMissing" {
 		t.Fatalf("namespace existence was checked despite createNamespace=true: %#v", stored.Status.LastError)
 	}

@@ -33,68 +33,50 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
-func TestManagedTargetNamespaceBootstrapUsesNormalResourceDAG(t *testing.T) {
-	app := validManagedRootPlan(t)
-	app.Spec.ManagedResources = []applicationv1.ManagedResourceSpec{managedTargetNamespaceResource()}
-	refreshOwnedPlan(t, app)
+func TestTargetNamespaceBootstrap(t *testing.T) {
+	for _, managed := range []bool{true, false} {
+		t.Run(map[bool]string{true: "managed through resource DAG", false: "missing unmanaged target"}[managed], func(t *testing.T) {
+			app := validManagedRootPlan(t)
+			if managed {
+				app.Spec.ManagedResources = []applicationv1.ManagedResourceSpec{managedTargetNamespaceResource()}
+				refreshOwnedPlan(t, app)
+			}
+			reconciler, recorder := testReconciler(t, app)
+			requireNoError(t, reconciler.Client.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "catalogue-workloads"}}), "delete target namespace")
+			recorder.childWrites = nil
 
-	ctx := context.Background()
-	reconciler, recorder := testReconciler(t, app)
-	if err := reconciler.Client.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "catalogue-workloads"}}); err != nil {
-		t.Fatal(err)
-	}
-	recorder.childWrites = nil
-
-	reconcileOnce(t, ctx, reconciler, app)
-	stored := getApplication(t, ctx, reconciler.Client, app)
-	if !controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) {
-		t.Fatalf("managed namespace bootstrap did not progress to finalizer: %#v", stored.Finalizers)
-	}
-	if stored.Status.LastError != nil && stored.Status.LastError.Reason == "TargetNamespaceMissing" {
-		t.Fatalf("managed namespace bootstrap was rejected: %#v", stored.Status.LastError)
-	}
-
-	reconcileOnce(t, ctx, reconciler, app)
-	assertExists(t, ctx, reconciler.Client, &corev1.Namespace{}, "", "catalogue-workloads")
-	if !containsWrite(recorder.childWrites, "create:Namespace") {
-		t.Fatalf("normal managed DAG did not create target namespace: %#v", recorder.childWrites)
-	}
-}
-
-func TestMissingTargetNamespaceWithoutManagedTargetPreservesFailure(t *testing.T) {
-	app := validManagedRootPlan(t)
-	ctx := context.Background()
-	reconciler, recorder := testReconciler(t, app)
-	if err := reconciler.Client.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "catalogue-workloads"}}); err != nil {
-		t.Fatal(err)
-	}
-	recorder.childWrites = nil
-
-	reconcileOnce(t, ctx, reconciler, app)
-	reconcileOnce(t, ctx, reconciler, app)
-	stored := getApplication(t, ctx, reconciler.Client, app)
-	if stored.Status.LastError == nil || stored.Status.LastError.Reason != "TargetNamespaceMissing" {
-		t.Fatalf("missing target namespace status = %#v", stored.Status)
-	}
-	if !controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) || len(recorder.childWrites) != 0 {
-		t.Fatalf("missing unmanaged namespace caused progression: finalizers=%#v writes=%#v", stored.Finalizers, recorder.childWrites)
+			stored := reconcileAndGet(t, ctx, reconciler, app)
+			if !controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) {
+				t.Fatalf("target namespace handling lost application finalizer: %#v", stored.Finalizers)
+			}
+			if !managed {
+				stored = reconcileAndGet(t, ctx, reconciler, app)
+				assertLastErrorReason(t, stored, "TargetNamespaceMissing")
+				assertNoChildWrites(t, recorder)
+				return
+			}
+			if stored.Status.LastError != nil && stored.Status.LastError.Reason == "TargetNamespaceMissing" {
+				t.Fatalf("managed namespace bootstrap was rejected: %#v", stored.Status.LastError)
+			}
+			reconcileOnce(t, ctx, reconciler, app)
+			assertExists(t, ctx, reconciler.Client, &corev1.Namespace{}, "", "catalogue-workloads")
+			if !containsWrite(recorder.childWrites, "create:Namespace") {
+				t.Fatalf("normal managed DAG did not create target namespace: %#v", recorder.childWrites)
+			}
+		})
 	}
 }
 
 func TestProtectedSecretWaitsForManagedTargetNamespace(t *testing.T) {
-	ctx := context.Background()
 	app := validBoundProtectedRootPlan(t)
 	app.Spec.ManagedResources = []applicationv1.ManagedResourceSpec{managedTargetNamespaceResource()}
 	refreshOwnedPlan(t, app)
 	input := inputSecretFor(app, map[string][]byte{"adminPassword": []byte("SENTINEL_NAMESPACE_BOOTSTRAP")})
 	reconciler, recorder := testReconciler(t, app, input)
-	if err := reconciler.Client.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "catalogue-workloads"}}); err != nil {
-		t.Fatal(err)
-	}
+	requireNoError(t, reconciler.Client.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "catalogue-workloads"}}), "delete target namespace")
 	recorder.childWrites = nil
 
 	reconcileOnce(t, ctx, reconciler, app)
@@ -112,17 +94,14 @@ func TestProtectedSecretWaitsForManagedTargetNamespace(t *testing.T) {
 }
 
 func TestInputSecretInvalidKeepsPlanValid(t *testing.T) {
-	ctx := context.Background()
-	app := validBoundProtectedRootPlan(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
+	app := withApplicationFinalizer(validBoundProtectedRootPlan(t))
 	app.Spec.ManagedResources = nil
 	refreshOwnedPlan(t, app)
 	input := inputSecretFor(app, map[string][]byte{"adminPassword": []byte("SENTINEL_INVALID_RUNTIME")})
 	input.UID = "replacement-uid"
 	reconciler, _ := testReconciler(t, app, input)
 
-	reconcileOnce(t, ctx, reconciler, app)
-	stored := getApplication(t, ctx, reconciler.Client, app)
+	stored := reconcileAndGet(t, ctx, reconciler, app)
 	if stored.Status.Phase != applicationv1.PhaseFailed || stored.Status.LastError == nil || stored.Status.LastError.Reason != "InputSecretInvalid" {
 		t.Fatalf("runtime input failure status = %#v", stored.Status)
 	}
@@ -169,12 +148,9 @@ func TestProtectedSecretPlanValidatesStructuredProtectedSecretContract(t *testin
 }
 
 func TestProtectedSecretPlanInputSecretPendingAndInvalidFailClosed(t *testing.T) {
-	ctx := context.Background()
-	missing := validBoundProtectedRootPlan(t)
-	missing.Finalizers = []string{applicationv1.ApplicationFinalizer}
+	missing := withApplicationFinalizer(validBoundProtectedRootPlan(t))
 	reconciler, recorder := testReconciler(t, missing)
-	reconcileOnce(t, ctx, reconciler, missing)
-	stored := getApplication(t, ctx, reconciler.Client, missing)
+	stored := reconcileAndGet(t, ctx, reconciler, missing)
 	assertConditionReason(t, stored, ConditionProtectedSecretsReady, "InputSecretMissing")
 	assertNotFound(t, ctx, reconciler.Client, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "catalogue-workloads", Name: "protected"}})
 	assertNotFound(t, ctx, reconciler.Client, helmChartObject(missing.Spec.Release.ReleaseName))
@@ -193,13 +169,11 @@ func TestProtectedSecretPlanInputSecretPendingAndInvalidFailClosed(t *testing.T)
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			app := validBoundProtectedRootPlan(t)
-			app.Finalizers = []string{applicationv1.ApplicationFinalizer}
+			app := withApplicationFinalizer(validBoundProtectedRootPlan(t))
 			input := inputSecretFor(app, map[string][]byte{"adminPassword": []byte("SENTINEL_INVALID")})
 			test.mutate(input)
 			reconciler, _ := testReconciler(t, app, input)
-			reconcileOnce(t, ctx, reconciler, app)
-			stored := getApplication(t, ctx, reconciler.Client, app)
+			stored := reconcileAndGet(t, ctx, reconciler, app)
 			if stored.Status.LastError == nil || stored.Status.LastError.Reason != "InputSecretInvalid" || strings.Contains(stored.Status.LastError.Message, "SENTINEL") {
 				t.Fatalf("invalid input status leaked or was not terminal: %#v", stored.Status)
 			}
@@ -210,7 +184,6 @@ func TestProtectedSecretPlanInputSecretPendingAndInvalidFailClosed(t *testing.T)
 }
 
 func TestProtectedSecretPlanRunAIProtectedSecretsMaterializeWithoutLeakingValues(t *testing.T) {
-	ctx := context.Background()
 	app := runAIProtectedPlan(t)
 	adminValue := "SENTINEL_ADMIN_5ebf88b7"
 	ngcValue := "SENTINEL_NGC_20d58fc1"
@@ -249,9 +222,7 @@ func TestProtectedSecretPlanRunAIProtectedSecretsMaterializeWithoutLeakingValues
 	for _, namespace := range []string{"catalogue-workloads", "runai"} {
 		registry := getSecret(t, ctx, reconciler.Client, namespace, "runai-test-registry-creds")
 		var docker map[string]map[string]map[string]string
-		if err := json.Unmarshal(registry.Data[corev1.DockerConfigJsonKey], &docker); err != nil {
-			t.Fatal(err)
-		}
+		requireNoError(t, json.Unmarshal(registry.Data[corev1.DockerConfigJsonKey], &docker), "decode registry credentials")
 		credentials := docker["auths"]["https://nvcr.io"]
 		if credentials["username"] != "$oauthtoken" || credentials["password"] != ngcValue || credentials["email"] != "operator@example.com" {
 			t.Fatal("Docker config Secret content mismatch")
@@ -284,33 +255,23 @@ func TestProtectedSecretPlanRunAIProtectedSecretsMaterializeWithoutLeakingValues
 }
 
 func TestProtectedSecretPlanPreflightsEveryTargetBeforeMutation(t *testing.T) {
-	ctx := context.Background()
 	app := runAIProtectedPlan(t)
 	input := inputSecretFor(app, map[string][]byte{"adminPassword": []byte("sentinel-a"), "ngcApiKey": []byte("sentinel-b")})
 	foreignResource := app.Spec.ProtectedSecrets[len(app.Spec.ProtectedSecrets)-1]
 	foreign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: foreignResource.Namespace, Name: foreignResource.Name}, Type: corev1.SecretTypeDockerConfigJson}
 	reconciler, recorder := testReconciler(t, app, input, foreign)
 	reconcileOnce(t, ctx, reconciler, app)
-	if len(recorder.childWrites) != 0 {
-		t.Fatalf("finalizer acquisition mutated children: %#v", recorder.childWrites)
-	}
-	reconcileOnce(t, ctx, reconciler, app)
-	stored := getApplication(t, ctx, reconciler.Client, app)
+	assertNoChildWrites(t, recorder)
+	stored := reconcileAndGet(t, ctx, reconciler, app)
 	if !controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) {
 		t.Fatal("current plan did not acquire its cleanup finalizer")
 	}
-	if stored.Status.LastError == nil || stored.Status.LastError.Reason != "OwnershipConflict" {
-		t.Fatalf("ownership conflict not reported: %#v", stored.Status)
-	}
-	if len(recorder.childWrites) != 0 {
-		t.Fatalf("preflight conflict mutated children: %#v", recorder.childWrites)
-	}
+	assertLastErrorReason(t, stored, "OwnershipConflict")
+	assertNoChildWrites(t, recorder)
 }
 
 func TestProtectedSecretPlanRepairsOwnedTargetDrift(t *testing.T) {
-	ctx := context.Background()
-	app := validBoundProtectedRootPlan(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
+	app := withApplicationFinalizer(validBoundProtectedRootPlan(t))
 	input := inputSecretFor(app, map[string][]byte{"adminPassword": []byte("SENTINEL_REPAIR")})
 	desired, err := desiredProtectedSecret(app, app.Spec.ProtectedSecrets[0], input)
 	if err != nil {
@@ -332,10 +293,8 @@ func TestProtectedSecretPlanRepairsOwnedTargetDrift(t *testing.T) {
 }
 
 func TestProtectedSecretPlanProtectedCreateAlreadyExistsRaceRetriesBeforeRepair(t *testing.T) {
-	ctx := context.Background()
-	app := validBoundProtectedRootPlan(t)
+	app := withApplicationFinalizer(validBoundProtectedRootPlan(t))
 	app.Spec.ManagedResources = nil
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
 	refreshOwnedPlan(t, app)
 	input := inputSecretFor(app, map[string][]byte{"adminPassword": []byte("SENTINEL_RACE")})
 	existing, err := desiredProtectedSecret(app, app.Spec.ProtectedSecrets[0], input)
@@ -360,9 +319,7 @@ func TestProtectedSecretPlanProtectedCreateAlreadyExistsRaceRetriesBeforeRepair(
 }
 
 func TestProtectedSecretPlanManagedResourcesGateProtectedSecretsAndHelm(t *testing.T) {
-	ctx := context.Background()
-	app := validBoundProtectedRootPlan(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
+	app := withApplicationFinalizer(validBoundProtectedRootPlan(t))
 	app.Spec.ManagedResources[0].Readiness.Conditions = []applicationv1.ManagedResourceCondition{{Type: "Ready", Status: "True"}}
 	refreshOwnedPlan(t, app)
 	managed, _ := desiredManagedResource(app, app.Spec.ManagedResources[0])
@@ -378,9 +335,7 @@ func TestProtectedSecretPlanManagedResourcesGateProtectedSecretsAndHelm(t *testi
 }
 
 func TestProtectedSecretPlanDeletionOrdersTargetsSourceManagedAndFinalizer(t *testing.T) {
-	ctx := context.Background()
-	app := validBoundProtectedRootPlan(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
+	app := withApplicationFinalizer(validBoundProtectedRootPlan(t))
 	app.Spec.ManagedResources = nil
 	app.Spec.ProtectedSecrets = []applicationv1.ProtectedSecretSpec{
 		opaqueProtectedSecret("retained", "catalogue-workloads", "retained"),
@@ -394,9 +349,7 @@ func TestProtectedSecretPlanDeletionOrdersTargetsSourceManagedAndFinalizer(t *te
 	retained.UID, retained.ResourceVersion = "retained-uid", "1"
 	deleted.UID, deleted.ResourceVersion = "deleted-uid", "1"
 	reconciler, recorder := testReconciler(t, app, input, retained, deleted)
-	if err := reconciler.Delete(ctx, app); err != nil {
-		t.Fatal(err)
-	}
+	requireNoError(t, reconciler.Delete(ctx, app), "delete application")
 	recorder.deletePreconditions = nil
 	deleting := getApplication(t, ctx, reconciler.Client, app)
 	reconcileOnce(t, ctx, reconciler, deleting)
@@ -416,7 +369,6 @@ func TestProtectedSecretPlanDeletionOrdersTargetsSourceManagedAndFinalizer(t *te
 }
 
 func TestProtectedSecretPlanDeletionPreflightsAllTargetsBeforeDeletingAny(t *testing.T) {
-	ctx := context.Background()
 	app := validBoundProtectedRootPlan(t)
 	app.Spec.ManagedResources = nil
 	app.Spec.ProtectedSecrets = []applicationv1.ProtectedSecretSpec{
@@ -441,17 +393,13 @@ func TestProtectedSecretPlanDeletionPreflightsAllTargetsBeforeDeletingAny(t *tes
 }
 
 func TestProtectedSecretPlanDeletionDoesNotDeleteReplacementInputSecret(t *testing.T) {
-	ctx := context.Background()
-	app := validBoundProtectedRootPlan(t)
-	app.Finalizers = []string{applicationv1.ApplicationFinalizer}
+	app := withApplicationFinalizer(validBoundProtectedRootPlan(t))
 	app.Spec.ManagedResources = nil
 	refreshOwnedPlan(t, app)
 	replacement := inputSecretFor(app, map[string][]byte{"adminPassword": []byte("SENTINEL_REPLACEMENT")})
 	replacement.UID = "replacement-uid"
 	reconciler, _ := testReconciler(t, app, replacement)
-	if err := reconciler.Delete(ctx, app); err != nil {
-		t.Fatal(err)
-	}
+	requireNoError(t, reconciler.Delete(ctx, app), "delete application")
 	deleting := getApplication(t, ctx, reconciler.Client, app)
 	reconcileOnce(t, ctx, reconciler, deleting)
 	assertExists(t, ctx, reconciler.Client, &corev1.Secret{}, replacement.Namespace, replacement.Name)
@@ -466,7 +414,7 @@ func TestProtectedSecretPlanUsesAuthoritativeInputReader(t *testing.T) {
 	app := validBoundProtectedRootPlan(t)
 	input := inputSecretFor(app, map[string][]byte{"adminPassword": []byte("SENTINEL_AUTHORITATIVE")})
 	reconciler, _ := testReconciler(t, app)
-	authoritative := fake.NewClientBuilder().WithScheme(reconciler.Client.Scheme()).WithObjects(input).Build()
+	authoritative := authoritativeClient(reconciler, input)
 	reconciler.APIReader = authoritative
 	observed, missing, err := reconciler.readSecretInput(context.Background(), app)
 	if err != nil || missing || observed == nil || string(observed.Data["adminPassword"]) != "SENTINEL_AUTHORITATIVE" {
@@ -484,10 +432,8 @@ func TestCurrentPlanBindsInputUIDBeforeExecution(t *testing.T) {
 		LabelApplicationName: app.Name,
 	}
 	reconciler, recorder := testReconciler(t, app, input)
-	ctx := context.Background()
 
-	reconcileOnce(t, ctx, reconciler, app)
-	stored := getApplication(t, ctx, reconciler.Client, app)
+	stored := reconcileAndGet(t, ctx, reconciler, app)
 	if !controllerutil.ContainsFinalizer(stored, applicationv1.ApplicationFinalizer) {
 		t.Fatalf("v5 finalizer was not acquired before input binding")
 	}
@@ -497,16 +443,14 @@ func TestCurrentPlanBindsInputUIDBeforeExecution(t *testing.T) {
 
 	reconcileOnce(t, ctx, reconciler, app)
 	stored = getApplication(t, ctx, reconciler.Client, app)
-	if len(recorder.childWrites) != 0 {
-		t.Fatalf("v5 executed while binding input UID: %#v", recorder.childWrites)
-	}
+	assertNoChildWrites(t, recorder)
 	if stored.Status.SecretInputUID != "input-v5-uid" {
 		t.Fatalf("bound UID = %q", stored.Status.SecretInputUID)
 	}
 
 	replacement := input.DeepCopy()
 	replacement.UID = "replacement-uid"
-	reconciler.APIReader = fake.NewClientBuilder().WithScheme(reconciler.Client.Scheme()).WithObjects(replacement).Build()
+	reconciler.APIReader = authoritativeClient(reconciler, replacement)
 	if _, _, err := reconciler.readSecretInput(ctx, stored); err == nil || !strings.Contains(err.Error(), "UID") {
 		t.Fatalf("replacement input error = %v", err)
 	}
@@ -650,9 +594,7 @@ func inputSecretFor(app *applicationv1.OneKSApplication, data map[string][]byte)
 func getSecret(t *testing.T, ctx context.Context, kubeClient client.Client, namespace, name string) *corev1.Secret {
 	t.Helper()
 	secret := &corev1.Secret{}
-	if err := kubeClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, secret); err != nil {
-		t.Fatal(err)
-	}
+	requireNoError(t, kubeClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, secret), "get Secret")
 	return secret
 }
 
