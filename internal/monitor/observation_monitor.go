@@ -35,7 +35,7 @@ type ResourceObservation struct {
 	Name      string `json:"name"`
 	Path      string `json:"path"`
 	Value     any    `json:"value"`
-	CreatedAt string `json:"createdAt,omitempty"`
+	CreatedAt int64  `json:"createdAt,omitempty"`
 }
 
 type ObservationSnapshot []ResourceObservation
@@ -210,7 +210,7 @@ func newResourceObservation(
 		Path: spec.Path, Value: value,
 	}
 	if !createdAt.IsZero() {
-		observation.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+		observation.CreatedAt = createdAt.Unix()
 	}
 	return observation
 }

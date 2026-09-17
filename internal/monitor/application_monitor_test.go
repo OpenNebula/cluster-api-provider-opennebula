@@ -11,6 +11,7 @@ You may obtain a copy of the License at
 package monitor
 
 import (
+	"encoding/json"
 	"testing"
 
 	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
@@ -25,12 +26,12 @@ func TestChartEventsMapApplicationPhases(t *testing.T) {
 		event   string
 		state   string
 	}{
-		{"", false, "chart_state_changed", "installing"},
-		{string(applicationv1.PhasePending), false, "chart_state_changed", "installing"},
-		{string(applicationv1.PhaseInstalling), false, "chart_state_changed", "installing"},
-		{string(applicationv1.PhaseReady), false, "chart_state_changed", "ready"},
-		{string(applicationv1.PhaseDeleting), false, "chart_state_changed", "deleting"},
-		{string(applicationv1.PhaseDeleting), true, "chart_state_changed", "done"},
+		{"", false, "app_state_changed", "installing"},
+		{string(applicationv1.PhasePending), false, "app_state_changed", "installing"},
+		{string(applicationv1.PhaseInstalling), false, "app_state_changed", "installing"},
+		{string(applicationv1.PhaseReady), false, "app_state_changed", "ready"},
+		{string(applicationv1.PhaseDeleting), false, "app_state_changed", "deleting"},
+		{string(applicationv1.PhaseDeleting), true, "app_state_changed", "done"},
 	}
 	for _, test := range tests {
 		app := testApplication("root", "runai", nil, test.phase)
@@ -38,8 +39,30 @@ func TestChartEventsMapApplicationPhases(t *testing.T) {
 		if event.Event != test.event || event.Payload["state"] != test.state {
 			t.Fatalf("phase %q deleted=%t produced %#v", test.phase, test.deleted, event)
 		}
-		if event.Payload["release_name"] != "runai" || event.Payload["resource_version"] != "17" {
+		if event.Payload["release_name"] != "runai" || event.Payload["resource_version"] != json.Number("17") {
 			t.Fatalf("unexpected correlation payload: %#v", event.Payload)
+		}
+	}
+}
+
+func TestChartEventsEncodeResourceVersionAsInteger(t *testing.T) {
+	for _, phase := range []string{string(applicationv1.PhaseReady), string(applicationv1.PhaseFailed)} {
+		for _, version := range []string{"17", "9007199254740993", "18446744073709551615"} {
+			app := testApplication("root", "runai", nil, phase)
+			app.SetResourceVersion(version)
+			encoded, err := json.Marshal(chartEvent(app, false))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var event struct {
+				Payload map[string]json.RawMessage `json:"payload"`
+			}
+			if err := json.Unmarshal(encoded, &event); err != nil {
+				t.Fatal(err)
+			}
+			if got := string(event.Payload["resource_version"]); got != version {
+				t.Fatalf("phase %s: resource_version encoded as %s, want integer %s", phase, got, version)
+			}
 		}
 	}
 }
@@ -50,14 +73,14 @@ func TestChartFailedUsesLastError(t *testing.T) {
 		"reason": "InstallerJobFailed", "message": "helm job failed",
 	}
 	event := chartEvent(app, false)
-	if event.Event != "chart_failed" {
+	if event.Event != "app_failed" {
 		t.Fatalf("unexpected event: %#v", event)
 	}
 	if event.Payload["error_msg"] != "helm job failed" {
 		t.Fatalf("unexpected failure payload: %#v", event.Payload)
 	}
 	if _, found := event.Payload["state"]; found {
-		t.Fatalf("chart_failed contains state: %#v", event.Payload)
+		t.Fatalf("app_failed contains state: %#v", event.Payload)
 	}
 }
 
@@ -82,7 +105,7 @@ func TestDeletingTimestampOverridesFailedPhase(t *testing.T) {
 	now := metav1.Now()
 	app.SetDeletionTimestamp(&now)
 	event := chartEvent(app, false)
-	if event.Event != "chart_state_changed" || event.Payload["state"] != "deleting" {
+	if event.Event != "app_state_changed" || event.Payload["state"] != "deleting" {
 		t.Fatalf("deleting application produced unexpected event: %#v", event)
 	}
 }

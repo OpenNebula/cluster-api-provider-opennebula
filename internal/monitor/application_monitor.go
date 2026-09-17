@@ -12,6 +12,7 @@ package monitor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -149,13 +150,13 @@ func (m *ApplicationMonitor) processNext(ctx context.Context) bool {
 func chartEvent(app *unstructured.Unstructured, deleted bool) ChartEvent {
 	payload := map[string]any{
 		"release_name":     nestedString(app.Object, "spec", "release", "releaseName"),
-		"resource_version": app.GetResourceVersion(),
+		"resource_version": json.Number(app.GetResourceVersion()),
 	}
 	phase := nestedString(app.Object, "status", "phase")
 	deleting := app.GetDeletionTimestamp() != nil || phase == string(applicationv1.PhaseDeleting)
 	if phase == string(applicationv1.PhaseFailed) && !deleted && !deleting {
 		payload["error_msg"] = applicationError(app)
-		return ChartEvent{Event: "chart_failed", Payload: payload}
+		return ChartEvent{Event: "app_failed", Payload: payload}
 	}
 	state := "installing"
 	switch {
@@ -167,7 +168,7 @@ func chartEvent(app *unstructured.Unstructured, deleted bool) ChartEvent {
 		state = "ready"
 	}
 	payload["state"] = state
-	return ChartEvent{Event: "chart_state_changed", Payload: payload}
+	return ChartEvent{Event: "app_state_changed", Payload: payload}
 }
 
 func applicationEventSignature(obj any) string {

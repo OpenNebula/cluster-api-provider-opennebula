@@ -1,7 +1,7 @@
 clusterID: ""
 
 image:
-  repository: ghcr.io/opennebula/oneks-application-controller
+  repository: ghcr.io/jaimecb/oneks-application-controller
   tag: ""
   pullPolicy: IfNotPresent
 

@@ -78,19 +78,19 @@ func TestObservationPollIncludesPendingPodsAndConfiguredResources(t *testing.T) 
 	pending := snapshot[0]
 	if pending.Resource != "pods" || pending.Namespace != "payments" || pending.Name != "queued" ||
 		pending.Path != "status.phase" || pending.Value != "Pending" ||
-		pending.CreatedAt != "2026-09-10T11:12:13Z" {
+		pending.CreatedAt != createdAt.Unix() {
 		t.Fatalf("unexpected Pending Pod observation: %#v", pending)
 	}
 	configured := snapshot[1]
 	if configured.Resource != "deployments" || configured.Name != "api" || configured.Value != int64(2) ||
-		configured.CreatedAt != "2026-09-10T11:12:13Z" {
+		configured.CreatedAt != createdAt.Unix() {
 		t.Fatalf("unexpected configured observation: %#v", configured)
 	}
 	encoded, err := json.Marshal(ObservationSnapshot{pending})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `[{"resource":"pods","namespace":"payments","name":"queued","path":"status.phase","value":"Pending","createdAt":"2026-09-10T11:12:13Z"}]`
+	want := `[{"resource":"pods","namespace":"payments","name":"queued","path":"status.phase","value":"Pending","createdAt":1789038733}]`
 	if string(encoded) != want {
 		t.Fatalf("observation payload = %s, want %s", encoded, want)
 	}
