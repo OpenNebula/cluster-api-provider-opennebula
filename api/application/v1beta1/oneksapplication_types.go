@@ -64,7 +64,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.protectedSecrets) || self.protectedSecrets.all(p, self.protectedSecrets.filter(x, x.id == p.id).size() == 1)",message="protected Secret IDs must be unique"
 // +kubebuilder:validation:XValidation:rule="!has(self.protectedSecrets) || self.protectedSecrets.all(p, self.protectedSecrets.filter(x, x.__namespace__ == p.__namespace__ && x.name == p.name).size() == 1)",message="protected Secret target identities must be unique"
 // +kubebuilder:validation:XValidation:rule="!has(self.managedResources) || !has(self.protectedSecrets) || self.protectedSecrets.all(p, self.managedResources.filter(m, m.id == p.id).size() == 0)",message="protected Secret IDs must not collide with managed resource IDs"
-// +kubebuilder:validation:XValidation:rule="!has(self.uninstall) || (has(self.role) && self.role == 'Dependency')",message="top-level uninstall is permitted only for Dependency applications"
+// +kubebuilder:validation:XValidation:rule="!has(self.uninstall) || self.role == 'Dependency' || !has(self.uninstall.preActions)",message="uninstall.preActions is permitted only for Dependency applications"
 // +kubebuilder:validation:XValidation:rule="!has(self.externalDetection) || (has(self.role) && self.role == 'Dependency')",message="top-level externalDetection is permitted only for Dependency applications"
 type OneKSApplicationSpec struct {
 	// +kubebuilder:validation:MinLength=1
@@ -105,10 +105,44 @@ type ExternalDetectionSpec struct {
 	Detector ExternalDetector `json:"detector"`
 }
 
+// +kubebuilder:validation:XValidation:rule="has(self.preActions) || has(self.cleanupJob)",message="uninstall requires preActions or cleanupJob"
 type UninstallSpec struct {
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=8
-	PreActions []UninstallPreAction `json:"preActions"`
+	PreActions []UninstallPreAction `json:"preActions,omitempty"`
+	CleanupJob *CleanupJobSpec      `json:"cleanupJob,omitempty"`
+}
+
+// CleanupJobSpec runs catalogue-provided, idempotent cleanup before Helm uninstall.
+// Jobs run in kube-system using an existing service account.
+type CleanupJobSpec struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=512
+	Image string `json:"image"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	ServiceAccountName string `json:"serviceAccountName"`
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=8
+	// +kubebuilder:validation:items:MaxLength=256
+	Command []string `json:"command"`
+	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:items:MaxLength=32768
+	Args []string `json:"args,omitempty"`
+	// +kubebuilder:validation:MaxItems=32
+	Env []CleanupJobEnv `json:"env,omitempty"`
+	// +kubebuilder:default=1800
+	// +kubebuilder:validation:Minimum=60
+	// +kubebuilder:validation:Maximum=7200
+	TimeoutSeconds int64 `json:"timeoutSeconds,omitempty"`
+}
+
+type CleanupJobEnv struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+	// +kubebuilder:validation:MaxLength=2048
+	Value string `json:"value"`
 }
 
 type UninstallPreActionType string

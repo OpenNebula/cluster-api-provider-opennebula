@@ -62,6 +62,9 @@ func validatePlan(app *applicationv1.OneKSApplication, clusterID string) *PlanEr
 		return err
 	}
 	if app.Spec.Uninstall != nil {
+		if app.Spec.Role != applicationv1.ApplicationRoleDependency && len(app.Spec.Uninstall.PreActions) != 0 {
+			return invalid("InvalidUninstallRole", "uninstall.preActions is permitted only for Dependency applications")
+		}
 		if err := validateUninstall(*app.Spec.Uninstall, "uninstall"); err != nil {
 			return err
 		}

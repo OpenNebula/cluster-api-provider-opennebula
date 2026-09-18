@@ -229,6 +229,14 @@ func chartCondition(chart *unstructured.Unstructured, conditionType, fallback st
 }
 
 func validateUninstall(uninstall applicationv1.UninstallSpec, path string) *PlanError {
+	if len(uninstall.PreActions) == 0 && uninstall.CleanupJob == nil {
+		return invalid("InvalidUninstall", "%s requires preActions or cleanupJob", path)
+	}
+	if uninstall.CleanupJob != nil {
+		if err := validateCleanupJob(*uninstall.CleanupJob, path+".cleanupJob"); err != nil {
+			return err
+		}
+	}
 	for index, action := range uninstall.PreActions {
 		actionPath := fmt.Sprintf("%s.preActions[%d]", path, index)
 		resource := action.Resource

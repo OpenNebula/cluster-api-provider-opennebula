@@ -71,7 +71,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, app *applicationv1.One
 		return ctrl.Result{}, err
 	}
 
-	steps := []deleteStep{r.reconcileDeleteHelmChart}
+	steps := []deleteStep{r.reconcileDeleteCleanupJob, r.reconcileDeleteHelmChart}
 	if usesProtectedSecrets(app) {
 		steps = append(steps, r.reconcileDeleteProtectedSecrets, r.reconcileDeleteSecretInput)
 	}

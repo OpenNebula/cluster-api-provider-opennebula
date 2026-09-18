@@ -40,7 +40,7 @@ func TestGeneratedCRDUsesOnlyCurrentPlanVersion(t *testing.T) {
 		"- oneks.opennebula.io/plan-v1beta1",
 		"plan-v1beta1 requires role",
 		"each direct Root dependency must resolve to exactly one matching",
-		"top-level uninstall is permitted only for Dependency applications",
+		"uninstall.preActions is permitted only for Dependency applications",
 		"dependency plans do not permit release.authSecret",
 		"secretInputUID:",
 		"patchJSON:",

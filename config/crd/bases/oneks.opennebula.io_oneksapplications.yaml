@@ -186,6 +186,59 @@ spec:
                       type: object
                     uninstall:
                       properties:
+                        cleanupJob:
+                          description: |-
+                            CleanupJobSpec runs catalogue-provided, idempotent cleanup before Helm uninstall.
+                            Jobs run in kube-system using an existing service account.
+                          properties:
+                            args:
+                              items:
+                                maxLength: 32768
+                                type: string
+                              maxItems: 16
+                              type: array
+                            command:
+                              items:
+                                maxLength: 256
+                                type: string
+                              maxItems: 8
+                              minItems: 1
+                              type: array
+                            env:
+                              items:
+                                properties:
+                                  name:
+                                    maxLength: 253
+                                    minLength: 1
+                                    type: string
+                                  value:
+                                    maxLength: 2048
+                                    type: string
+                                required:
+                                - name
+                                - value
+                                type: object
+                              maxItems: 32
+                              type: array
+                            image:
+                              maxLength: 512
+                              minLength: 1
+                              type: string
+                            serviceAccountName:
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                            timeoutSeconds:
+                              default: 1800
+                              format: int64
+                              maximum: 7200
+                              minimum: 60
+                              type: integer
+                          required:
+                          - command
+                          - image
+                          - serviceAccountName
+                          type: object
                         preActions:
                           items:
                             properties:
@@ -235,9 +288,10 @@ spec:
                           maxItems: 8
                           minItems: 1
                           type: array
-                      required:
-                      - preActions
                       type: object
+                      x-kubernetes-validations:
+                      - message: uninstall requires preActions or cleanupJob
+                        rule: has(self.preActions) || has(self.cleanupJob)
                   required:
                   - catalogueChartID
                   - deletionPolicy
@@ -588,6 +642,59 @@ spec:
                 type: object
               uninstall:
                 properties:
+                  cleanupJob:
+                    description: |-
+                      CleanupJobSpec runs catalogue-provided, idempotent cleanup before Helm uninstall.
+                      Jobs run in kube-system using an existing service account.
+                    properties:
+                      args:
+                        items:
+                          maxLength: 32768
+                          type: string
+                        maxItems: 16
+                        type: array
+                      command:
+                        items:
+                          maxLength: 256
+                          type: string
+                        maxItems: 8
+                        minItems: 1
+                        type: array
+                      env:
+                        items:
+                          properties:
+                            name:
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                            value:
+                              maxLength: 2048
+                              type: string
+                          required:
+                          - name
+                          - value
+                          type: object
+                        maxItems: 32
+                        type: array
+                      image:
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                      serviceAccountName:
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                      timeoutSeconds:
+                        default: 1800
+                        format: int64
+                        maximum: 7200
+                        minimum: 60
+                        type: integer
+                    required:
+                    - command
+                    - image
+                    - serviceAccountName
+                    type: object
                   preActions:
                     items:
                       properties:
@@ -637,9 +744,10 @@ spec:
                     maxItems: 8
                     minItems: 1
                     type: array
-                required:
-                - preActions
                 type: object
+                x-kubernetes-validations:
+                - message: uninstall requires preActions or cleanupJob
+                  rule: has(self.preActions) || has(self.cleanupJob)
             required:
             - catalogueChartID
             - clusterID
@@ -702,8 +810,8 @@ spec:
               rule: '!has(self.managedResources) || !has(self.protectedSecrets) ||
                 self.protectedSecrets.all(p, self.managedResources.filter(m, m.id
                 == p.id).size() == 0)'
-            - message: top-level uninstall is permitted only for Dependency applications
-              rule: '!has(self.uninstall) || (has(self.role) && self.role == ''Dependency'')'
+            - message: uninstall.preActions is permitted only for Dependency applications
+              rule: '!has(self.uninstall) || self.role == ''Dependency'' || !has(self.uninstall.preActions)'
             - message: top-level externalDetection is permitted only for Dependency
                 applications
               rule: '!has(self.externalDetection) || (has(self.role) && self.role
