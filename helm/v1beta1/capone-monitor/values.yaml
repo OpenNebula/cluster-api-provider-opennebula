@@ -1,5 +1,5 @@
 image:
-  repository: ghcr.io/jaimecb/cluster-api-provider-opennebula-monitor
+  repository: ghcr.io/opennebula/cluster-api-provider-opennebula-monitor
   tag: ""
   pullPolicy: IfNotPresent
 
