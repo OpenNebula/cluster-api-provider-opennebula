@@ -20,10 +20,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	applicationv1 "github.com/OpenNebula/cluster-api-provider-opennebula/api/application/v1beta1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -125,6 +127,33 @@ func TestEarlyManagedPreflightDoesNotDeferOtherAPIErrors(t *testing.T) {
 	}
 	assertApplicationNotFound(t, ctx, reconciler.Client, plan.Name)
 	assertNoRootEffects(t, effects)
+}
+
+func TestManagedPreflightForbiddenReportsFailedStatusAndRetries(t *testing.T) {
+	root, _ := dependencyProvidedManagedRoot(t)
+	reconciler, effects, gate := dependencyProvidedManagedReconciler(t, root)
+	gate.err = apierrors.NewForbidden(
+		schema.GroupResource{Group: dependencyProvidedBundleGVK.Group, Resource: "bundles"},
+		root.Spec.ManagedResources[0].Name,
+		errors.New("service account cannot get cluster-scoped resource"),
+	)
+
+	result, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(root)})
+	if err != nil {
+		t.Fatalf("forbidden preflight was not reported through status: %v", err)
+	}
+	if result.RequeueAfter == 0 {
+		t.Fatalf("forbidden preflight did not retain periodic retry: %#v", result)
+	}
+	assertNoRootEffects(t, effects)
+	stored := getApplication(t, ctx, reconciler.Client, root)
+	if stored.Status.Phase != applicationv1.PhaseFailed {
+		t.Fatalf("forbidden preflight phase = %q, want Failed: %#v", stored.Status.Phase, stored.Status)
+	}
+	lastError := assertLastErrorReason(t, stored, "KubernetesAccessDenied")
+	if !strings.Contains(lastError.Message, "forbidden") {
+		t.Fatalf("access failure message lost Kubernetes cause: %#v", lastError)
+	}
 }
 
 func dependencyProvidedManagedRoot(t *testing.T) (*applicationv1.OneKSApplication, applicationv1.DependencyPlan) {

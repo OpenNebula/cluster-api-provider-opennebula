@@ -160,8 +160,28 @@ func (r *Reconciler) observeHelm(ctx context.Context, app *applicationv1.OneKSAp
 			return result, nil
 		}
 	}
+	base := result
+	observed, err := r.observeManagedHelm(ctx, app, result, r.Client)
+	if err != nil {
+		return observed, err
+	}
+	if observed.helmState.failed && r.APIReader != nil {
+		observed, err = r.observeManagedHelm(ctx, app, base, r.APIReader)
+		if err != nil {
+			return observed, fmt.Errorf("confirm Helm failure from API: %w", err)
+		}
+	}
+	return observed, nil
+}
+
+func (r *Reconciler) observeManagedHelm(
+	ctx context.Context,
+	app *applicationv1.OneKSApplication,
+	result observation,
+	reader client.Reader,
+) (observation, error) {
 	helm := helmChartObject(app.Spec.Release.ReleaseName)
-	if err := r.Get(ctx, client.ObjectKeyFromObject(helm), helm); err != nil {
+	if err := reader.Get(ctx, client.ObjectKeyFromObject(helm), helm); err != nil {
 		if apierrors.IsNotFound(err) {
 			result.helmState = componentObservation{reason: "HelmChartNotFound", message: "HelmChart is absent"}
 			return result, nil
@@ -180,7 +200,7 @@ func (r *Reconciler) observeHelm(ctx context.Context, app *applicationv1.OneKSAp
 		return result, nil
 	}
 	job := &batchv1.Job{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: helm.GetNamespace(), Name: strings.TrimSpace(jobName)}, job); err != nil {
+	if err := reader.Get(ctx, types.NamespacedName{Namespace: helm.GetNamespace(), Name: strings.TrimSpace(jobName)}, job); err != nil {
 		if apierrors.IsNotFound(err) {
 			if app.Status.Phase == applicationv1.PhaseReady {
 				result.helmState = componentObservation{ready: true, reason: "PreviouslyReady", message: "Installer Job is gone after a previously ready release"}
@@ -198,7 +218,8 @@ func (r *Reconciler) observeHelm(ctx context.Context, app *applicationv1.OneKSAp
 			continue
 		}
 		if condition.Type == batchv1.JobFailed {
-			result.helmState = componentObservation{failed: true, reason: "InstallerJobFailed", message: firstNonEmpty(condition.Message, condition.Reason, "Helm installer Job failed")}
+			message := firstNonEmpty(condition.Message, condition.Reason, "Helm installer Job failed")
+			result.helmState = componentObservation{failed: true, reason: "InstallerJobFailed", message: message}
 			return result, nil
 		}
 		if condition.Type == batchv1.JobComplete {
@@ -324,14 +345,24 @@ func (r *Reconciler) executePreUninstallActions(ctx context.Context, app *applic
 	return nil
 }
 
-func (r *Reconciler) requestsForJob(ctx context.Context, _ client.Object) []ctrl.Request {
-	applications := &applicationv1.OneKSApplicationList{}
-	if err := r.List(ctx, applications, client.InNamespace(applicationv1.ApplicationNamespace)); err != nil {
+func (r *Reconciler) requestsForJob(ctx context.Context, object client.Object) []ctrl.Request {
+	if requests := r.requestsForOwnedChild(ctx, object); len(requests) != 0 {
+		return requests
+	}
+	charts := &unstructured.UnstructuredList{}
+	charts.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: helmChartGVK.Group, Version: helmChartGVK.Version, Kind: helmChartGVK.Kind + "List",
+	})
+	if err := r.List(ctx, charts, client.InNamespace(HelmChartNamespace)); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "unable to map Helm Job to an application", "job", object.GetName())
 		return nil
 	}
-	requests := make([]ctrl.Request, 0, len(applications.Items))
-	for index := range applications.Items {
-		requests = append(requests, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(&applications.Items[index])})
+	for index := range charts.Items {
+		chart := &charts.Items[index]
+		jobName, _, _ := unstructured.NestedString(chart.Object, "status", "jobName")
+		if strings.TrimSpace(jobName) == object.GetName() {
+			return r.requestsForOwnedChild(ctx, chart)
+		}
 	}
-	return requests
+	return nil
 }

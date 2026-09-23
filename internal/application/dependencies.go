@@ -326,6 +326,56 @@ func hasLiveDependencyConsumer(applications []applicationv1.OneKSApplication, de
 	return false
 }
 
+// dependencyReleasePending reports whether a dependency is referenced only by
+// consumers that are already terminating. The dependency remains installed
+// until those consumers finish their own cleanup, but its application
+// lifecycle has already entered deletion from the catalogue's perspective.
+func (r *Reconciler) dependencyReleasePending(
+	ctx context.Context,
+	dependency *applicationv1.OneKSApplication,
+) (bool, error) {
+	if dependency.Spec.Role != applicationv1.ApplicationRoleDependency ||
+		dependency.Spec.DeletionPolicy != applicationv1.DeletionPolicyDelete {
+		return false, nil
+	}
+	return r.dependencyConsumerTerminationPending(ctx, dependency)
+}
+
+// dependencyConsumerTerminationPending reports whether a dependency is
+// referenced by terminating consumers and no live consumer. Unlike
+// dependencyReleasePending, this also applies to retained dependencies: their
+// installation is not deleted, but transient health loss while their consumer
+// is being dismantled must not be published as an application failure.
+func (r *Reconciler) dependencyConsumerTerminationPending(
+	ctx context.Context,
+	dependency *applicationv1.OneKSApplication,
+) (bool, error) {
+	if dependency.Spec.Role != applicationv1.ApplicationRoleDependency {
+		return false, nil
+	}
+	applications := &applicationv1.OneKSApplicationList{}
+	if err := r.authoritativeReader().List(ctx, applications, client.InNamespace(applicationv1.ApplicationNamespace)); err != nil {
+		return false, fmt.Errorf("list dependency consumers while checking termination: %w", err)
+	}
+	foundTerminatingConsumer := false
+	for index := range applications.Items {
+		consumer := &applications.Items[index]
+		if consumer.Name == dependency.Name {
+			continue
+		}
+		for _, reference := range consumer.Spec.Dependencies {
+			if reference.Name != dependency.Name {
+				continue
+			}
+			if consumer.DeletionTimestamp.IsZero() && consumer.Status.Phase != applicationv1.PhaseDeleting {
+				return false, nil
+			}
+			foundTerminatingConsumer = true
+		}
+	}
+	return foundTerminatingConsumer, nil
+}
+
 func (r *Reconciler) releaseDependency(ctx context.Context, consumer *applicationv1.OneKSApplication, reference applicationv1.DependencyReference) (bool, error) {
 	dependency := &applicationv1.OneKSApplication{}
 	key := types.NamespacedName{Namespace: applicationv1.ApplicationNamespace, Name: reference.Name}

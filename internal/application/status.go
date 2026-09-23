@@ -150,6 +150,12 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, app *applicationv1.One
 }
 
 func (r *Reconciler) recordObservedStatus(ctx context.Context, app *applicationv1.OneKSApplication, dependencies dependencyObservation, observed observation) (ctrl.Result, error) {
+	consumerTerminationPending, err := r.dependencyConsumerTerminationPending(ctx, app)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	releasePending := consumerTerminationPending && app.Spec.DeletionPolicy == applicationv1.DeletionPolicyDelete
+	retainedDuringTermination := consumerTerminationPending && app.Spec.DeletionPolicy == applicationv1.DeletionPolicyRetain
 	status := baseStatus(app)
 	status.Resources = observed.resources
 	status.Progress = applicationv1.ApplicationProgress{
@@ -217,6 +223,27 @@ func (r *Reconciler) recordObservedStatus(ctx context.Context, app *applicationv
 	} else {
 		status.Phase = applicationv1.PhaseInstalling
 	}
+	if retainedDuringTermination && failed.failed && failed.reason == "ExternalDependencyLost" {
+		// Retained dependencies remain installed, so marking them Deleting would
+		// leave them in that phase indefinitely. Preserve the last observation
+		// only for loss of the external prerequisite: its availability commonly
+		// degrades while the consuming application is being dismantled and is not
+		// a deletion failure. All structural and execution failures remain visible.
+		ctrl.LoggerFrom(ctx).V(1).Info(
+			"external prerequisite loss suppressed while retained dependency consumer is terminating",
+			"dependency", app.Name,
+		)
+		return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
+	}
+	if releasePending {
+		status.Phase = applicationv1.PhaseDeleting
+		status.LastError = nil
+		setCondition(
+			&status, app.Generation, ConditionReady, metav1.ConditionFalse,
+			"DependencyReleasePending",
+			"Dependency is waiting for its terminating consumers to finish cleanup",
+		)
+	}
 	if err := r.updateStatus(ctx, app, status); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -264,6 +291,25 @@ func (r *Reconciler) observeProtected(ctx context.Context, app *applicationv1.On
 }
 
 func (r *Reconciler) recordFailure(ctx context.Context, app *applicationv1.OneKSApplication, reason, message string, failure failureKind) (ctrl.Result, error) {
+	releasePending, err := r.dependencyReleasePending(ctx, app)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if releasePending {
+		status := baseStatus(app)
+		status.Phase = applicationv1.PhaseDeleting
+		status.Progress.Total = applicationProgressTotal(app)
+		setCondition(
+			&status, app.Generation, ConditionReady, metav1.ConditionFalse,
+			"DependencyReleasePending",
+			"Dependency is waiting for its terminating consumers to finish cleanup",
+		)
+		if err := r.updateStatus(ctx, app, status); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: r.requeueDuration()}, nil
+	}
+
 	status := baseStatus(app)
 	status.Phase = applicationv1.PhaseFailed
 	status.Progress = applicationv1.ApplicationProgress{Total: applicationProgressTotal(app)}

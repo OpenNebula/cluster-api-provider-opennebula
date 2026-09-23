@@ -176,6 +176,78 @@ func TestExternallySelectedPrerequisiteLossNeverFallsBack(t *testing.T) {
 	}
 }
 
+func TestExternallySelectedPrerequisiteLossDuringConsumerDeletionPublishesDeleting(t *testing.T) {
+	dependency := withApplicationFinalizer(externalDependencyApplication(t))
+	dependency.Annotations = map[string]string{ExternalSelectionAnnotation: ExternalSelectionExternal}
+
+	plan := dependencyPlanForTest("external-dependency", dependency.Spec.Release.ReleaseName, nil)
+	root := deletingRootForTest(t, "deleting-root", plan)
+	root.Spec.Dependencies[0].Name = dependency.Name
+
+	reconciler, recorder := testReconciler(t, root, dependency)
+	result := reconcileOnce(t, ctx, reconciler, dependency)
+	if result.RequeueAfter == 0 {
+		t.Fatal("pending external dependency release did not request retry")
+	}
+
+	stored := getApplication(t, ctx, reconciler.Client, dependency)
+	if stored.Status.Phase != applicationv1.PhaseDeleting || stored.Status.LastError != nil {
+		t.Fatalf("pending external dependency release status = %#v", stored.Status)
+	}
+	assertExternalCondition(t, stored, ConditionReady, metav1.ConditionFalse, "DependencyReleasePending")
+	if containsWrite(recorder.childWrites, "HelmChart") {
+		t.Fatalf("pending external dependency release wrote HelmChart: %#v", recorder.childWrites)
+	}
+}
+
+func TestRetainedExternalPrerequisiteLossDuringConsumerDeletionPreservesReady(t *testing.T) {
+	dependency := withApplicationFinalizer(externalDependencyApplication(t))
+	dependency.Annotations = map[string]string{ExternalSelectionAnnotation: ExternalSelectionExternal}
+	dependency.Spec.DeletionPolicy = applicationv1.DeletionPolicyRetain
+	dependency.Status.Phase = applicationv1.PhaseReady
+
+	plan := dependencyPlanForTest("external-dependency", dependency.Spec.Release.ReleaseName, nil)
+	plan.DeletionPolicy = applicationv1.DeletionPolicyRetain
+	root := deletingRootForTest(t, "deleting-root", plan)
+	root.Spec.Dependencies[0].Name = dependency.Name
+
+	reconciler, recorder := testReconciler(t, root, dependency)
+	result := reconcileOnce(t, ctx, reconciler, dependency)
+	if result.RequeueAfter == 0 {
+		t.Fatal("retained external dependency did not request retry")
+	}
+
+	stored := getApplication(t, ctx, reconciler.Client, dependency)
+	if stored.Status.Phase != applicationv1.PhaseReady || stored.Status.LastError != nil {
+		t.Fatalf("retained external dependency published transient loss: %#v", stored.Status)
+	}
+	if containsWrite(recorder.childWrites, "HelmChart") {
+		t.Fatalf("retained external dependency wrote HelmChart: %#v", recorder.childWrites)
+	}
+}
+
+func TestExternalPrerequisiteLossBehindLogicallyDeletingConsumerPublishesDeleting(t *testing.T) {
+	dependency := withApplicationFinalizer(externalDependencyApplication(t))
+	dependency.Annotations = map[string]string{ExternalSelectionAnnotation: ExternalSelectionExternal}
+
+	plan := dependencyPlanForTest("external-dependency", dependency.Spec.Release.ReleaseName, nil)
+	consumer := dependencyConsumerForTest(t, "terminating-intermediate", dependencyReferenceForPlan(plan))
+	consumer.Spec.Dependencies[0].Name = dependency.Name
+	consumer.Status.Phase = applicationv1.PhaseDeleting
+
+	reconciler, _ := testReconciler(t, consumer, dependency)
+	result := reconcileOnce(t, ctx, reconciler, dependency)
+	if result.RequeueAfter == 0 {
+		t.Fatal("external dependency behind logically deleting consumer did not request retry")
+	}
+
+	stored := getApplication(t, ctx, reconciler.Client, dependency)
+	if stored.Status.Phase != applicationv1.PhaseDeleting || stored.Status.LastError != nil {
+		t.Fatalf("transitive external dependency published transient loss: %#v", stored.Status)
+	}
+	assertExternalCondition(t, stored, ConditionReady, metav1.ConditionFalse, "DependencyReleasePending")
+}
+
 func TestExternalDependencyDeletionNeverTouchesExternalInstallation(t *testing.T) {
 	app := withApplicationFinalizer(externalDependencyApplication(t))
 	now := metav1.Now()

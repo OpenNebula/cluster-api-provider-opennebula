@@ -242,6 +242,9 @@ func (r *Reconciler) handleExecutionError(ctx context.Context, app *applicationv
 	if errors.As(err, &invalidInput) {
 		return r.recordFailure(ctx, app, "InputSecretInvalid", invalidInput.Error(), failureExecution)
 	}
+	if apierrors.IsForbidden(err) {
+		return r.recordRetryableAccessFailure(ctx, app, err)
+	}
 	return ctrl.Result{}, err
 }
 
@@ -254,7 +257,26 @@ func (r *Reconciler) handleOwnershipError(
 	if errors.As(err, &conflict) {
 		return r.recordFailure(ctx, app, "OwnershipConflict", conflict.Error(), failureOwnership)
 	}
+	if apierrors.IsForbidden(err) {
+		return r.recordRetryableAccessFailure(ctx, app, err)
+	}
 	return ctrl.Result{}, err
+}
+
+func (r *Reconciler) recordRetryableAccessFailure(
+	ctx context.Context,
+	app *applicationv1.OneKSApplication,
+	cause error,
+) (ctrl.Result, error) {
+	result, statusErr := r.recordFailure(
+		ctx, app, "KubernetesAccessDenied", cause.Error(), failureExecution,
+	)
+	if statusErr != nil {
+		return ctrl.Result{}, errors.Join(cause, statusErr)
+	}
+	ctrl.LoggerFrom(ctx).Error(cause, "application reconciliation is blocked by Kubernetes access control")
+	result.RequeueAfter = r.requeueDuration()
+	return result, nil
 }
 
 func (r *Reconciler) checkTargetNamespace(ctx context.Context, targetNamespace string) error {
