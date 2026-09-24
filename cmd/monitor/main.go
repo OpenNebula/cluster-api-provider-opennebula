@@ -68,12 +68,12 @@ func main() {
 		os.Exit(1)
 	}
 	observations := monitor.NewObservationMonitor(client, dynamicClient, sender, config)
-	applications, err := monitor.NewApplicationMonitor(dynamicClient, sender, config)
+	charts, err := monitor.NewChartMonitor(dynamicClient, sender, config)
 	if err != nil {
-		log.Error(err, "unable to create application monitor")
+		log.Error(err, "unable to create HelmChart monitor")
 		os.Exit(1)
 	}
-	manager := monitor.NewManager(nodes, pods, observations, applications)
+	manager := monitor.NewManager(nodes, pods, observations, charts)
 
 	ctx := ctrl.SetupSignalHandler()
 	health := &http.Server{Addr: config.HealthAddress, Handler: healthHandler(manager)}

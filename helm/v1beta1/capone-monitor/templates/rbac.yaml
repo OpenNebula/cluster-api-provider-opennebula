@@ -6,8 +6,8 @@ rules:
 - apiGroups: [""]
   resources: ["nodes"]
   verbs: ["get", "list", "watch"]
-- apiGroups: ["oneks.opennebula.io"]
-  resources: ["oneksapplications"]
+- apiGroups: ["helm.cattle.io"]
+  resources: ["helmcharts"]
   verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
