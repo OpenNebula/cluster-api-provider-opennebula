@@ -13,6 +13,7 @@ package monitor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -47,15 +48,15 @@ func TestPodSnapshotsGroupPodsByGroupAndVM(t *testing.T) {
 			Status:     corev1.PodStatus{Phase: corev1.PodPending},
 		},
 	}
-	resolver := destinationResolverFunc(func(_ context.Context, vmID int) (NodeGroupEventDestination, error) {
-		return NodeGroupEventDestination{ClusterID: 0, GroupID: vmID - 1}, nil
+	resolver := placementResolverFunc(func(_ context.Context, vmID int) (int, error) {
+		return vmID - 1, nil
 	})
 
-	snapshots, resolutionErrors := podSnapshots(context.Background(), nodes, pods, resolver)
+	snapshot, resolutionErrors := podSnapshot(context.Background(), nodes, pods, resolver)
 	if len(resolutionErrors) != 0 {
 		t.Fatalf("unexpected resolution errors: %v", resolutionErrors)
 	}
-	encoded, err := json.Marshal(snapshots[0])
+	encoded, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,8 +85,62 @@ func TestPodReportIncludesFailureReason(t *testing.T) {
 }
 
 func TestNewPodMonitorRejectsNonPositiveInterval(t *testing.T) {
-	if _, err := NewPodMonitor(fake.NewSimpleClientset(), nil, Config{}); err == nil {
+	if _, err := NewPodMonitor(fake.NewSimpleClientset(), nil, nil, 0); err == nil {
 		t.Fatal("expected a Pod poll interval validation error")
+	}
+}
+
+func TestPodPollSendsEmptySnapshot(t *testing.T) {
+	var snapshot PodSnapshot
+	monitor, err := NewPodMonitor(
+		fake.NewSimpleClientset(),
+		publisherStub{pods: func(_ context.Context, value PodSnapshot) error {
+			snapshot = value
+			return nil
+		}},
+		nil,
+		time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := monitor.poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `{}` {
+		t.Fatalf("empty pod snapshot = %s, want {}", encoded)
+	}
+}
+
+func TestPodPollDoesNotPublishPartialSnapshot(t *testing.T) {
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker-1"},
+		Spec:       corev1.NodeSpec{ProviderID: "one://2"},
+	}
+	published := false
+	monitor, err := NewPodMonitor(
+		fake.NewSimpleClientset(node),
+		publisherStub{pods: func(context.Context, PodSnapshot) error {
+			published = true
+			return nil
+		}},
+		placementResolverFunc(func(context.Context, int) (int, error) {
+			return 0, errors.New("OpenNebula unavailable")
+		}),
+		time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := monitor.poll(context.Background()); err == nil {
+		t.Fatal("expected placement resolution error")
+	}
+	if published {
+		t.Fatal("partial pod snapshot was published")
 	}
 }
 
@@ -101,24 +156,20 @@ func TestPodMonitorRunsPeriodically(t *testing.T) {
 	}
 	client := fake.NewSimpleClientset(node, pod)
 	reports := make(chan PodSnapshot, 3)
-	monitor := newPodMonitor(
+	monitor, err := NewPodMonitor(
 		client,
-		senderFunc(func(_ context.Context, destination Destination, payload any) error {
-			if destination != (ClusterPodsDestination{ClusterID: 15}) {
-				t.Fatalf("unexpected destination: %#v", destination)
-			}
-			report, ok := payload.(PodSnapshot)
-			if !ok {
-				t.Fatalf("unexpected payload type: %T", payload)
-			}
-			reports <- report
+		publisherStub{pods: func(_ context.Context, snapshot PodSnapshot) error {
+			reports <- snapshot
 			return nil
-		}),
-		destinationResolverFunc(func(_ context.Context, _ int) (NodeGroupEventDestination, error) {
-			return NodeGroupEventDestination{ClusterID: 15, GroupID: 16}, nil
+		}},
+		placementResolverFunc(func(_ context.Context, _ int) (int, error) {
+			return 16, nil
 		}),
 		10*time.Millisecond,
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

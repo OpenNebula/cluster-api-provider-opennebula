@@ -35,18 +35,19 @@ type ResourceObservation struct {
 	Name      string `json:"name"`
 	Path      string `json:"path"`
 	Value     any    `json:"value"`
-	CreatedAt int64  `json:"createdAt,omitempty"`
+	CreatedAt int64  `json:"createdAt"`
 }
 
 type ObservationSnapshot []ResourceObservation
 
+// ObservationMonitor combines built-in Pending-pod observations with scalar
+// fields selected at runtime through a ConfigMap
 type ObservationMonitor struct {
 	client        kubernetes.Interface
 	dynamicClient dynamic.Interface
 	configMaps    corev1client.ConfigMapInterface
 	configName    string
-	sender        Sender
-	destination   ClusterObservationsDestination
+	publisher     Publisher
 	interval      time.Duration
 
 	active         resourceConfig
@@ -57,16 +58,7 @@ type ObservationMonitor struct {
 func NewObservationMonitor(
 	client kubernetes.Interface,
 	dynamicClient dynamic.Interface,
-	sender Sender,
-	config Config,
-) *ObservationMonitor {
-	return newObservationMonitor(client, dynamicClient, sender, config)
-}
-
-func newObservationMonitor(
-	client kubernetes.Interface,
-	dynamicClient dynamic.Interface,
-	sender Sender,
+	publisher Publisher,
 	config Config,
 ) *ObservationMonitor {
 	return &ObservationMonitor{
@@ -74,8 +66,7 @@ func newObservationMonitor(
 		dynamicClient: dynamicClient,
 		configMaps:    client.CoreV1().ConfigMaps(config.ResourceConfigNamespace),
 		configName:    config.ResourceConfigName,
-		sender:        sender,
-		destination:   ClusterObservationsDestination{ClusterID: config.ClusterID},
+		publisher:     publisher,
 		interval:      config.ResourcePollInterval,
 	}
 }
@@ -105,6 +96,8 @@ func (m *ObservationMonitor) pollAndLog(ctx context.Context) {
 
 func (m *ObservationMonitor) poll(ctx context.Context) error {
 	var pollErrors []error
+	// A bad or temporarily unavailable ConfigMap does not discard the last
+	// valid configuration, the poll can still use m.active and report the error
 	if err := m.refreshConfig(ctx); err != nil {
 		pollErrors = append(pollErrors, err)
 	}
@@ -146,12 +139,14 @@ func (m *ObservationMonitor) poll(ctx context.Context) error {
 		snapshot = append(snapshot, observation)
 	}
 	if observationFailed {
+		// OneKS replaces the whole snapshot, so never publish a partial result
+		// that would incorrectly erase observations which merely failed to read
 		return errors.Join(pollErrors...)
 	}
 
 	log := ctrl.LoggerFrom(ctx).WithName("observation-monitor")
-	log.Info("sending observation snapshot", "clusterID", m.destination.ClusterID, "observations", len(snapshot))
-	if err := m.sender.Send(ctx, m.destination, snapshot); err != nil {
+	log.Info("sending observation snapshot", "observations", len(snapshot))
+	if err := m.publisher.ReplaceObservations(ctx, snapshot); err != nil {
 		pollErrors = append(pollErrors, fmt.Errorf("send observation snapshot: %w", err))
 	}
 	return errors.Join(pollErrors...)
@@ -175,6 +170,7 @@ func (m *ObservationMonitor) refreshConfig(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("resource configuration was rejected: %w", err)
 	}
+	// Swap both values only after the complete document has been validated.
 	m.active = config
 	m.activeDocument = document
 	return nil
@@ -188,6 +184,8 @@ func (m *ObservationMonitor) observeResource(
 		ctx, query.Name, metav1.GetOptions{},
 	)
 	if apierrors.IsNotFound(err) {
+		// Missing resources are valid observations: nil tells OneKS that the
+		// configured object is currently absent.
 		return newResourceObservation(query.ResourceSpec, nil, metav1.Time{}), nil
 	}
 	if err != nil {

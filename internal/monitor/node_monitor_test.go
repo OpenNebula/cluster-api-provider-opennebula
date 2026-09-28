@@ -21,15 +21,44 @@ import (
 	"k8s.io/client-go/util/workqueue"
 )
 
-type senderFunc func(context.Context, Destination, any) error
-
-func (f senderFunc) Send(ctx context.Context, destination Destination, payload any) error {
-	return f(ctx, destination, payload)
+type publisherStub struct {
+	nodeReady    func(context.Context, int, NodeReadyEvent) error
+	pods         func(context.Context, PodSnapshot) error
+	observations func(context.Context, ObservationSnapshot) error
+	chart        func(context.Context, ChartEvent) error
 }
 
-type destinationResolverFunc func(context.Context, int) (NodeGroupEventDestination, error)
+func (p publisherStub) PublishNodeReady(ctx context.Context, groupID int, event NodeReadyEvent) error {
+	if p.nodeReady == nil {
+		return nil
+	}
+	return p.nodeReady(ctx, groupID, event)
+}
 
-func (f destinationResolverFunc) Resolve(ctx context.Context, vmID int) (NodeGroupEventDestination, error) {
+func (p publisherStub) ReplacePods(ctx context.Context, snapshot PodSnapshot) error {
+	if p.pods == nil {
+		return nil
+	}
+	return p.pods(ctx, snapshot)
+}
+
+func (p publisherStub) ReplaceObservations(ctx context.Context, snapshot ObservationSnapshot) error {
+	if p.observations == nil {
+		return nil
+	}
+	return p.observations(ctx, snapshot)
+}
+
+func (p publisherStub) PublishChartEvent(ctx context.Context, event ChartEvent) error {
+	if p.chart == nil {
+		return nil
+	}
+	return p.chart(ctx, event)
+}
+
+type placementResolverFunc func(context.Context, int) (int, error)
+
+func (f placementResolverFunc) GroupForVM(ctx context.Context, vmID int) (int, error) {
 	return f(ctx, vmID)
 }
 
@@ -83,26 +112,20 @@ func TestNodeMonitorDoesNotSendDeletedNodeEvents(t *testing.T) {
 		Spec:       corev1.NodeSpec{ProviderID: "one://2"},
 	}
 	client := fake.NewSimpleClientset(node)
-	events := make(chan Event, 2)
-	monitor, err := newNodeMonitor(client, senderFunc(func(_ context.Context, target Destination, payload any) error {
-		destination, ok := target.(NodeGroupEventDestination)
-		if !ok {
-			t.Fatalf("unexpected destination type: %T", target)
-		}
-		if destination.ClusterID != 15 || destination.GroupID != 16 {
-			t.Errorf("unexpected destination: %#v", destination)
-		}
-		event, ok := payload.(Event)
-		if !ok {
-			t.Fatalf("unexpected payload type: %T", payload)
+	events := make(chan NodeReadyEvent, 2)
+	monitor, err := NewNodeMonitor(client, publisherStub{nodeReady: func(
+		_ context.Context, groupID int, event NodeReadyEvent,
+	) error {
+		if groupID != 16 {
+			t.Errorf("unexpected group ID: %d", groupID)
 		}
 		events <- event
 		return nil
-	}), destinationResolverFunc(func(_ context.Context, vmID int) (NodeGroupEventDestination, error) {
+	}}, placementResolverFunc(func(_ context.Context, vmID int) (int, error) {
 		if vmID != 2 {
 			t.Errorf("unexpected VM ID: %d", vmID)
 		}
-		return NodeGroupEventDestination{ClusterID: 15, GroupID: 16}, nil
+		return 16, nil
 	}))
 	if err != nil {
 		t.Fatal(err)

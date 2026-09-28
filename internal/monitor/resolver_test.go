@@ -16,7 +16,7 @@ import (
 	goca_vm "github.com/OpenNebula/one/src/oca/go/src/goca/schemas/vm"
 )
 
-func TestDestinationFromVM(t *testing.T) {
+func TestPlacementFromVM(t *testing.T) {
 	vm := &goca_vm.VM{ID: 2}
 	oneKS := vm.UserTemplate.AddVector("ONEKS")
 	oneKS.AddPair("CLUSTER_ID", "15")
@@ -24,16 +24,16 @@ func TestDestinationFromVM(t *testing.T) {
 	oneKS.AddPair("GROUP_ID", "16")
 	oneKS.AddPair("TYPE", "ControlPlane")
 
-	destination, err := destinationFromVM(vm)
+	placement, err := placementFromVM(vm)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if destination.ClusterID != 15 || destination.GroupID != 16 {
-		t.Fatalf("unexpected destination: %#v", destination)
+	if placement.clusterID != 15 || placement.groupID != 16 {
+		t.Fatalf("unexpected placement: %#v", placement)
 	}
 }
 
-func TestDestinationFromVMRejectsMissingOrInvalidIDs(t *testing.T) {
+func TestPlacementFromVMRejectsMissingOrInvalidIDs(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		clusterID string
@@ -53,7 +53,7 @@ func TestDestinationFromVMRejectsMissingOrInvalidIDs(t *testing.T) {
 			if test.groupID != "" {
 				oneKS.AddPair("GROUP_ID", test.groupID)
 			}
-			if _, err := destinationFromVM(vm); err == nil {
+			if _, err := placementFromVM(vm); err == nil {
 				t.Fatal("expected an invalid destination error")
 			}
 		})

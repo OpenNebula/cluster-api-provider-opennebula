@@ -36,8 +36,8 @@ func TestConfigFromEnvConfiguresResourceObservations(t *testing.T) {
 	if config.OpenNebulaEndpoint != "http://opennebula.example:2633/RPC2" {
 		t.Fatalf("unexpected OpenNebula endpoint: %q", config.OpenNebulaEndpoint)
 	}
-	if config.ClusterID != "42" {
-		t.Fatalf("unexpected cluster ID: %q", config.ClusterID)
+	if config.ClusterID != 42 {
+		t.Fatalf("unexpected cluster ID: %d", config.ClusterID)
 	}
 	if config.PodPollInterval != 20*time.Second || config.ResourcePollInterval != 30*time.Second {
 		t.Fatalf("unexpected observation configuration: %#v", config)
@@ -61,6 +61,18 @@ func TestConfigFromEnvRequiresClusterID(t *testing.T) {
 	t.Setenv("MONITOR_CLUSTER_ID", "")
 	if _, err := ConfigFromEnv(); err == nil {
 		t.Fatal("expected MONITOR_CLUSTER_ID validation error")
+	}
+}
+
+func TestConfigFromEnvRejectsInvalidClusterID(t *testing.T) {
+	t.Setenv("MONITOR_ENDPOINT", "https://oneks.example/api/v1")
+	for _, value := range []string{"cluster", "-1"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("MONITOR_CLUSTER_ID", value)
+			if _, err := ConfigFromEnv(); err == nil {
+				t.Fatalf("expected MONITOR_CLUSTER_ID validation error for %q", value)
+			}
+		})
 	}
 }
 

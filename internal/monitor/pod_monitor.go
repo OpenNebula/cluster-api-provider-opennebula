@@ -30,35 +30,29 @@ type PodReport struct {
 	Reason    string `json:"reason"`
 }
 
-// PodSnapshot groups Pods by OneKS group ID and then by OpenNebula VM ID.
+// PodSnapshot groups Pods by OneKS group ID and then by OpenNebula VM ID
 type PodSnapshot map[int]map[int][]PodReport
 
+// PodMonitor periodically replaces the complete OneKS pod view. It deliberately
+// uses polling because the receiver expects a snapshot, not an event stream
 type PodMonitor struct {
-	client   kubernetes.Interface
-	sender   Sender
-	resolver nodeDestinationResolver
-	interval time.Duration
-	ready    atomic.Bool
+	client    kubernetes.Interface
+	publisher Publisher
+	resolver  PlacementResolver
+	interval  time.Duration
+	ready     atomic.Bool
 }
 
-func NewPodMonitor(client kubernetes.Interface, sender Sender, config Config) (*PodMonitor, error) {
-	if config.PodPollInterval <= 0 {
+func NewPodMonitor(
+	client kubernetes.Interface,
+	publisher Publisher,
+	resolver PlacementResolver,
+	interval time.Duration,
+) (*PodMonitor, error) {
+	if interval <= 0 {
 		return nil, fmt.Errorf("Pod poll interval must be positive")
 	}
-	resolver, err := newGocaNodeDestinationResolver(config)
-	if err != nil {
-		return nil, err
-	}
-	return newPodMonitor(client, sender, resolver, config.PodPollInterval), nil
-}
-
-func newPodMonitor(
-	client kubernetes.Interface,
-	sender Sender,
-	resolver nodeDestinationResolver,
-	interval time.Duration,
-) *PodMonitor {
-	return &PodMonitor{client: client, sender: sender, resolver: resolver, interval: interval}
+	return &PodMonitor{client: client, publisher: publisher, resolver: resolver, interval: interval}, nil
 }
 
 func (m *PodMonitor) Run(ctx context.Context) error {
@@ -96,37 +90,31 @@ func (m *PodMonitor) poll(ctx context.Context) error {
 	}
 	m.ready.Store(true)
 
-	snapshots, resolutionErrors := podSnapshots(ctx, nodes.Items, pods.Items, m.resolver)
-	log := ctrl.LoggerFrom(ctx).WithName("pod-monitor")
-	for _, resolutionErr := range resolutionErrors {
-		log.Error(resolutionErr, "unable to resolve node while building pod snapshot")
+	snapshot, resolutionErrors := podSnapshot(ctx, nodes.Items, pods.Items, m.resolver)
+	if err := errors.Join(resolutionErrors...); err != nil {
+		return fmt.Errorf("build complete pod snapshot: %w", err)
 	}
-	var sendErrors []error
-	for clusterID, snapshot := range snapshots {
-		log.Info(
-			"sending pod snapshot",
-			"clusterID", clusterID,
-			"groups", len(snapshot),
-		)
-		if err := m.sender.Send(ctx, ClusterPodsDestination{ClusterID: clusterID}, snapshot); err != nil {
-			sendErrors = append(sendErrors, fmt.Errorf("send pod snapshot for cluster %d: %w", clusterID, err))
-		}
+	ctrl.LoggerFrom(ctx).WithName("pod-monitor").Info(
+		"sending pod snapshot", "groups", len(snapshot),
+	)
+	if err := m.publisher.ReplacePods(ctx, snapshot); err != nil {
+		return fmt.Errorf("send pod snapshot: %w", err)
 	}
-	return errors.Join(sendErrors...)
+	return nil
 }
 
 type resolvedNode struct {
-	vmID      int
-	placement NodeGroupEventDestination
+	vmID    int
+	groupID int
 }
 
-func podSnapshots(
+func podSnapshot(
 	ctx context.Context,
 	nodes []corev1.Node,
 	pods []corev1.Pod,
-	resolver nodeDestinationResolver,
-) (map[int]PodSnapshot, []error) {
-	snapshots := make(map[int]PodSnapshot)
+	resolver PlacementResolver,
+) (PodSnapshot, []error) {
+	snapshot := make(PodSnapshot)
 	resolvedNodes := make(map[string]resolvedNode, len(nodes))
 	var resolutionErrors []error
 
@@ -140,28 +128,27 @@ func podSnapshots(
 			resolutionErrors = append(resolutionErrors, fmt.Errorf("node %s: %w", node.Name, err))
 			continue
 		}
-		placement, err := resolver.Resolve(ctx, vmID)
+		groupID, err := resolver.GroupForVM(ctx, vmID)
 		if err != nil {
 			resolutionErrors = append(resolutionErrors, fmt.Errorf("node %s: %w", node.Name, err))
 			continue
 		}
-		resolvedNodes[node.Name] = resolvedNode{vmID: vmID, placement: placement}
+		resolvedNodes[node.Name] = resolvedNode{vmID: vmID, groupID: groupID}
 
-		snapshot := snapshots[placement.ClusterID]
-		if snapshot == nil {
-			snapshot = make(PodSnapshot)
-			snapshots[placement.ClusterID] = snapshot
+		// Keep empty VM entries in the snapshot so OneKS can remove pods that
+		// disappeared since the previous poll
+		if _, found := snapshot[groupID]; !found {
+			snapshot[groupID] = make(map[int][]PodReport)
 		}
-		if _, found := snapshot[placement.GroupID]; !found {
-			snapshot[placement.GroupID] = make(map[int][]PodReport)
-		}
-		if _, found := snapshot[placement.GroupID][vmID]; !found {
-			snapshot[placement.GroupID][vmID] = []PodReport{}
+		if _, found := snapshot[groupID][vmID]; !found {
+			snapshot[groupID][vmID] = []PodReport{}
 		}
 	}
 
 	for i := range pods {
 		pod := &pods[i]
+		// Pending pods are kept out of the VM pod snapshot. ObservationMonitor
+		// reports them separately, where scheduling problems remain visible
 		if pod.Status.Phase == corev1.PodPending {
 			continue
 		}
@@ -169,12 +156,11 @@ func podSnapshots(
 		if !found {
 			continue
 		}
-		snapshot := snapshots[node.placement.ClusterID]
-		snapshot[node.placement.GroupID][node.vmID] = append(
-			snapshot[node.placement.GroupID][node.vmID], podReport(pod),
+		snapshot[node.groupID][node.vmID] = append(
+			snapshot[node.groupID][node.vmID], podReport(pod),
 		)
 	}
-	return snapshots, resolutionErrors
+	return snapshot, resolutionErrors
 }
 
 func podReport(pod *corev1.Pod) PodReport {

@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -42,8 +43,16 @@ const (
 )
 
 type ChartEvent struct {
-	Event   string         `json:"event"`
-	Payload map[string]any `json:"payload"`
+	Event   string            `json:"event"`
+	Payload ChartEventPayload `json:"payload"`
+}
+
+type ChartEventPayload struct {
+	ReleaseName     string      `json:"release_name"`
+	ResourceVersion json.Number `json:"resource_version"`
+	Parent          string      `json:"parent,omitempty"`
+	State           string      `json:"state,omitempty"`
+	ErrorMessage    string      `json:"error_msg,omitempty"`
 }
 
 type pendingChart struct {
@@ -51,21 +60,22 @@ type pendingChart struct {
 	deleted bool
 }
 
+// ChartMonitor converts state annotations on OneKS-managed HelmCharts into
+// application lifecycle events
 type ChartMonitor struct {
-	factory     dynamicinformer.DynamicSharedInformerFactory
-	charts      cache.SharedIndexInformer
-	sender      Sender
-	destination ClusterEventDestination
-	queue       workqueue.TypedRateLimitingInterface[string]
+	factory   dynamicinformer.DynamicSharedInformerFactory
+	charts    cache.SharedIndexInformer
+	publisher Publisher
+	queue     workqueue.TypedRateLimitingInterface[string]
 
 	mu      sync.Mutex
 	pending map[string]pendingChart
 	ready   atomic.Bool
 }
 
-func NewChartMonitor(dynamicClient dynamic.Interface, sender Sender, config Config) (*ChartMonitor, error) {
+func NewChartMonitor(dynamicClient dynamic.Interface, publisher Publisher) (*ChartMonitor, error) {
 	m := &ChartMonitor{
-		sender: sender, destination: ClusterEventDestination{ClusterID: config.ClusterID},
+		publisher: publisher,
 		queue: workqueue.NewTypedRateLimitingQueue(
 			workqueue.DefaultTypedControllerRateLimiter[string](),
 		),
@@ -80,6 +90,8 @@ func NewChartMonitor(dynamicClient dynamic.Interface, sender Sender, config Conf
 	if _, err := m.charts.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj any) { m.enqueue(obj, false) },
 		UpdateFunc: func(oldObj, newObj any) {
+			// Kubernetes may update unrelated fields frequently. Only changes
+			// that affect the OneKS event payload need to enter the queue.
 			if chartEventSignature(oldObj) != chartEventSignature(newObj) {
 				m.enqueue(newObj, false)
 			}
@@ -117,6 +129,8 @@ func (m *ChartMonitor) enqueue(obj any, deleted bool) {
 		return
 	}
 	key := chart.GetNamespace() + "/" + chart.GetName()
+	// Coalesce repeated updates for the same chart while retaining the newest
+	// object for the worker and HTTP retries
 	m.mu.Lock()
 	m.pending[key] = pendingChart{chart: chart.DeepCopy(), deleted: deleted}
 	m.mu.Unlock()
@@ -138,8 +152,16 @@ func (m *ChartMonitor) processNext(ctx context.Context) bool {
 		return true
 	}
 
-	event := chartEvent(pending.chart, pending.deleted)
-	if err := m.sender.Send(ctx, m.destination, event); err != nil {
+	event, err := chartEvent(pending.chart, pending.deleted)
+	if err != nil {
+		ctrl.LoggerFrom(ctx).WithName("chart-monitor").Error(
+			err, "invalid managed HelmChart", "chart", key,
+		)
+		m.forgetPending(key, pending)
+		m.queue.Forget(key)
+		return true
+	}
+	if err := m.publisher.PublishChartEvent(ctx, event); err != nil {
 		ctrl.LoggerFrom(ctx).WithName("chart-monitor").Error(
 			err, "unable to send chart event", "chart", key, "event", event.Event,
 		)
@@ -147,47 +169,73 @@ func (m *ChartMonitor) processNext(ctx context.Context) bool {
 		return true
 	}
 
-	m.mu.Lock()
-	current, found := m.pending[key]
-	if found && current.deleted == pending.deleted &&
-		current.chart.GetResourceVersion() == pending.chart.GetResourceVersion() {
-		delete(m.pending, key)
-	}
-	m.mu.Unlock()
+	m.forgetPending(key, pending)
 	m.queue.Forget(key)
 	return true
 }
 
-func chartEvent(chart *unstructured.Unstructured, deleted bool) ChartEvent {
-	annotations := chart.GetAnnotations()
-	payload := map[string]any{
-		"release_name":     annotations[releaseAnnotation],
-		"resource_version": json.Number(chart.GetResourceVersion()),
+func (m *ChartMonitor) forgetPending(key string, processed pendingChart) {
+	// Do not remove a newer update that arrived while the processed event was
+	// being published
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, found := m.pending[key]
+	if found && current.deleted == processed.deleted &&
+		current.chart.GetResourceVersion() == processed.chart.GetResourceVersion() {
+		delete(m.pending, key)
 	}
-	if parent := annotations[parentAnnotation]; parent != "" {
-		payload["parent"] = parent
+}
+
+func chartEvent(chart *unstructured.Unstructured, deleted bool) (ChartEvent, error) {
+	annotations := chart.GetAnnotations()
+	releaseName := strings.TrimSpace(annotations[releaseAnnotation])
+	if releaseName == "" {
+		return ChartEvent{}, fmt.Errorf("annotation %s is required", releaseAnnotation)
+	}
+	resourceVersion := chart.GetResourceVersion()
+	if !decimalNumber(resourceVersion) {
+		return ChartEvent{}, fmt.Errorf("resourceVersion must be a non-negative integer: %q", resourceVersion)
+	}
+	payload := ChartEventPayload{
+		ReleaseName:     releaseName,
+		ResourceVersion: json.Number(resourceVersion),
+		Parent:          strings.TrimSpace(annotations[parentAnnotation]),
 	}
 	state := annotations[stateAnnotation]
 	deleting := chart.GetDeletionTimestamp() != nil || state == "deleting"
 	if state == "failed" && !deleted && !deleting {
-		message := annotations[errorAnnotation]
+		message := strings.TrimSpace(annotations[errorAnnotation])
 		if message == "" {
 			message = "Application installation failed"
 		}
-		payload["error_msg"] = message
-		return ChartEvent{Event: "app_failed", Payload: payload}
+		payload.ErrorMessage = message
+		return ChartEvent{Event: "app_failed", Payload: payload}, nil
 	}
-	eventState := "installing"
+	payload.State = "installing"
 	switch {
 	case deleted:
-		eventState = "done"
+		payload.State = "done"
 	case deleting:
-		eventState = "deleting"
+		payload.State = "deleting"
 	case state == "ready":
-		eventState = "ready"
+		payload.State = "ready"
+	case state == "", state == "installing":
+	default:
+		return ChartEvent{}, fmt.Errorf("annotation %s has unsupported state %q", stateAnnotation, state)
 	}
-	payload["state"] = eventState
-	return ChartEvent{Event: "app_state_changed", Payload: payload}
+	return ChartEvent{Event: "app_state_changed", Payload: payload}, nil
+}
+
+func decimalNumber(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, digit := range value {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func chartEventSignature(obj any) string {
@@ -196,7 +244,8 @@ func chartEventSignature(obj any) string {
 		return ""
 	}
 	annotations := chart.GetAnnotations()
-	return fmt.Sprintf("%t\x00%s\x00%s", chart.GetDeletionTimestamp() != nil,
+	return fmt.Sprintf("%t\x00%s\x00%s\x00%s\x00%s", chart.GetDeletionTimestamp() != nil,
+		annotations[releaseAnnotation], annotations[parentAnnotation],
 		annotations[stateAnnotation], annotations[errorAnnotation])
 }
 

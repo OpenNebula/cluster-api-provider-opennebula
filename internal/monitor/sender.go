@@ -21,65 +21,35 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
+	"strconv"
 	"strings"
 )
 
-type Sender interface {
-	Send(context.Context, Destination, any) error
-}
-
-type Destination interface {
-	path() string
-}
-
-type NodeGroupEventDestination struct {
-	ClusterID int
-	GroupID   int
-}
-
-type ClusterEventDestination struct {
-	ClusterID string
-}
-
-func (d ClusterEventDestination) path() string {
-	return "/clusters/" + url.PathEscape(d.ClusterID) + "/events"
-}
-
-func (d NodeGroupEventDestination) path() string {
-	return "/clusters/" + url.PathEscape(fmt.Sprint(d.ClusterID)) +
-		"/nodegroups/" + url.PathEscape(fmt.Sprint(d.GroupID)) + "/events"
-}
-
-type ClusterObservationsDestination struct {
-	ClusterID string
-}
-
-func (d ClusterObservationsDestination) path() string {
-	return "/clusters/" + url.PathEscape(d.ClusterID) + "/observations"
-}
-
-type ClusterPodsDestination struct {
-	ClusterID int
-}
-
-func (d ClusterPodsDestination) path() string {
-	return "/clusters/" + url.PathEscape(fmt.Sprint(d.ClusterID)) + "/pods"
+// Publisher is the monitor-facing interface implemented by the OneKS client.
+// Monitor components publish domain data without knowing HTTP paths or encryption
+type Publisher interface {
+	PublishNodeReady(context.Context, int, NodeReadyEvent) error
+	ReplacePods(context.Context, PodSnapshot) error
+	ReplaceObservations(context.Context, ObservationSnapshot) error
+	PublishChartEvent(context.Context, ChartEvent) error
 }
 
 type encryptedEnvelope struct {
 	Payload string `json:"payload"`
 }
 
-type HTTPEncryptedSender struct {
-	endpoint string
-	authFile string
-	aead     cipher.AEAD
-	client   *http.Client
+// OneKSClient owns transport details shared by every monitor: endpoint paths,
+// authentication, encryption and HTTP response handling
+type OneKSClient struct {
+	endpoint  string
+	clusterID int
+	authFile  string
+	aead      cipher.AEAD
+	client    *http.Client
 }
 
-func NewHTTPEncryptedSender(config Config) (*HTTPEncryptedSender, error) {
+func NewOneKSClient(config Config) (*OneKSClient, error) {
 	if _, err := readCredential(config.AuthFile); err != nil {
 		return nil, fmt.Errorf("configure monitor authentication: %w", err)
 	}
@@ -91,10 +61,11 @@ func NewHTTPEncryptedSender(config Config) (*HTTPEncryptedSender, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create AES-GCM: %w", err)
 	}
-	return &HTTPEncryptedSender{
-		endpoint: strings.TrimRight(config.Endpoint, "/"),
-		authFile: config.AuthFile,
-		aead:     aead,
+	return &OneKSClient{
+		endpoint:  strings.TrimRight(config.Endpoint, "/"),
+		clusterID: config.ClusterID,
+		authFile:  config.AuthFile,
+		aead:      aead,
 		client: &http.Client{
 			Timeout: config.HTTPTimeout,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
@@ -104,8 +75,30 @@ func NewHTTPEncryptedSender(config Config) (*HTTPEncryptedSender, error) {
 	}, nil
 }
 
-func (s *HTTPEncryptedSender) Send(ctx context.Context, destination Destination, payload any) error {
-	credential, err := readCredential(s.authFile)
+func (c *OneKSClient) PublishNodeReady(ctx context.Context, groupID int, event NodeReadyEvent) error {
+	return c.send(ctx, c.clusterPath()+"/nodegroups/"+strconv.Itoa(groupID)+"/events", event)
+}
+
+func (c *OneKSClient) ReplacePods(ctx context.Context, snapshot PodSnapshot) error {
+	return c.send(ctx, c.clusterPath()+"/pods", snapshot)
+}
+
+func (c *OneKSClient) ReplaceObservations(ctx context.Context, snapshot ObservationSnapshot) error {
+	return c.send(ctx, c.clusterPath()+"/observations", snapshot)
+}
+
+func (c *OneKSClient) PublishChartEvent(ctx context.Context, event ChartEvent) error {
+	return c.send(ctx, c.clusterPath()+"/events", event)
+}
+
+func (c *OneKSClient) clusterPath() string {
+	return "/clusters/" + strconv.Itoa(c.clusterID)
+}
+
+func (c *OneKSClient) send(ctx context.Context, path string, payload any) error {
+	// Read credentials for every request so a mounted Secret can rotate without
+	// restarting the monitor process
+	credential, err := readCredential(c.authFile)
 	if err != nil {
 		return fmt.Errorf("resolve monitor authentication: %w", err)
 	}
@@ -117,18 +110,20 @@ func (s *HTTPEncryptedSender) Send(ctx context.Context, destination Destination,
 	if err != nil {
 		return fmt.Errorf("encode payload: %w", err)
 	}
-	nonce := make([]byte, s.aead.NonceSize())
+	// AES-GCM requires a unique nonce per payload. The nonce is public and is
+	// prepended to the ciphertext so OneKS can decrypt the envelope
+	nonce := make([]byte, c.aead.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return fmt.Errorf("generate payload nonce: %w", err)
 	}
-	sealed := s.aead.Seal(nil, nonce, plaintext, nil)
+	sealed := c.aead.Seal(nil, nonce, plaintext, nil)
 	body, err := json.Marshal(encryptedEnvelope{
 		Payload: base64.StdEncoding.EncodeToString(append(nonce, sealed...)),
 	})
 	if err != nil {
 		return fmt.Errorf("encode encrypted payload: %w", err)
 	}
-	endpoint := s.endpoint + destination.path()
+	endpoint := c.endpoint + path
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create payload request: %w", err)
@@ -136,7 +131,7 @@ func (s *HTTPEncryptedSender) Send(ctx context.Context, destination Destination,
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "capone-cluster-monitor")
 	req.SetBasicAuth(user, password)
-	resp, err := s.client.Do(req)
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("send payload: %w", err)
 	}

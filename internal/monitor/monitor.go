@@ -12,11 +12,14 @@ package monitor
 
 import "context"
 
+// Component is an independently running part of the monitor. Ready must only
+// become true after the component can serve its normal reporting loop
 type Component interface {
 	Run(context.Context) error
 	Ready() bool
 }
 
+// Manager gives all monitor components one lifetime and one readiness result
 type Manager struct {
 	components []Component
 }
@@ -26,6 +29,8 @@ func NewManager(components ...Component) *Manager {
 }
 
 func (m *Manager) Run(ctx context.Context) error {
+	// A component error ends the manager, the deferred cancellation then stops
+	// the remaining components through the shared context
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 

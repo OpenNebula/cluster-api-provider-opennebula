@@ -52,23 +52,28 @@ func main() {
 		log.Error(err, "unable to create dynamic Kubernetes client")
 		os.Exit(1)
 	}
-	sender, err := monitor.NewHTTPEncryptedSender(config)
+	publisher, err := monitor.NewOneKSClient(config)
 	if err != nil {
-		log.Error(err, "unable to create encrypted event sender")
+		log.Error(err, "unable to create OneKS client")
 		os.Exit(1)
 	}
-	nodes, err := monitor.NewNodeMonitor(client, sender, config)
+	placement, err := monitor.NewPlacementResolver(config)
+	if err != nil {
+		log.Error(err, "unable to create OpenNebula placement resolver")
+		os.Exit(1)
+	}
+	nodes, err := monitor.NewNodeMonitor(client, publisher, placement)
 	if err != nil {
 		log.Error(err, "unable to create node monitor")
 		os.Exit(1)
 	}
-	pods, err := monitor.NewPodMonitor(client, sender, config)
+	pods, err := monitor.NewPodMonitor(client, publisher, placement, config.PodPollInterval)
 	if err != nil {
 		log.Error(err, "unable to create pod monitor")
 		os.Exit(1)
 	}
-	observations := monitor.NewObservationMonitor(client, dynamicClient, sender, config)
-	charts, err := monitor.NewChartMonitor(dynamicClient, sender, config)
+	observations := monitor.NewObservationMonitor(client, dynamicClient, publisher, config)
+	charts, err := monitor.NewChartMonitor(dynamicClient, publisher)
 	if err != nil {
 		log.Error(err, "unable to create HelmChart monitor")
 		os.Exit(1)

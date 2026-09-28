@@ -30,6 +30,8 @@ type ResourceSpec struct {
 	Path       string `json:"path"`
 }
 
+// resourceQuery is the validated, pre-parsed form used on every poll. Keeping
+// GVR and path parsing here makes the hot observation loop intentionally small.
 type resourceQuery struct {
 	ResourceSpec
 	gvr  schema.GroupVersionResource

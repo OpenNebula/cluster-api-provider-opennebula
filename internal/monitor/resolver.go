@@ -15,20 +15,24 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	goca "github.com/OpenNebula/one/src/oca/go/src/goca"
 	goca_vm "github.com/OpenNebula/one/src/oca/go/src/goca/schemas/vm"
 )
 
-type nodeDestinationResolver interface {
-	Resolve(context.Context, int) (NodeGroupEventDestination, error)
+// PlacementResolver maps an OpenNebula VM to its owning OneKS group
+type PlacementResolver interface {
+	GroupForVM(context.Context, int) (int, error)
 }
 
-type gocaNodeDestinationResolver struct {
-	ctrl *goca.Controller
+type gocaPlacementResolver struct {
+	ctrl      *goca.Controller
+	clusterID int
+	groups    sync.Map
 }
 
-func newGocaNodeDestinationResolver(config Config) (nodeDestinationResolver, error) {
+func NewPlacementResolver(config Config) (PlacementResolver, error) {
 	credential, err := readCredential(config.AuthFile)
 	if err != nil {
 		return nil, fmt.Errorf("configure OpenNebula client authentication: %w", err)
@@ -37,31 +41,53 @@ func newGocaNodeDestinationResolver(config Config) (nodeDestinationResolver, err
 		Endpoint: config.OpenNebulaEndpoint,
 		Token:    credential,
 	})
-	return &gocaNodeDestinationResolver{ctrl: goca.NewController(client)}, nil
+	return &gocaPlacementResolver{
+		ctrl:      goca.NewController(client),
+		clusterID: config.ClusterID,
+	}, nil
 }
 
-func (r *gocaNodeDestinationResolver) Resolve(ctx context.Context, vmID int) (NodeGroupEventDestination, error) {
+func (r *gocaPlacementResolver) GroupForVM(ctx context.Context, vmID int) (int, error) {
+	// VM IDs and their OneKS placement are immutable for the VM lifetime, so a
+	// successful lookup can be safely reused by node events and pod snapshots
+	if groupID, found := r.groups.Load(vmID); found {
+		return groupID.(int), nil
+	}
 	vm, err := r.ctrl.VM(vmID).InfoContext(ctx, false)
 	if err != nil {
-		return NodeGroupEventDestination{}, fmt.Errorf("fetch OpenNebula VM %d: %w", vmID, err)
+		return 0, fmt.Errorf("fetch OpenNebula VM %d: %w", vmID, err)
 	}
-	destination, err := destinationFromVM(vm)
+	placement, err := placementFromVM(vm)
 	if err != nil {
-		return NodeGroupEventDestination{}, fmt.Errorf("resolve nodegroup event destination from OpenNebula VM %d: %w", vmID, err)
+		return 0, fmt.Errorf("resolve OneKS placement from OpenNebula VM %d: %w", vmID, err)
 	}
-	return destination, nil
+	if placement.clusterID != r.clusterID {
+		// Never route data from a foreign cluster through this monitor instance,
+		// even if the Kubernetes provider ID points to a valid OpenNebula VM.
+		return 0, fmt.Errorf(
+			"OpenNebula VM %d belongs to OneKS cluster %d, expected %d",
+			vmID, placement.clusterID, r.clusterID,
+		)
+	}
+	r.groups.Store(vmID, placement.groupID)
+	return placement.groupID, nil
 }
 
-func destinationFromVM(vm *goca_vm.VM) (NodeGroupEventDestination, error) {
+type nodePlacement struct {
+	clusterID int
+	groupID   int
+}
+
+func placementFromVM(vm *goca_vm.VM) (nodePlacement, error) {
 	clusterID, err := oneKSID(vm, "CLUSTER_ID")
 	if err != nil {
-		return NodeGroupEventDestination{}, err
+		return nodePlacement{}, err
 	}
 	groupID, err := oneKSID(vm, "GROUP_ID")
 	if err != nil {
-		return NodeGroupEventDestination{}, err
+		return nodePlacement{}, err
 	}
-	return NodeGroupEventDestination{ClusterID: clusterID, GroupID: groupID}, nil
+	return nodePlacement{clusterID: clusterID, groupID: groupID}, nil
 }
 
 func oneKSID(vm *goca_vm.VM, key string) (int, error) {

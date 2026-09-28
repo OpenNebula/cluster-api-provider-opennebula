@@ -25,21 +25,21 @@ import (
 	"time"
 )
 
-func TestHTTPEncryptedSenderSendsNodeEvent(t *testing.T) {
+func TestOneKSClientEncryptsAndSendsMonitorPayloads(t *testing.T) {
 	key := []byte("01234567890123456789012345678901")
-	var path, plaintext string
 	authFile := filepath.Join(t.TempDir(), "ONE_AUTH")
 	if err := os.WriteFile(authFile, []byte("oneadmin:secret\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sender, err := NewHTTPEncryptedSender(Config{
+	client, err := NewOneKSClient(Config{
 		Endpoint: "http://oneks.example/api/v1", Key: key,
-		AuthFile: authFile, HTTPTimeout: time.Second,
+		AuthFile: authFile, HTTPTimeout: time.Second, ClusterID: 42,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	sender.client.Transport = roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+	var path, plaintext string
+	client.client.Transport = roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		path = r.URL.Path
 		user, password, ok := r.BasicAuth()
 		if !ok || user != "oneadmin" || password != "secret" {
@@ -56,7 +56,7 @@ func TestHTTPEncryptedSenderSendsNodeEvent(t *testing.T) {
 			Body:       io.NopCloser(strings.NewReader("")),
 		}, nil
 	})
-	if err := sender.Send(context.Background(), NodeGroupEventDestination{ClusterID: 42, GroupID: 16}, Event{
+	if err := client.PublishNodeReady(context.Background(), 16, NodeReadyEvent{
 		Event: "node_ready", Payload: NodeReadyPayload{VMID: 2, Ready: true},
 	}); err != nil {
 		t.Fatal(err)
@@ -67,23 +67,30 @@ func TestHTTPEncryptedSenderSendsNodeEvent(t *testing.T) {
 	if plaintext != `{"event":"node_ready","payload":{"vm_id":2,"ready":true}}` {
 		t.Fatalf("plaintext = %s", plaintext)
 	}
-}
 
-func TestClusterObservationsDestinationPath(t *testing.T) {
-	if got := (ClusterObservationsDestination{ClusterID: "42"}).path(); got != "/clusters/42/observations" {
-		t.Fatalf("destination path = %q", got)
+	if err := client.ReplacePods(context.Background(), PodSnapshot{}); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestClusterEventDestinationPath(t *testing.T) {
-	if got := (ClusterEventDestination{ClusterID: "cluster/42"}).path(); got != "/clusters/cluster%2F42/events" {
-		t.Fatalf("unexpected cluster event path %q", got)
+	if path != "/api/v1/clusters/42/pods" || plaintext != `{}` {
+		t.Fatalf("pods request path=%q plaintext=%s", path, plaintext)
 	}
-}
-
-func TestClusterPodsDestinationPath(t *testing.T) {
-	if got := (ClusterPodsDestination{ClusterID: 42}).path(); got != "/clusters/42/pods" {
-		t.Fatalf("destination path = %q", got)
+	if err := client.ReplaceObservations(context.Background(), ObservationSnapshot{}); err != nil {
+		t.Fatal(err)
+	}
+	if path != "/api/v1/clusters/42/observations" || plaintext != `[]` {
+		t.Fatalf("observations request path=%q plaintext=%s", path, plaintext)
+	}
+	if err := client.PublishChartEvent(context.Background(), ChartEvent{
+		Event: "app_state_changed",
+		Payload: ChartEventPayload{
+			ReleaseName: "runai", ResourceVersion: json.Number("17"), State: "ready",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if path != "/api/v1/clusters/42/events" ||
+		plaintext != `{"event":"app_state_changed","payload":{"release_name":"runai","resource_version":17,"state":"ready"}}` {
+		t.Fatalf("chart request path=%q plaintext=%s", path, plaintext)
 	}
 }
 

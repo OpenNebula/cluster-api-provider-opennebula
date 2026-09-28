@@ -52,20 +52,12 @@ func TestObservationPollIncludesPendingPodsAndConfiguredResources(t *testing.T) 
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), deployment)
 
 	var snapshot ObservationSnapshot
-	monitor := newObservationMonitor(client, dynamicClient, senderFunc(
-		func(_ context.Context, destination Destination, payload any) error {
-			if destination.path() != "/clusters/42/observations" {
-				t.Fatalf("unexpected destination: %s", destination.path())
-			}
-			value, ok := payload.(ObservationSnapshot)
-			if !ok {
-				t.Fatalf("unexpected payload type: %T", payload)
-			}
+	monitor := NewObservationMonitor(client, dynamicClient, publisherStub{
+		observations: func(_ context.Context, value ObservationSnapshot) error {
 			snapshot = value
 			return nil
 		},
-	), Config{
-		ClusterID:               "42",
+	}, Config{
 		ResourceConfigNamespace: "kube-system",
 		ResourceConfigName:      "capone-resource-monitor", ResourcePollInterval: time.Second,
 	})
@@ -104,15 +96,14 @@ func TestObservationPollRetriesOnlyOnNextPoll(t *testing.T) {
 		},
 	)
 	attempts := 0
-	monitor := newObservationMonitor(
+	monitor := NewObservationMonitor(
 		client,
 		dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()),
-		senderFunc(func(context.Context, Destination, any) error {
+		publisherStub{observations: func(context.Context, ObservationSnapshot) error {
 			attempts++
 			return errors.New("endpoint unavailable")
-		}),
+		}},
 		Config{
-			ClusterID:               "42",
 			ResourceConfigNamespace: "kube-system",
 			ResourceConfigName:      "missing", ResourcePollInterval: time.Second,
 		},
@@ -128,14 +119,13 @@ func TestObservationPollRetriesOnlyOnNextPoll(t *testing.T) {
 func TestObservationPollSendsEmptySnapshot(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	attempts := 0
-	monitor := newObservationMonitor(
+	monitor := NewObservationMonitor(
 		client,
 		dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()),
-		senderFunc(func(_ context.Context, _ Destination, payload any) error {
+		publisherStub{observations: func(_ context.Context, snapshot ObservationSnapshot) error {
 			attempts++
-			snapshot, ok := payload.(ObservationSnapshot)
-			if !ok || len(snapshot) != 0 {
-				t.Fatalf("unexpected empty snapshot: %#v", payload)
+			if len(snapshot) != 0 {
+				t.Fatalf("unexpected empty snapshot: %#v", snapshot)
 			}
 			encoded, err := json.Marshal(snapshot)
 			if err != nil {
@@ -145,15 +135,32 @@ func TestObservationPollSendsEmptySnapshot(t *testing.T) {
 				t.Fatalf("empty observation payload = %s, want []", encoded)
 			}
 			return nil
-		}),
+		}},
 		Config{
-			ClusterID:               "42",
 			ResourceConfigNamespace: "kube-system",
 			ResourceConfigName:      "missing", ResourcePollInterval: time.Second,
 		},
 	)
 	if err := monitor.poll(context.Background()); err != nil || attempts != 1 {
 		t.Fatalf("empty snapshot: attempts=%d err=%v", attempts, err)
+	}
+}
+
+func TestMissingResourceObservationIncludesZeroCreatedAt(t *testing.T) {
+	observation := newResourceObservation(ResourceSpec{
+		APIVersion: "apps/v1",
+		Resource:   "deployments",
+		Namespace:  "payments",
+		Name:       "missing",
+		Path:       "status.readyReplicas",
+	}, nil, metav1.Time{})
+	encoded, err := json.Marshal(observation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"resource":"deployments","namespace":"payments","name":"missing","path":"status.readyReplicas","value":null,"createdAt":0}`
+	if string(encoded) != want {
+		t.Fatalf("missing resource observation = %s, want %s", encoded, want)
 	}
 }
 
@@ -164,12 +171,11 @@ func TestObservationMonitorReloadsResourceConfig(t *testing.T) {
 		Data:       map[string]string{resourceConfigDataKey: "[]"},
 	}
 	client := fake.NewSimpleClientset(configMap)
-	monitor := newObservationMonitor(
+	monitor := NewObservationMonitor(
 		client,
 		dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()),
-		senderFunc(func(context.Context, Destination, any) error { return nil }),
+		publisherStub{},
 		Config{
-			ClusterID:               "42",
 			ResourceConfigNamespace: "kube-system",
 			ResourceConfigName:      configMap.Name, ResourcePollInterval: time.Second,
 		},

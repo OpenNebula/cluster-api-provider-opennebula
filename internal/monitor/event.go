@@ -18,7 +18,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-type Event struct {
+type NodeReadyEvent struct {
 	Event   string           `json:"event"`
 	Payload NodeReadyPayload `json:"payload"`
 }
@@ -28,12 +28,14 @@ type NodeReadyPayload struct {
 	Ready bool `json:"ready"`
 }
 
-func nodeReadyEvent(node *corev1.Node) (Event, error) {
+func nodeReadyEvent(node *corev1.Node) (NodeReadyEvent, error) {
+	// CAPONE provider IDs are the stable bridge between a Kubernetes Node and
+	// the OpenNebula VM expected by the OneKS event API
 	vmID, err := vmIDFromProviderID(node.Spec.ProviderID)
 	if err != nil {
-		return Event{}, err
+		return NodeReadyEvent{}, err
 	}
-	return Event{Event: "node_ready", Payload: NodeReadyPayload{VMID: vmID, Ready: nodeReady(node)}}, nil
+	return NodeReadyEvent{Event: "node_ready", Payload: NodeReadyPayload{VMID: vmID, Ready: nodeReady(node)}}, nil
 }
 
 func vmIDFromProviderID(value string) (int, error) {
@@ -54,5 +56,6 @@ func nodeReady(node *corev1.Node) bool {
 			return condition.Status == corev1.ConditionTrue
 		}
 	}
+	// Until Kubernetes publishes a Ready condition, treat the node as not ready
 	return false
 }

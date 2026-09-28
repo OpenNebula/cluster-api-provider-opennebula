@@ -15,13 +15,14 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
 
 type Config struct {
 	Endpoint                string
-	ClusterID               string
+	ClusterID               int
 	OpenNebulaEndpoint      string
 	Key                     []byte
 	AuthFile                string
@@ -34,9 +35,9 @@ type Config struct {
 }
 
 func ConfigFromEnv() (Config, error) {
+	clusterID := strings.TrimSpace(os.Getenv("MONITOR_CLUSTER_ID"))
 	c := Config{
 		Endpoint:                strings.TrimSpace(os.Getenv("MONITOR_ENDPOINT")),
-		ClusterID:               strings.TrimSpace(os.Getenv("MONITOR_CLUSTER_ID")),
 		OpenNebulaEndpoint:      strings.TrimSpace(os.Getenv("ONE_XMLRPC")),
 		AuthFile:                strings.TrimSpace(os.Getenv("MONITOR_AUTH_FILE")),
 		ResourceConfigNamespace: strings.TrimSpace(os.Getenv("MONITOR_RESOURCE_CONFIG_NAMESPACE")),
@@ -46,9 +47,14 @@ func ConfigFromEnv() (Config, error) {
 	if c.Endpoint == "" {
 		return Config{}, fmt.Errorf("MONITOR_ENDPOINT is required")
 	}
-	if c.ClusterID == "" {
+	if clusterID == "" {
 		return Config{}, fmt.Errorf("MONITOR_CLUSTER_ID is required")
 	}
+	parsedClusterID, err := strconv.Atoi(clusterID)
+	if err != nil || parsedClusterID < 0 {
+		return Config{}, fmt.Errorf("MONITOR_CLUSTER_ID must be a non-negative integer: %q", clusterID)
+	}
+	c.ClusterID = parsedClusterID
 	if c.OpenNebulaEndpoint == "" {
 		return Config{}, fmt.Errorf("ONE_XMLRPC is required")
 	}

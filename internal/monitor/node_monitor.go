@@ -24,27 +24,25 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
+// NodeMonitor reports initial node readiness and later readiness transitions.
+// OpenNebula metadata is resolved lazily instead of duplicating it on the Node.
 type NodeMonitor struct {
 	nodeFactory informers.SharedInformerFactory
 	nodes       cache.SharedIndexInformer
-	sender      Sender
-	resolver    nodeDestinationResolver
+	publisher   Publisher
+	resolver    PlacementResolver
 	queue       workqueue.TypedRateLimitingInterface[string]
 	ready       atomic.Bool
 }
 
-func NewNodeMonitor(client kubernetes.Interface, sender Sender, config Config) (*NodeMonitor, error) {
-	resolver, err := newGocaNodeDestinationResolver(config)
-	if err != nil {
-		return nil, err
-	}
-	return newNodeMonitor(client, sender, resolver)
-}
-
-func newNodeMonitor(client kubernetes.Interface, sender Sender, resolver nodeDestinationResolver) (*NodeMonitor, error) {
+func NewNodeMonitor(
+	client kubernetes.Interface,
+	publisher Publisher,
+	resolver PlacementResolver,
+) (*NodeMonitor, error) {
 	m := &NodeMonitor{
-		sender:   sender,
-		resolver: resolver,
+		publisher: publisher,
+		resolver:  resolver,
 		queue: workqueue.NewTypedRateLimitingQueue(
 			workqueue.DefaultTypedControllerRateLimiter[string](),
 		),
@@ -95,6 +93,7 @@ func (m *NodeMonitor) onNodeUpdate(oldObj, newObj any) {
 	if !oldOK || !newOK {
 		return
 	}
+	// Ignore status churn that cannot change the event sent to OneKS
 	if oldNode.Spec.ProviderID == newNode.Spec.ProviderID && nodeReady(oldNode) == nodeReady(newNode) {
 		return
 	}
@@ -120,12 +119,16 @@ func (m *NodeMonitor) processNext(ctx context.Context) bool {
 	}
 	event, err := nodeReadyEvent(obj.(*corev1.Node))
 	if err != nil {
+		// Invalid node metadata is not transient. A later Kubernetes update will
+		// enqueue the node again if the provider ID is corrected
 		ctrl.LoggerFrom(ctx).Error(err, "node event was not sent", "node", name)
 		m.queue.Forget(name)
 		return true
 	}
-	destination, err := m.resolver.Resolve(ctx, event.Payload.VMID)
+	groupID, err := m.resolver.GroupForVM(ctx, event.Payload.VMID)
 	if err != nil {
+		// OpenNebula lookups and callback delivery are transient operations, so
+		// both use the workqueue rate limiter instead of dropping the event
 		ctrl.LoggerFrom(ctx).Error(err, "unable to resolve node event destination",
 			"node", name,
 			"event", event.Event,
@@ -140,11 +143,10 @@ func (m *NodeMonitor) processNext(ctx context.Context) bool {
 		"event", event.Event,
 		"vmID", event.Payload.VMID,
 		"ready", event.Payload.Ready,
-		"clusterID", destination.ClusterID,
-		"groupID", destination.GroupID,
+		"groupID", groupID,
 	)
 	log.Info("sending node event")
-	if err := m.sender.Send(ctx, destination, event); err != nil {
+	if err := m.publisher.PublishNodeReady(ctx, groupID, event); err != nil {
 		log.Error(err, "unable to send node event")
 		m.queue.AddRateLimited(name)
 		return true
