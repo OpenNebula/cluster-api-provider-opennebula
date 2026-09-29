@@ -1,5 +1,5 @@
 image:
-  repository: ghcr.io/jaimecb/capone-monitor
+  repository: ghcr.io/opennebula/cluster-api-provider-opennebula-monitor
   tag: ""
   pullPolicy: IfNotPresent
 
