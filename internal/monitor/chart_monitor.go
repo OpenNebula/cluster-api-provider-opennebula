@@ -33,13 +33,19 @@ var helmChartGVR = schema.GroupVersionResource{
 	Group: "helm.cattle.io", Version: "v1", Resource: "helmcharts",
 }
 
+var applicationOperationGVR = schema.GroupVersionResource{
+	Group: "", Version: "v1", Resource: "configmaps",
+}
+
 const (
-	helmChartNamespace = "kube-system"
-	managedLabel       = "oneks.opennebula.io/managed"
-	releaseAnnotation  = "oneks.opennebula.io/release-name"
-	parentAnnotation   = "oneks.opennebula.io/parent"
-	stateAnnotation    = "oneks.opennebula.io/state"
-	errorAnnotation    = "oneks.opennebula.io/error"
+	helmChartNamespace   = "kube-system"
+	managedLabel         = "oneks.opennebula.io/managed"
+	releaseAnnotation    = "oneks.opennebula.io/release-name"
+	parentAnnotation     = "oneks.opennebula.io/parent"
+	stateAnnotation      = "oneks.opennebula.io/state"
+	errorAnnotation      = "oneks.opennebula.io/error"
+	operationLabel       = "oneks.opennebula.io/operation"
+	applicationOperation = "application"
 )
 
 type ChartEvent struct {
@@ -60,13 +66,14 @@ type pendingChart struct {
 	deleted bool
 }
 
-// ChartMonitor converts state annotations on OneKS-managed HelmCharts into
-// application lifecycle events
+// ChartMonitor converts OneKS-managed HelmCharts and failed operation markers
+// into application lifecycle events.
 type ChartMonitor struct {
-	factory   dynamicinformer.DynamicSharedInformerFactory
-	charts    cache.SharedIndexInformer
-	publisher Publisher
-	queue     workqueue.TypedRateLimitingInterface[string]
+	factory    dynamicinformer.DynamicSharedInformerFactory
+	charts     cache.SharedIndexInformer
+	operations cache.SharedIndexInformer
+	publisher  Publisher
+	queue      workqueue.TypedRateLimitingInterface[string]
 
 	mu      sync.Mutex
 	pending map[string]pendingChart
@@ -87,6 +94,7 @@ func NewChartMonitor(dynamicClient dynamic.Interface, publisher Publisher) (*Cha
 		},
 	)
 	m.charts = m.factory.ForResource(helmChartGVR).Informer()
+	m.operations = m.factory.ForResource(applicationOperationGVR).Informer()
 	if _, err := m.charts.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj any) { m.enqueue(obj, false) },
 		UpdateFunc: func(oldObj, newObj any) {
@@ -100,18 +108,28 @@ func NewChartMonitor(dynamicClient dynamic.Interface, publisher Publisher) (*Cha
 	}); err != nil {
 		return nil, fmt.Errorf("register HelmChart handler: %w", err)
 	}
+	if _, err := m.operations.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj any) { m.enqueueOperation(obj) },
+		UpdateFunc: func(oldObj, newObj any) {
+			if chartEventSignature(oldObj) != chartEventSignature(newObj) {
+				m.enqueueOperation(newObj)
+			}
+		},
+	}); err != nil {
+		return nil, fmt.Errorf("register application operation handler: %w", err)
+	}
 	return m, nil
 }
 
 func (m *ChartMonitor) Run(ctx context.Context) error {
 	defer runtime.HandleCrash()
 	m.factory.Start(ctx.Done())
-	if !cache.WaitForCacheSync(ctx.Done(), m.charts.HasSynced) {
-		return fmt.Errorf("initial HelmChart informer cache sync failed")
+	if !cache.WaitForCacheSync(ctx.Done(), m.charts.HasSynced, m.operations.HasSynced) {
+		return fmt.Errorf("initial application informer cache sync failed")
 	}
 	m.ready.Store(true)
 	defer m.ready.Store(false)
-	ctrl.Log.WithName("chart-monitor").Info("HelmChart monitor cache synchronized")
+	ctrl.Log.WithName("chart-monitor").Info("Application monitor caches synchronized")
 	go func() {
 		<-ctx.Done()
 		m.queue.ShutDown()
@@ -135,6 +153,14 @@ func (m *ChartMonitor) enqueue(obj any, deleted bool) {
 	m.pending[key] = pendingChart{chart: chart.DeepCopy(), deleted: deleted}
 	m.mu.Unlock()
 	m.queue.Add(key)
+}
+
+func (m *ChartMonitor) enqueueOperation(obj any) {
+	operation, ok := applicationOperationFromEvent(obj)
+	if !ok {
+		return
+	}
+	m.enqueue(operation, false)
 }
 
 func (m *ChartMonitor) processNext(ctx context.Context) bool {
@@ -259,4 +285,13 @@ func chartFromEvent(obj any) (*unstructured.Unstructured, bool) {
 	}
 	chart, ok := tombstone.Obj.(*unstructured.Unstructured)
 	return chart, ok
+}
+
+func applicationOperationFromEvent(obj any) (*unstructured.Unstructured, bool) {
+	operation, ok := obj.(*unstructured.Unstructured)
+	if !ok || operation.GetLabels()[operationLabel] != applicationOperation ||
+		operation.GetAnnotations()[stateAnnotation] != "failed" {
+		return nil, false
+	}
+	return operation, true
 }

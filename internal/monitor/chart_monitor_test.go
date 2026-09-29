@@ -108,6 +108,29 @@ func TestDeletingTimestampOverridesFailedState(t *testing.T) {
 	}
 }
 
+func TestApplicationOperationReportsFailure(t *testing.T) {
+	operation := testApplicationOperation("runai", "runai", "", "failed")
+	annotations := operation.GetAnnotations()
+	annotations[errorAnnotation] = "preInstall failed"
+	operation.SetAnnotations(annotations)
+
+	observed, ok := applicationOperationFromEvent(operation)
+	if !ok {
+		t.Fatal("failed application operation was ignored")
+	}
+	event := mustChartEvent(t, observed, false)
+	if event.Event != "app_failed" || event.Payload.ErrorMessage != "preInstall failed" {
+		t.Fatalf("unexpected operation event: %#v", event)
+	}
+}
+
+func TestApplicationOperationIgnoresNonFailures(t *testing.T) {
+	operation := testApplicationOperation("runai", "runai", "", "installing")
+	if _, ok := applicationOperationFromEvent(operation); ok {
+		t.Fatal("installing application operation was observed")
+	}
+}
+
 func TestChartEventRejectsInvalidMetadata(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -166,4 +189,15 @@ func testHelmChart(name, releaseName, parent, state string) *unstructured.Unstru
 	chart.SetAnnotations(annotations)
 	chart.SetLabels(map[string]string{managedLabel: "true"})
 	return chart
+}
+
+func testApplicationOperation(name, releaseName, parent, state string) *unstructured.Unstructured {
+	operation := testHelmChart(name, releaseName, parent, state)
+	operation.SetAPIVersion("v1")
+	operation.SetKind("ConfigMap")
+	operation.SetLabels(map[string]string{
+		managedLabel:   "true",
+		operationLabel: applicationOperation,
+	})
+	return operation
 }
