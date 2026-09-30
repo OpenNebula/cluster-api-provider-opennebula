@@ -1,7 +1,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: capone-cluster-monitor
+  name: oneks-monitor
 rules:
 - apiGroups: [""]
   resources: ["nodes"]
@@ -16,25 +16,25 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: capone-cluster-monitor
+  name: oneks-monitor
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: capone-cluster-monitor
+  name: oneks-monitor
 subjects:
 - kind: ServiceAccount
-  name: capone-cluster-monitor
+  name: oneks-monitor
   namespace: {{ .Release.Namespace | quote }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: capone-cluster-monitor-view
+  name: oneks-monitor-view
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: view
 subjects:
 - kind: ServiceAccount
-  name: capone-cluster-monitor
+  name: oneks-monitor
   namespace: {{ .Release.Namespace | quote }}

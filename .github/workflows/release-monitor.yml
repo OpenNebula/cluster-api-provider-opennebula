@@ -37,7 +37,7 @@ jobs:
 
       - name: Deploy chart
         run: |
-          cp "./_charts/$GITHUB_REF_NAME/capone-monitor-${GITHUB_REF_NAME#monitor-v}.tgz" ./gh-pages/charts/
+          cp "./_charts/$GITHUB_REF_NAME/oneks-monitor-${GITHUB_REF_NAME#monitor-v}.tgz" ./gh-pages/charts/
 
       - name: Re-index charts
         working-directory: ./gh-pages/charts/
@@ -47,7 +47,7 @@ jobs:
       - name: Push gh-pages
         working-directory: ./gh-pages/charts/
         run: |
-          git add ./index.yaml "./capone-monitor-${GITHUB_REF_NAME#monitor-v}.tgz"
+          git add ./index.yaml "./oneks-monitor-${GITHUB_REF_NAME#monitor-v}.tgz"
           git config user.name "$GITHUB_ACTOR"
           git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
           git commit -m "$GITHUB_REF_NAME"
@@ -57,4 +57,4 @@ jobs:
         env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
         run: |
           gh release create "$GITHUB_REF_NAME" --latest=false --generate-notes \
-            "./_charts/$GITHUB_REF_NAME/capone-monitor-${GITHUB_REF_NAME#monitor-v}.tgz"
+            "./_charts/$GITHUB_REF_NAME/oneks-monitor-${GITHUB_REF_NAME#monitor-v}.tgz"

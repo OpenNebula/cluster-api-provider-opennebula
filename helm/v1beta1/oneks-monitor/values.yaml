@@ -1,6 +1,6 @@
 image:
   # OCI image published by the monitor-vX.Y.Z release workflow.
-  repository: ghcr.io/opennebula/cluster-api-provider-opennebula-monitor
+  repository: ghcr.io/opennebula/oneks-monitor
   # An empty tag uses Chart.appVersion.
   tag: ""
   pullPolicy: IfNotPresent
@@ -24,7 +24,7 @@ monitor:
   podPollInterval: 60s
   # ConfigMap containing the monitor.yaml resource observation document.
   resourceConfigNamespace: kube-system
-  resourceConfigName: capone-resource-monitor
+  resourceConfigName: oneks-resource-monitor
   # Frequency of Pending-pod and configured-resource observation replacement.
   resourcePollInterval: 60s
   # Listen address for /healthz and /readyz.

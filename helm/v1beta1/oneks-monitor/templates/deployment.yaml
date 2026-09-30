@@ -1,21 +1,21 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: capone-cluster-monitor
+  name: oneks-monitor
   namespace: {{ .Release.Namespace | quote }}
   labels:
-    app.kubernetes.io/name: capone-cluster-monitor
+    app.kubernetes.io/name: oneks-monitor
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: capone-cluster-monitor
+      app.kubernetes.io/name: oneks-monitor
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: capone-cluster-monitor
+        app.kubernetes.io/name: oneks-monitor
     spec:
-      serviceAccountName: capone-cluster-monitor
+      serviceAccountName: oneks-monitor
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -26,9 +26,9 @@ spec:
         imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
         envFrom:
         - configMapRef:
-            name: capone-cluster-monitor
+            name: oneks-monitor
         - secretRef:
-            name: capone-cluster-monitor
+            name: oneks-monitor
         env:
         - name: MONITOR_AUTH_FILE
           value: /var/run/secrets/oneks-monitor/ONE_AUTH

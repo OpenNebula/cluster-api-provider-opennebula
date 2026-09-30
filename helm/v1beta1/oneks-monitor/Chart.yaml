@@ -1,5 +1,5 @@
 apiVersion: v2
-name: capone-monitor
+name: oneks-monitor
 description: In-cluster OpenNebula Node event and Kubernetes observation monitor
 type: application
 version: 0.1.0

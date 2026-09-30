@@ -44,7 +44,7 @@ CLOSEST_TAG ?= $(shell git -C $(SELF) describe --tags --abbrev=0)
 IMG_URL ?= ghcr.io/opennebula/cluster-api-provider-opennebula
 IMG     ?= $(IMG_URL):latest
 E2E_IMG ?= $(IMG_URL):e2e
-MONITOR_IMG_URL ?= ghcr.io/opennebula/cluster-api-provider-opennebula-monitor
+MONITOR_IMG_URL ?= ghcr.io/opennebula/oneks-monitor
 MONITOR_IMG     ?= $(MONITOR_IMG_URL):latest
 
 # CONTAINER_TOOL defines the container tool to be used for building images.
@@ -177,12 +177,12 @@ docker-release:
 MONITOR_VERSION ?= $(subst v,,$(patsubst monitor-%,%,$(CLOSEST_TAG)))
 
 docker-release-monitor:
-	-$(CONTAINER_TOOL) buildx create --name cluster-api-provider-opennebula-monitor-builder
-	$(CONTAINER_TOOL) buildx use cluster-api-provider-opennebula-monitor-builder
+	-$(CONTAINER_TOOL) buildx create --name oneks-monitor-builder
+	$(CONTAINER_TOOL) buildx use oneks-monitor-builder
 	$(CONTAINER_TOOL) buildx build --push --platform=$(_PLATFORMS) \
 		-t $(MONITOR_IMG_URL):v$(MONITOR_VERSION) -t $(MONITOR_IMG_URL):latest \
 		-f Dockerfile.monitor .
-	-$(CONTAINER_TOOL) buildx rm cluster-api-provider-opennebula-monitor-builder
+	-$(CONTAINER_TOOL) buildx rm oneks-monitor-builder
 
 # Release
 
@@ -240,8 +240,8 @@ $(eval $(call chart-generator-tool,capone-kadm,default))
 $(eval $(call chart-generator-tool,capone-rke2,rke2))
 
 MONITOR_RELEASE_TAG   ?= monitor-v$(MONITOR_VERSION)
-MONITOR_CHART_PACKAGE := $(CHARTS_DIR)/$(MONITOR_RELEASE_TAG)/capone-monitor-$(MONITOR_VERSION).tgz
-MONITOR_CHART_SOURCES := $(shell find helm/v1beta1/capone-monitor -type f)
+MONITOR_CHART_PACKAGE := $(CHARTS_DIR)/$(MONITOR_RELEASE_TAG)/oneks-monitor-$(MONITOR_VERSION).tgz
+MONITOR_CHART_SOURCES := $(shell find helm/v1beta1/oneks-monitor -type f)
 
 monitor-chart: $(MONITOR_CHART_PACKAGE)
 
@@ -251,7 +251,7 @@ $(MONITOR_CHART_PACKAGE): $(MONITOR_CHART_SOURCES) $(HELM)
 	install -m u=rwx,go=rx -d $(CHARTS_DIR)/$(MONITOR_RELEASE_TAG)
 	$(HELM) package -d $(CHARTS_DIR)/$(MONITOR_RELEASE_TAG) \
 		--version $(MONITOR_VERSION) --app-version v$(MONITOR_VERSION) \
-		helm/v1beta1/capone-monitor
+		helm/v1beta1/oneks-monitor
 
 # Deployment
 
