@@ -153,7 +153,7 @@ func (c *OneKSClient) send(ctx context.Context, path string, payload any) error 
 		return fmt.Errorf("create payload request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "capone-cluster-monitor")
+	req.Header.Set("User-Agent", "oneks-monitor")
 	req.SetBasicAuth(user, password)
 	resp, err := c.client.Do(req)
 	if err != nil {

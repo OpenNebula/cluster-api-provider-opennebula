@@ -48,7 +48,7 @@ type Config struct {
 	// to kube-system. It contains the resource-observation ConfigMap.
 	ResourceConfigNamespace string
 	// ResourceConfigName is MONITOR_RESOURCE_CONFIG_NAME and defaults to
-	// capone-resource-monitor.
+	// oneks-resource-monitor.
 	ResourceConfigName string
 	// ResourcePollInterval is MONITOR_RESOURCE_POLL_INTERVAL and controls both
 	// Pending-pod and configured-resource observation polling.
@@ -128,7 +128,7 @@ func ConfigFromEnv() (Config, error) {
 		c.ResourceConfigNamespace = "kube-system"
 	}
 	if c.ResourceConfigName == "" {
-		c.ResourceConfigName = "capone-resource-monitor"
+		c.ResourceConfigName = "oneks-resource-monitor"
 	}
 	return c, nil
 }

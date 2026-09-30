@@ -29,7 +29,7 @@ func TestObservationPollIncludesPendingPodsAndConfiguredResources(t *testing.T) 
 	createdAt := time.Date(2026, 9, 10, 11, 12, 13, 0, time.UTC)
 	client := fake.NewSimpleClientset(
 		&corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Name: "capone-resource-monitor", Namespace: "kube-system"},
+			ObjectMeta: metav1.ObjectMeta{Name: "oneks-resource-monitor", Namespace: "kube-system"},
 			Data:       map[string]string{resourceConfigDataKey: validResourceConfig},
 		},
 		&corev1.Pod{
@@ -59,7 +59,7 @@ func TestObservationPollIncludesPendingPodsAndConfiguredResources(t *testing.T) 
 		},
 	}, Config{
 		ResourceConfigNamespace: "kube-system",
-		ResourceConfigName:      "capone-resource-monitor", ResourcePollInterval: time.Second,
+		ResourceConfigName:      "oneks-resource-monitor", ResourcePollInterval: time.Second,
 	})
 	if err := monitor.poll(context.Background()); err != nil {
 		t.Fatal(err)
@@ -167,7 +167,7 @@ func TestMissingResourceObservationIncludesZeroCreatedAt(t *testing.T) {
 func TestObservationMonitorReloadsResourceConfig(t *testing.T) {
 	ctx := context.Background()
 	configMap := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: "capone-resource-monitor", Namespace: "kube-system"},
+		ObjectMeta: metav1.ObjectMeta{Name: "oneks-resource-monitor", Namespace: "kube-system"},
 		Data:       map[string]string{resourceConfigDataKey: "[]"},
 	}
 	client := fake.NewSimpleClientset(configMap)
