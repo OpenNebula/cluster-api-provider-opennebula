@@ -18,11 +18,16 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
+// NodeReadyEvent is the OneKS nodegroup event named node_ready. It reports the
+// current Kubernetes readiness of the OpenNebula VM backing a Node.
 type NodeReadyEvent struct {
 	Event   string           `json:"event"`
 	Payload NodeReadyPayload `json:"payload"`
 }
 
+// NodeReadyPayload identifies a VM inside the OneKS nodegroup selected by the
+// callback URL. Ready reflects the Kubernetes NodeReady condition; a missing or
+// Unknown condition is reported as false.
 type NodeReadyPayload struct {
 	VMID  int  `json:"vm_id"`
 	Ready bool `json:"ready"`

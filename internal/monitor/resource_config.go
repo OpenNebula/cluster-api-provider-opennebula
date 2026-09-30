@@ -22,6 +22,10 @@ const resourceConfigDataKey = "monitor.yaml"
 
 type resourceConfig []resourceQuery
 
+// ResourceSpec selects one scalar Kubernetes field to include in the complete
+// OneKS observation snapshot. Resource is the plural API resource name (for
+// example, deployments), not the Kind. Namespace may be empty for a
+// cluster-scoped resource. Path is a dot-separated field path.
 type ResourceSpec struct {
 	APIVersion string `json:"apiVersion"`
 	Resource   string `json:"resource"`

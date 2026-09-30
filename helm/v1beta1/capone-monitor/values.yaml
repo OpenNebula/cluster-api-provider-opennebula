@@ -1,23 +1,38 @@
 image:
+  # OCI image published by the monitor-vX.Y.Z release workflow.
   repository: ghcr.io/opennebula/cluster-api-provider-opennebula-monitor
+  # An empty tag uses Chart.appVersion.
   tag: ""
   pullPolicy: IfNotPresent
 
 monitor:
+  # Absolute HTTP(S) base URL of the OneKS callback API.
   endpoint: ""
+  # Non-negative OneKS cluster identifier used in callback paths.
   clusterID: ""
+  # Absolute HTTP(S) URL of the OpenNebula XML-RPC API.
   openNebulaEndpoint: ""
+  # Base64-encoded 32-byte AES-256-GCM key shared with OneKS.
   key: ""
+  # Existing Secret containing OpenNebula/OneKS Basic Auth credentials in the
+  # form username:password-or-token.
   authSecretName: ""
   authSecretKey: ONE_AUTH
+  # Timeout for each OneKS callback.
   httpTimeout: 10s
+  # Frequency of authoritative pod snapshot replacement.
   podPollInterval: 60s
+  # ConfigMap containing the monitor.yaml resource observation document.
   resourceConfigNamespace: kube-system
   resourceConfigName: capone-resource-monitor
+  # Frequency of Pending-pod and configured-resource observation replacement.
   resourcePollInterval: 60s
+  # Listen address for /healthz and /readyz.
   healthAddress: ":8081"
 
 resourceConfig:
+  # Create the observation ConfigMap as part of this release. Set false when it
+  # is managed independently.
   create: true
   # monitorYaml: |
   #   - apiVersion: apps/v1

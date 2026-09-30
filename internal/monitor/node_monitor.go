@@ -24,8 +24,13 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
-// NodeMonitor reports initial node readiness and later readiness transitions.
-// OpenNebula metadata is resolved lazily instead of duplicating it on the Node.
+// NodeMonitor reports initial node readiness and later readiness transitions to
+// the owning OneKS nodegroup. OpenNebula placement metadata is resolved lazily
+// instead of being duplicated on the Kubernetes Node.
+//
+// Its rate-limited queue is level-based: multiple updates to the same Node can
+// be coalesced before delivery. The monitor guarantees convergence to the
+// latest cached readiness, not delivery of every transient Node condition.
 type NodeMonitor struct {
 	nodeFactory informers.SharedInformerFactory
 	nodes       cache.SharedIndexInformer
@@ -35,6 +40,8 @@ type NodeMonitor struct {
 	ready       atomic.Bool
 }
 
+// NewNodeMonitor constructs a Node informer and registers its event handlers.
+// Run must be called to start the informer and delivery worker.
 func NewNodeMonitor(
 	client kubernetes.Interface,
 	publisher Publisher,
@@ -58,6 +65,9 @@ func NewNodeMonitor(
 	return m, nil
 }
 
+// Run synchronizes the Node informer and delivers queued state until ctx is
+// cancelled. OpenNebula lookup and OneKS delivery failures are retried with
+// rate limiting; invalid Node metadata waits for a later Node update.
 func (m *NodeMonitor) Run(ctx context.Context) error {
 	defer runtime.HandleCrash()
 	m.nodeFactory.Start(ctx.Done())
@@ -76,6 +86,8 @@ func (m *NodeMonitor) Run(ctx context.Context) error {
 	return nil
 }
 
+// Ready reports whether the initial Kubernetes Node cache has synchronized.
+// It does not imply that OpenNebula or OneKS is currently reachable.
 func (m *NodeMonitor) Ready() bool { return m.ready.Load() }
 
 func (m *NodeMonitor) onNode(obj any) {

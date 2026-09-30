@@ -29,6 +29,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
+// ResourceObservation is one scalar Kubernetes value in the authoritative
+// OneKS observation snapshot. Value is nil when the configured object or field
+// is absent. CreatedAt is a Unix timestamp, or zero when the object is absent.
 type ResourceObservation struct {
 	Resource  string `json:"resource"`
 	Namespace string `json:"namespace"`
@@ -38,10 +41,14 @@ type ResourceObservation struct {
 	CreatedAt int64  `json:"createdAt"`
 }
 
+// ObservationSnapshot is the complete set of Pending pods and configured
+// Kubernetes resource values currently known to the monitor.
 type ObservationSnapshot []ResourceObservation
 
 // ObservationMonitor combines built-in Pending-pod observations with scalar
-// fields selected at runtime through a ConfigMap
+// fields selected at runtime through a ConfigMap. A failed resource lookup
+// prevents publication of the entire snapshot so OneKS retains its last
+// complete view.
 type ObservationMonitor struct {
 	client        kubernetes.Interface
 	dynamicClient dynamic.Interface
@@ -55,6 +62,8 @@ type ObservationMonitor struct {
 	ready          atomic.Bool
 }
 
+// NewObservationMonitor constructs an observation poller using the ConfigMap
+// location and interval from config.
 func NewObservationMonitor(
 	client kubernetes.Interface,
 	dynamicClient dynamic.Interface,
@@ -71,6 +80,8 @@ func NewObservationMonitor(
 	}
 }
 
+// Run polls immediately and then at the configured interval. Poll failures are
+// logged and retried at the next interval without terminating the monitor.
 func (m *ObservationMonitor) Run(ctx context.Context) error {
 	defer m.ready.Store(false)
 	m.pollAndLog(ctx)
@@ -86,6 +97,9 @@ func (m *ObservationMonitor) Run(ctx context.Context) error {
 	}
 }
 
+// Ready reports whether Pending Pods have been listed successfully at least
+// once. It does not require a valid observation ConfigMap or successful OneKS
+// publication.
 func (m *ObservationMonitor) Ready() bool { return m.ready.Load() }
 
 func (m *ObservationMonitor) pollAndLog(ctx context.Context) {

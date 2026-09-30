@@ -20,20 +20,47 @@ import (
 	"time"
 )
 
+// Config contains the complete runtime contract between the in-cluster
+// monitor, Kubernetes, OpenNebula and the OneKS callback API.
 type Config struct {
-	Endpoint                string
-	ClusterID               int
-	OpenNebulaEndpoint      string
-	Key                     []byte
-	AuthFile                string
-	HTTPTimeout             time.Duration
-	PodPollInterval         time.Duration
+	// Endpoint is MONITOR_ENDPOINT, the absolute HTTP(S) base URL of the OneKS
+	// callback API. A trailing slash is ignored when callback paths are built.
+	Endpoint string
+	// ClusterID is MONITOR_CLUSTER_ID, the non-negative OneKS cluster identifier
+	// used in callback paths and to reject OpenNebula VMs from other clusters.
+	ClusterID int
+	// OpenNebulaEndpoint is ONE_XMLRPC, the absolute HTTP(S) URL of the
+	// OpenNebula XML-RPC API used to resolve VM placement.
+	OpenNebulaEndpoint string
+	// Key is MONITOR_KEY decoded from Base64. It contains exactly 32 bytes and
+	// is used as the AES-256-GCM key for every OneKS payload.
+	Key []byte
+	// AuthFile is MONITOR_AUTH_FILE. The file must contain
+	// "username:password-or-token" and is reread for every OneKS callback so a
+	// mounted Secret can rotate without restarting the monitor.
+	AuthFile string
+	// HTTPTimeout is MONITOR_HTTP_TIMEOUT and bounds each OneKS HTTP request.
+	HTTPTimeout time.Duration
+	// PodPollInterval is MONITOR_POD_POLL_INTERVAL and controls how often the
+	// authoritative OneKS pod snapshot is rebuilt.
+	PodPollInterval time.Duration
+	// ResourceConfigNamespace is MONITOR_RESOURCE_CONFIG_NAMESPACE and defaults
+	// to kube-system. It contains the resource-observation ConfigMap.
 	ResourceConfigNamespace string
-	ResourceConfigName      string
-	ResourcePollInterval    time.Duration
-	HealthAddress           string
+	// ResourceConfigName is MONITOR_RESOURCE_CONFIG_NAME and defaults to
+	// capone-resource-monitor.
+	ResourceConfigName string
+	// ResourcePollInterval is MONITOR_RESOURCE_POLL_INTERVAL and controls both
+	// Pending-pod and configured-resource observation polling.
+	ResourcePollInterval time.Duration
+	// HealthAddress is MONITOR_HEALTH_ADDRESS, the listen address that exposes
+	// /healthz and /readyz.
+	HealthAddress string
 }
 
+// ConfigFromEnv reads and validates all monitor environment variables. It
+// returns an error before any Kubernetes, OpenNebula or OneKS client is built,
+// so invalid cross-system configuration fails the container at startup.
 func ConfigFromEnv() (Config, error) {
 	clusterID := strings.TrimSpace(os.Getenv("MONITOR_CLUSTER_ID"))
 	c := Config{

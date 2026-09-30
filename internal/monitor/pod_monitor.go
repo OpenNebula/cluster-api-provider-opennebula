@@ -23,6 +23,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
+// PodReport is the compact pod representation consumed by OneKS. State is
+// derived from the Pod phase, readiness and deletion timestamp; Reason favors
+// actionable container waiting or termination reasons.
 type PodReport struct {
 	Pod       string `json:"pod"`
 	Namespace string `json:"namespace"`
@@ -30,11 +33,15 @@ type PodReport struct {
 	Reason    string `json:"reason"`
 }
 
-// PodSnapshot groups Pods by OneKS group ID and then by OpenNebula VM ID
+// PodSnapshot is the complete pod state known to the monitor. The first key is
+// a OneKS nodegroup ID and the second is an OpenNebula VM ID. Empty VM slices
+// are retained so OneKS can remove pods that disappeared since the prior poll.
 type PodSnapshot map[int]map[int][]PodReport
 
 // PodMonitor periodically replaces the complete OneKS pod view. It deliberately
-// uses polling because the receiver expects a snapshot, not an event stream
+// uses polling because OneKS expects an authoritative snapshot, not an event
+// stream. Pending pods are omitted because ObservationMonitor reports them
+// before they have a Node and therefore an OpenNebula placement.
 type PodMonitor struct {
 	client    kubernetes.Interface
 	publisher Publisher
@@ -43,6 +50,7 @@ type PodMonitor struct {
 	ready     atomic.Bool
 }
 
+// NewPodMonitor returns a pod snapshot poller. interval must be positive.
 func NewPodMonitor(
 	client kubernetes.Interface,
 	publisher Publisher,
@@ -55,6 +63,8 @@ func NewPodMonitor(
 	return &PodMonitor{client: client, publisher: publisher, resolver: resolver, interval: interval}, nil
 }
 
+// Run polls immediately and then at the configured interval. A failed poll is
+// logged and retried at the next interval; it does not terminate the monitor.
 func (m *PodMonitor) Run(ctx context.Context) error {
 	defer m.ready.Store(false)
 	log := ctrl.LoggerFrom(ctx).WithName("pod-monitor")
@@ -77,6 +87,9 @@ func (m *PodMonitor) Run(ctx context.Context) error {
 	}
 }
 
+// Ready reports whether Nodes and Pods have both been listed successfully at
+// least once. It does not require a successful OpenNebula resolution or OneKS
+// publication.
 func (m *PodMonitor) Ready() bool { return m.ready.Load() }
 
 func (m *PodMonitor) poll(ctx context.Context) error {
@@ -92,6 +105,8 @@ func (m *PodMonitor) poll(ctx context.Context) error {
 
 	snapshot, resolutionErrors := podSnapshot(ctx, nodes.Items, pods.Items, m.resolver)
 	if err := errors.Join(resolutionErrors...); err != nil {
+		// OneKS treats this as an authoritative replacement. Keep its prior view
+		// instead of erasing data for Nodes whose placement could not be resolved.
 		return fmt.Errorf("build complete pod snapshot: %w", err)
 	}
 	ctrl.LoggerFrom(ctx).WithName("pod-monitor").Info(

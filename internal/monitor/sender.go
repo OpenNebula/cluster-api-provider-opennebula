@@ -26,12 +26,25 @@ import (
 	"strings"
 )
 
-// Publisher is the monitor-facing interface implemented by the OneKS client.
-// Monitor components publish domain data without knowing HTTP paths or encryption
+// Publisher is the monitor-facing subset of the OneKS callback API. Components
+// publish domain data without knowing HTTP paths, authentication or encryption.
+//
+// ReplacePods and ReplaceObservations are authoritative replacements, not
+// patches. Their callers must not publish partial snapshots. PublishNodeReady
+// and PublishChartEvent report current state and may be delivered again after
+// an informer relist or process restart; OneKS must handle repeated reports.
 type Publisher interface {
+	// PublishNodeReady posts a node_ready event to
+	// /clusters/{clusterID}/nodegroups/{groupID}/events.
 	PublishNodeReady(context.Context, int, NodeReadyEvent) error
+	// ReplacePods replaces the complete pod view at
+	// /clusters/{clusterID}/pods. An empty snapshot clears the OneKS view.
 	ReplacePods(context.Context, PodSnapshot) error
+	// ReplaceObservations replaces the complete resource-observation view at
+	// /clusters/{clusterID}/observations. An empty snapshot clears the view.
 	ReplaceObservations(context.Context, ObservationSnapshot) error
+	// PublishChartEvent posts an application lifecycle event to
+	// /clusters/{clusterID}/events.
 	PublishChartEvent(context.Context, ChartEvent) error
 }
 
@@ -39,8 +52,12 @@ type encryptedEnvelope struct {
 	Payload string `json:"payload"`
 }
 
-// OneKSClient owns transport details shared by every monitor: endpoint paths,
-// authentication, encryption and HTTP response handling
+// OneKSClient implements Publisher for the OneKS callback API. It owns endpoint
+// paths, Basic authentication, AES-256-GCM envelopes and HTTP response handling.
+//
+// The wire envelope is {"payload":"<base64>"}. Its decoded payload is the
+// random GCM nonce followed by the authenticated ciphertext. Changes to paths,
+// JSON fields, event names or this envelope require a coordinated OneKS change.
 type OneKSClient struct {
 	endpoint  string
 	clusterID int
@@ -49,6 +66,9 @@ type OneKSClient struct {
 	client    *http.Client
 }
 
+// NewOneKSClient validates access to the authentication file and constructs the
+// encrypted OneKS callback transport. Redirects are rejected so credentials
+// and encrypted cluster data cannot be forwarded to another origin.
 func NewOneKSClient(config Config) (*OneKSClient, error) {
 	if _, err := readCredential(config.AuthFile); err != nil {
 		return nil, fmt.Errorf("configure monitor authentication: %w", err)
@@ -75,18 +95,22 @@ func NewOneKSClient(config Config) (*OneKSClient, error) {
 	}, nil
 }
 
+// PublishNodeReady implements Publisher.PublishNodeReady.
 func (c *OneKSClient) PublishNodeReady(ctx context.Context, groupID int, event NodeReadyEvent) error {
 	return c.send(ctx, c.clusterPath()+"/nodegroups/"+strconv.Itoa(groupID)+"/events", event)
 }
 
+// ReplacePods implements Publisher.ReplacePods.
 func (c *OneKSClient) ReplacePods(ctx context.Context, snapshot PodSnapshot) error {
 	return c.send(ctx, c.clusterPath()+"/pods", snapshot)
 }
 
+// ReplaceObservations implements Publisher.ReplaceObservations.
 func (c *OneKSClient) ReplaceObservations(ctx context.Context, snapshot ObservationSnapshot) error {
 	return c.send(ctx, c.clusterPath()+"/observations", snapshot)
 }
 
+// PublishChartEvent implements Publisher.PublishChartEvent.
 func (c *OneKSClient) PublishChartEvent(ctx context.Context, event ChartEvent) error {
 	return c.send(ctx, c.clusterPath()+"/events", event)
 }

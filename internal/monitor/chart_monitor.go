@@ -29,30 +29,55 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
+// helmChartGVR is the Rancher Helm controller resource watched for OneKS
+// application lifecycle changes.
 var helmChartGVR = schema.GroupVersionResource{
 	Group: "helm.cattle.io", Version: "v1", Resource: "helmcharts",
 }
 
+// applicationOperationGVR selects ConfigMaps used to report failures that
+// happen before a HelmChart exists.
 var applicationOperationGVR = schema.GroupVersionResource{
 	Group: "", Version: "v1", Resource: "configmaps",
 }
 
 const (
-	helmChartNamespace   = "kube-system"
-	managedLabel         = "oneks.opennebula.io/managed"
-	releaseAnnotation    = "oneks.opennebula.io/release-name"
-	parentAnnotation     = "oneks.opennebula.io/parent"
-	stateAnnotation      = "oneks.opennebula.io/state"
-	errorAnnotation      = "oneks.opennebula.io/error"
-	operationLabel       = "oneks.opennebula.io/operation"
+	// helmChartNamespace is where OneKS application HelmCharts and failed
+	// operation markers are created and observed.
+	helmChartNamespace = "kube-system"
+
+	// These labels and annotations form a cross-system protocol with OneKS and
+	// the component that creates HelmChart/operation objects. Renaming one or
+	// changing its accepted values requires a coordinated producer and OneKS
+	// server change.
+	// managedLabel selects objects whose lifecycle is owned by OneKS.
+	managedLabel = "oneks.opennebula.io/managed"
+	// releaseAnnotation identifies the OneKS application release and is required
+	// on every managed HelmChart and failed operation marker.
+	releaseAnnotation = "oneks.opennebula.io/release-name"
+	// parentAnnotation optionally associates a release with its parent release.
+	parentAnnotation = "oneks.opennebula.io/parent"
+	// stateAnnotation carries installing, ready, deleting or failed.
+	stateAnnotation = "oneks.opennebula.io/state"
+	// errorAnnotation contains the human-readable reason for a failed operation.
+	errorAnnotation = "oneks.opennebula.io/error"
+	// operationLabel distinguishes pre-Helm application operation markers from
+	// ordinary ConfigMaps selected by managedLabel.
+	operationLabel = "oneks.opennebula.io/operation"
+	// applicationOperation is the operationLabel value accepted by the monitor.
 	applicationOperation = "application"
 )
 
+// ChartEvent is an application lifecycle callback consumed by OneKS. Event is
+// app_state_changed for normal transitions and app_failed for failures.
 type ChartEvent struct {
 	Event   string            `json:"event"`
 	Payload ChartEventPayload `json:"payload"`
 }
 
+// ChartEventPayload identifies the release and the Kubernetes revision that
+// produced an application lifecycle callback. State is installing, ready,
+// deleting or done. ErrorMessage is populated only for app_failed.
 type ChartEventPayload struct {
 	ReleaseName     string      `json:"release_name"`
 	ResourceVersion json.Number `json:"resource_version"`
@@ -67,7 +92,12 @@ type pendingChart struct {
 }
 
 // ChartMonitor converts OneKS-managed HelmCharts and failed operation markers
-// into application lifecycle events.
+// into application lifecycle events. Managed objects must be in kube-system
+// and carry oneks.opennebula.io/managed=true.
+//
+// Its rate-limited queue stores the latest object per namespace/name. Updates
+// can therefore be coalesced while OneKS is unavailable: delivery converges on
+// the latest lifecycle state but is not an audit log of every transition.
 type ChartMonitor struct {
 	factory    dynamicinformer.DynamicSharedInformerFactory
 	charts     cache.SharedIndexInformer
@@ -80,6 +110,8 @@ type ChartMonitor struct {
 	ready   atomic.Bool
 }
 
+// NewChartMonitor constructs filtered HelmChart and ConfigMap informers. Run
+// must be called to synchronize them and start the delivery worker.
 func NewChartMonitor(dynamicClient dynamic.Interface, publisher Publisher) (*ChartMonitor, error) {
 	m := &ChartMonitor{
 		publisher: publisher,
@@ -121,6 +153,8 @@ func NewChartMonitor(dynamicClient dynamic.Interface, publisher Publisher) (*Cha
 	return m, nil
 }
 
+// Run synchronizes both application informers and retries OneKS delivery with
+// rate limiting until ctx is cancelled.
 func (m *ChartMonitor) Run(ctx context.Context) error {
 	defer runtime.HandleCrash()
 	m.factory.Start(ctx.Done())
@@ -139,6 +173,8 @@ func (m *ChartMonitor) Run(ctx context.Context) error {
 	return nil
 }
 
+// Ready reports whether both application informer caches have synchronized. It
+// does not imply that OneKS is currently reachable.
 func (m *ChartMonitor) Ready() bool { return m.ready.Load() }
 
 func (m *ChartMonitor) enqueue(obj any, deleted bool) {
@@ -238,6 +274,8 @@ func chartEvent(chart *unstructured.Unstructured, deleted bool) (ChartEvent, err
 		return ChartEvent{Event: "app_failed", Payload: payload}, nil
 	}
 	payload.State = "installing"
+	// OneKS interprets deletion completion as done. A deletion timestamp or
+	// explicit deleting state reports the in-progress transition instead.
 	switch {
 	case deleted:
 		payload.State = "done"

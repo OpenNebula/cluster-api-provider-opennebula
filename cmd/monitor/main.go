@@ -101,12 +101,18 @@ func main() {
 
 func healthHandler(manager *monitor.Manager) http.Handler {
 	mux := http.NewServeMux()
+	// Liveness only states that the process and its HTTP server are running.
+	// Transient Kubernetes, OpenNebula or OneKS failures must not trigger a
+	// restart because each monitor component owns its retry policy.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprintln(w, "ok")
 	})
+	// Readiness covers initial Kubernetes cache/list initialization for every
+	// component. It deliberately does not require current connectivity to
+	// OpenNebula or OneKS.
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		if !manager.Ready() {
-			http.Error(w, "informer cache is not synchronized", http.StatusServiceUnavailable)
+			http.Error(w, "monitor components are not ready", http.StatusServiceUnavailable)
 			return
 		}
 		_, _ = fmt.Fprintln(w, "ok")

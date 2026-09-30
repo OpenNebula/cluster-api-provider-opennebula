@@ -21,8 +21,14 @@ import (
 	goca_vm "github.com/OpenNebula/one/src/oca/go/src/goca/schemas/vm"
 )
 
-// PlacementResolver maps an OpenNebula VM to its owning OneKS group
+// PlacementResolver maps an OpenNebula VM to its owning OneKS nodegroup.
+//
+// The default implementation reads USER_TEMPLATE.ONEKS.CLUSTER_ID and
+// USER_TEMPLATE.ONEKS.GROUP_ID. It rejects VMs owned by another OneKS cluster
+// and caches successful results because placement is assumed immutable for the
+// lifetime of a VM.
 type PlacementResolver interface {
+	// GroupForVM returns the OneKS group ID that owns vmID.
 	GroupForVM(context.Context, int) (int, error)
 }
 
@@ -32,6 +38,9 @@ type gocaPlacementResolver struct {
 	groups    sync.Map
 }
 
+// NewPlacementResolver constructs an OpenNebula-backed resolver. Unlike OneKS
+// callback authentication, the OpenNebula client credential is read once at
+// startup and therefore requires a monitor restart after rotation.
 func NewPlacementResolver(config Config) (PlacementResolver, error) {
 	credential, err := readCredential(config.AuthFile)
 	if err != nil {
@@ -47,6 +56,7 @@ func NewPlacementResolver(config Config) (PlacementResolver, error) {
 	}, nil
 }
 
+// GroupForVM implements PlacementResolver.GroupForVM.
 func (r *gocaPlacementResolver) GroupForVM(ctx context.Context, vmID int) (int, error) {
 	// VM IDs and their OneKS placement are immutable for the VM lifetime, so a
 	// successful lookup can be safely reused by node events and pod snapshots
