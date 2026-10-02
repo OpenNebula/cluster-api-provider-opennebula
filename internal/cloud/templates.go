@@ -17,10 +17,27 @@ limitations under the License.
 package cloud
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 
 	goca "github.com/OpenNebula/one/src/oca/go/src/goca"
+	"github.com/OpenNebula/one/src/oca/go/src/goca/parameters"
 )
+
+// contentHashAttribute stores a hash of templateContent so changes can be detected.
+const contentHashAttribute = "CAPONE_CONTENT_SHA256"
+
+func contentHash(templateContent string) string {
+	sum := sha256.Sum256([]byte(templateContent))
+	return hex.EncodeToString(sum[:])
+}
+
+// templateBody leaves out NAME because an update keeps the existing name.
+func templateBody(templateClusterUID, templateContent string) string {
+	return fmt.Sprintf("CLUSTER_UID = \"%s\"\n%s = \"%s\"\n%s",
+		templateClusterUID, contentHashAttribute, contentHash(templateContent), templateContent)
+}
 
 type Templates struct {
 	ctrl       *goca.Controller
@@ -57,13 +74,17 @@ func (t *Templates) CreateTemplate(templateName, templateContent string) error {
 				return fmt.Errorf("Failed to delete existing VM template: %w", err)
 			}
 			createNew = true
+		} else if existingHash, _ := vmTemplate.Template.Get(contentHashAttribute); existingHash != contentHash(templateContent) {
+			// Only new VMs get the new content.
+			if err = t.ctrl.Template(existingID).Update(
+				templateBody(templateClusterUID, templateContent), parameters.Replace); err != nil {
+				return fmt.Errorf("Failed to update existing VM template: %w", err)
+			}
 		}
 	}
 
 	if createNew {
-		templateSpec := fmt.Sprintf(
-			"NAME = \"%s\"\nCLUSTER_UID = \"%s\"\n%s",
-			templateName, templateClusterUID, templateContent)
+		templateSpec := fmt.Sprintf("NAME = \"%s\"\n%s", templateName, templateBody(templateClusterUID, templateContent))
 		if _, err = t.ctrl.Templates().Create(templateSpec); err != nil {
 			return fmt.Errorf("Failed to create VM template: %w", err)
 		}
