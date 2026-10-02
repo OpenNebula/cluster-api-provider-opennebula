@@ -68,6 +68,11 @@ spec:
                   - imageName
                   type: object
                 type: array
+              machinesReadyBeforeControlPlaneInitialized:
+                description: |-
+                  MachinesReadyBeforeControlPlaneInitialized marks machines ready as soon as their VM exists.
+                  Needed by the Talos control plane provider, which uses the machine addresses to start the cluster.
+                type: boolean
               privateNetwork:
                 properties:
                   dns:
