@@ -116,7 +116,11 @@ func (r *Router) FromTemplate(
 	if publicNetwork != nil {
 		nicIndex++
 		nicVec := ensureNIC(vrTemplate, nicIndex)
-		nicVec.AddPair("NETWORK", publicNetwork.Name)
+		if publicNetwork.ID != nil {
+			nicVec.AddPair("NETWORK_ID", *publicNetwork.ID)
+		} else {
+			nicVec.AddPair("NETWORK", publicNetwork.Name)
+		}
 		nicVec.AddPair("FLOATING_IP", "YES")
 		if publicNetwork.FloatingOnly == nil || *publicNetwork.FloatingOnly {
 			// Avoid allocating extra IPs in public networks by default.
@@ -131,7 +135,11 @@ func (r *Router) FromTemplate(
 	if privateNetwork != nil {
 		nicIndex++
 		nicVec := ensureNIC(vrTemplate, nicIndex)
-		nicVec.AddPair("NETWORK", privateNetwork.Name)
+		if privateNetwork.ID != nil {
+			nicVec.AddPair("NETWORK_ID", *privateNetwork.ID)
+		} else {
+			nicVec.AddPair("NETWORK", privateNetwork.Name)
+		}
 		nicVec.AddPair("FLOATING_IP", "YES")
 		if privateNetwork.FloatingOnly == nil || !*privateNetwork.FloatingOnly {
 			nicVec.AddPair("FLOATING_ONLY", "NO")

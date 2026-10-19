@@ -66,6 +66,10 @@ type ONEVirtualRouter struct {
 }
 
 type ONEVirtualNetwork struct {
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	ID *int `json:"id,omitempty"`
+
 	// +required
 	Name string `json:"name"`
 
