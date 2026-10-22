@@ -118,7 +118,12 @@ func (m *Machine) FromTemplate(
 		// Overwrite NIC 0, leave others intact.
 		nicVec := ensureNIC(&vmTemplate.Template, 0)
 		nicVec.Del("NETWORK")
-		nicVec.AddPair("NETWORK", network.Name)
+		nicVec.Del("NETWORK_ID")
+		if network.ID != nil {
+			nicVec.AddPair("NETWORK_ID", *network.ID)
+		} else {
+			nicVec.AddPair("NETWORK", network.Name)
+		}
 		if network.Gateway != nil {
 			nicVec.Del("GATEWAY")
 			nicVec.AddPair("GATEWAY", *network.Gateway)

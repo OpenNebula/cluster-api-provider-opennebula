@@ -66,6 +66,14 @@ type ONEVirtualRouter struct {
 }
 
 type ONEVirtualNetwork struct {
+	// ID identifies the OpenNebula virtual network. When specified, it takes
+	// precedence over Name.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	ID *int `json:"id,omitempty"`
+
+	// Name identifies the OpenNebula virtual network and remains required for
+	// backwards compatibility.
 	// +required
 	Name string `json:"name"`
 
