@@ -92,6 +92,18 @@ func TestOneKSClientEncryptsAndSendsMonitorPayloads(t *testing.T) {
 		plaintext != `{"event":"app_state_changed","payload":{"release_name":"runai","resource_version":17,"state":"ready"}}` {
 		t.Fatalf("chart request path=%q plaintext=%s", path, plaintext)
 	}
+	if err := client.PublishModelDeploymentEvent(context.Background(), 23, ModelDeploymentEvent{
+		Event: "inference_ready",
+		Payload: ModelDeploymentEventPayload{
+			URL: "https://model.example.com", ResourceVersion: json.Number("18"),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if path != "/api/v1/model-deployments/23/events" ||
+		plaintext != `{"event":"inference_ready","payload":{"url":"https://model.example.com","resource_version":18}}` {
+		t.Fatalf("deployment request path=%q plaintext=%s", path, plaintext)
+	}
 }
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)

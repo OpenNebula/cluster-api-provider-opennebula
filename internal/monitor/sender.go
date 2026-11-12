@@ -46,6 +46,9 @@ type Publisher interface {
 	// PublishChartEvent posts an application lifecycle event to
 	// /clusters/{clusterID}/events.
 	PublishChartEvent(context.Context, ChartEvent) error
+	// PublishModelDeploymentEvent posts a serving lifecycle event to
+	// /model-deployments/{deploymentID}/events.
+	PublishModelDeploymentEvent(context.Context, int, ModelDeploymentEvent) error
 }
 
 type encryptedEnvelope struct {
@@ -113,6 +116,15 @@ func (c *OneKSClient) ReplaceObservations(ctx context.Context, snapshot Observat
 // PublishChartEvent implements Publisher.PublishChartEvent.
 func (c *OneKSClient) PublishChartEvent(ctx context.Context, event ChartEvent) error {
 	return c.send(ctx, c.clusterPath()+"/events", event)
+}
+
+// PublishModelDeploymentEvent implements Publisher.PublishModelDeploymentEvent.
+func (c *OneKSClient) PublishModelDeploymentEvent(
+	ctx context.Context,
+	deploymentID int,
+	event ModelDeploymentEvent,
+) error {
+	return c.send(ctx, "/model-deployments/"+strconv.Itoa(deploymentID)+"/events", event)
 }
 
 func (c *OneKSClient) clusterPath() string {
