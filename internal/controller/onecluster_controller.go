@@ -114,7 +114,7 @@ func (r *ONEClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{}, err
 		}
 		if len(oneCluster.Spec.Images) > 0 {
-			externalImages, err = cloud.NewImages(cloudClients)
+			externalImages, err = cloud.NewImages(cloudClients, oneCluster.Annotations[cloud.ImageLookupScopeAnnotation])
 			if err != nil {
 				return ctrl.Result{}, errors.Wrap(err, "failed to initialize cloud images")
 			}

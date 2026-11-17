@@ -18,25 +18,43 @@ package cloud
 
 import (
 	"fmt"
+	"strconv"
 
 	goca "github.com/OpenNebula/one/src/oca/go/src/goca"
+	goca_params "github.com/OpenNebula/one/src/oca/go/src/goca/parameters"
 	goca_image "github.com/OpenNebula/one/src/oca/go/src/goca/schemas/image"
 )
 
+// ImageLookupScopeAnnotation selects the OpenNebula image pool lookup scope.
+const ImageLookupScopeAnnotation = "capone.opennebula.io/image-lookup-scope"
+
 type Images struct {
-	ctrl *goca.Controller
+	ctrl        *goca.Controller
+	lookupScope int
 }
 
-func NewImages(clients *Clients) (*Images, error) {
+func NewImages(clients *Clients, lookupScope string) (*Images, error) {
 	if clients == nil {
 		return nil, fmt.Errorf("clients reference is nil")
 	}
 
-	return &Images{ctrl: goca.NewController(clients.RPC2)}, nil
+	scope := goca_params.PoolWhoAll
+	if lookupScope != "" {
+		var err error
+		scope, err = strconv.Atoi(lookupScope)
+		if err != nil || scope < goca_params.PoolWhoPrimaryGroup || scope > goca_params.PoolWhoGroup {
+			return nil, fmt.Errorf(
+				"invalid image lookup scope %q: expected an integer from %d to %d",
+				lookupScope, goca_params.PoolWhoPrimaryGroup, goca_params.PoolWhoGroup,
+			)
+		}
+	}
+
+	return &Images{ctrl: goca.NewController(clients.RPC2), lookupScope: scope}, nil
 }
 
 func (i *Images) CreateImage(imageName, imageContent string, datastoreId uint) error {
-	existingImageID, err := i.ctrl.Images().ByName(imageName)
+	existingImageID, err := i.ctrl.Images().ByName(imageName, i.lookupScope)
 	if err != nil && err.Error() != "resource not found" {
 		return err
 	}
@@ -52,7 +70,7 @@ func (i *Images) CreateImage(imageName, imageContent string, datastoreId uint) e
 }
 
 func (i *Images) ImageReady(imageName string) (bool, error) {
-	existingImageID, err := i.ctrl.Images().ByName(imageName)
+	existingImageID, err := i.ctrl.Images().ByName(imageName, i.lookupScope)
 	if err != nil {
 		return false, fmt.Errorf("Failed to find Image template: %s, %w", imageName, err)
 	}
