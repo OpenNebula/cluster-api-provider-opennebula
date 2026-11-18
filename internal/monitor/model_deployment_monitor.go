@@ -109,6 +109,7 @@ func NewModelDeploymentMonitor(
 // Run synchronizes the KServe cache and retries delivery until cancellation.
 func (m *ModelDeploymentMonitor) Run(ctx context.Context) error {
 	defer runtime.HandleCrash()
+	defer m.queue.ShutDown()
 	log := ctrl.Log.WithName("model-deployment-monitor")
 
 	// OneLLM is optional. Discovering the API before listing avoids treating an
