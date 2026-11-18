@@ -280,6 +280,12 @@ func modelDeploymentEvent(
 		return id, event, nil
 	}
 
+	// Retained conditions can describe an older spec or a terminating resource.
+	observed, found, err := unstructured.NestedInt64(resource.Object, "status", "observedGeneration")
+	if resource.GetDeletionTimestamp() != nil || err != nil || !found || observed != resource.GetGeneration() {
+		return id, ModelDeploymentEvent{}, nil
+	}
+
 	ready := kserveReadyCondition(resource)
 	if ready == nil {
 		return id, ModelDeploymentEvent{}, nil
@@ -333,7 +339,11 @@ func modelDeploymentEventSignature(obj any) string {
 		reason = stringValue(ready["reason"])
 		message = stringValue(ready["message"])
 	}
-	return fmt.Sprintf("%s\x00%s\x00%s\x00%s", url, status, reason, message)
+	observed, _, _ := unstructured.NestedInt64(resource.Object, "status", "observedGeneration")
+	return fmt.Sprintf("%s\x00%d\x00%d\x00%s\x00%v\x00%s\x00%s\x00%s\x00%s",
+		resource.GetUID(), resource.GetGeneration(), observed,
+		resource.GetLabels()[modelDeploymentIDLabel], resource.GetDeletionTimestamp(),
+		url, status, reason, message)
 }
 
 func stringValue(value any) string {
