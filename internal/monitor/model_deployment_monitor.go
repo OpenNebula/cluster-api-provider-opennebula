@@ -117,7 +117,7 @@ func (m *ModelDeploymentMonitor) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("discover LLMInferenceService API: %w", err)
 	}
-	m.ready.Store(true)
+	m.ready.Store(!apiAvailable)
 	defer m.ready.Store(false)
 
 	if !apiAvailable {
@@ -138,6 +138,7 @@ func (m *ModelDeploymentMonitor) Run(ctx context.Context) error {
 		}
 	}
 
+	m.ready.Store(false)
 	m.factory.Start(ctx.Done())
 	if !cache.WaitForCacheSync(ctx.Done(), m.resources.HasSynced) {
 		if ctx.Err() != nil {
@@ -145,6 +146,7 @@ func (m *ModelDeploymentMonitor) Run(ctx context.Context) error {
 		}
 		return fmt.Errorf("initial LLMInferenceService informer cache sync failed")
 	}
+	m.ready.Store(true)
 	log.Info("LLMInferenceService cache synchronized")
 
 	go func() {
