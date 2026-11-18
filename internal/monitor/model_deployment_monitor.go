@@ -38,7 +38,6 @@ var modelDeploymentGVR = schema.GroupVersionResource{
 }
 
 const (
-	modelDeploymentNamespace         = "onellm-system"
 	modelDeploymentIDLabel           = "oneks.opennebula.io/model-deployment-id"
 	modelDeploymentDiscoveryInterval = 30 * time.Second
 )
@@ -88,7 +87,7 @@ func NewModelDeploymentMonitor(
 		pending: make(map[string]pendingModelDeployment),
 	}
 	m.factory = dynamicinformer.NewFilteredDynamicSharedInformerFactory(
-		dynamicClient, 0, modelDeploymentNamespace, func(options *metav1.ListOptions) {
+		dynamicClient, 0, metav1.NamespaceAll, func(options *metav1.ListOptions) {
 			options.LabelSelector = modelDeploymentIDLabel
 		},
 	)
