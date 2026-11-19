@@ -27,7 +27,6 @@ func TestModelDeploymentAPIDiscovery(t *testing.T) {
 	if err != nil || available {
 		t.Fatalf("missing API: available=%t err=%v", available, err)
 	}
-
 	fake.Resources = []*metav1.APIResourceList{{
 		GroupVersion: modelDeploymentGVR.GroupVersion().String(),
 		APIResources: []metav1.APIResource{{Name: modelDeploymentGVR.Resource}},
@@ -76,8 +75,62 @@ func TestModelDeploymentFailureIncludesControllerMessage(t *testing.T) {
 	}
 }
 
+func TestModelDeploymentErrorReasonIsReported(t *testing.T) {
+	resource := testLLMInferenceService(
+		"False", "ReconcileSingleNodeWorkloadError", "cannot reconcile workload", "",
+	)
+	id, event, err := modelDeploymentEvent(resource, false)
+	if err != nil || id != 42 || event.Event != "deployment_failed" ||
+		event.Payload.Reason != "ReconcileSingleNodeWorkloadError" {
+		t.Fatalf("unexpected event: %#v err=%v", event, err)
+	}
+}
+
+func TestModelDeploymentConfigurationMissingIsReported(t *testing.T) {
+	resource := testLLMInferenceService("False", "ConfigNotFound", "configuration missing", "")
+	_, event, err := modelDeploymentEvent(resource, false)
+	if err != nil || event.Event != "deployment_failed" {
+		t.Fatalf("unexpected event: %#v err=%v", event, err)
+	}
+}
+
+func TestModelDeploymentSignatureIncludesDeploymentID(t *testing.T) {
+	original := testLLMInferenceService("True", "Ready", "", "https://model.example.com")
+	updated := original.DeepCopy()
+	updated.SetLabels(map[string]string{modelDeploymentIDLabel: "43"})
+	if modelDeploymentEventSignature(original) == modelDeploymentEventSignature(updated) {
+		t.Fatal("deployment ID change must trigger an update")
+	}
+}
+
+func TestModelDeploymentWaitsForObservedGeneration(t *testing.T) {
+	for _, status := range []string{"True", "False"} {
+		t.Run(status, func(t *testing.T) {
+			resource := testLLMInferenceService(status, "ModelLoadFailed", "", "https://model.example.com")
+			resource.SetGeneration(resource.GetGeneration() + 1)
+			staleSignature := modelDeploymentEventSignature(resource)
+			if _, event, err := modelDeploymentEvent(resource, false); err != nil || event.Event != "" {
+				t.Fatalf("stale status produced event=%#v err=%v", event, err)
+			}
+
+			resource.Object["status"].(map[string]any)["observedGeneration"] = resource.GetGeneration()
+			if staleSignature == modelDeploymentEventSignature(resource) {
+				t.Fatal("generation acknowledgment must trigger an update")
+			}
+			if _, event, err := modelDeploymentEvent(resource, false); err != nil || event.Event == "" {
+				t.Fatalf("current status produced event=%#v err=%v", event, err)
+			}
+		})
+	}
+}
+
 func TestModelDeploymentDeletionEvent(t *testing.T) {
 	resource := testLLMInferenceService("True", "Ready", "", "https://model.example.com")
+	now := metav1.Now()
+	resource.SetDeletionTimestamp(&now)
+	if _, event, err := modelDeploymentEvent(resource, false); err != nil || event.Event != "" {
+		t.Fatalf("terminating resource produced event=%#v err=%v", event, err)
+	}
 	id, event, err := modelDeploymentEvent(resource, true)
 	if err != nil || id != 42 || event.Event != "resources_deleted" {
 		t.Fatalf("event=%#v err=%v", event, err)
@@ -97,14 +150,15 @@ func testLLMInferenceService(status, reason, message, url string) *unstructured.
 		"apiVersion": "serving.kserve.io/v1alpha2",
 		"kind":       "LLMInferenceService",
 		"status": map[string]any{
-			"url": url,
+			"url":                url,
+			"observedGeneration": int64(2),
 			"conditions": []any{map[string]any{
 				"type": "Ready", "status": status, "reason": reason, "message": message,
 			}},
 		},
 	}}
 	resource.SetName("onellm-42")
-	resource.SetNamespace(modelDeploymentNamespace)
+	resource.SetNamespace("onellm-system")
 	resource.SetGeneration(2)
 	resource.SetResourceVersion("17")
 	resource.SetLabels(map[string]string{modelDeploymentIDLabel: "42"})

@@ -61,7 +61,6 @@ type pendingModelDeployment struct {
 
 // ModelDeploymentMonitor converts LLMInferenceService status into OneKS events.
 type ModelDeploymentMonitor struct {
-	factory   dynamicinformer.DynamicSharedInformerFactory
 	resources cache.SharedIndexInformer
 	discovery discovery.DiscoveryInterface
 	publisher Publisher
@@ -86,12 +85,12 @@ func NewModelDeploymentMonitor(
 		),
 		pending: make(map[string]pendingModelDeployment),
 	}
-	m.factory = dynamicinformer.NewFilteredDynamicSharedInformerFactory(
-		dynamicClient, 0, metav1.NamespaceAll, func(options *metav1.ListOptions) {
+	m.resources = dynamicinformer.NewFilteredDynamicInformer(
+		dynamicClient, modelDeploymentGVR, metav1.NamespaceAll, 0, nil,
+		func(options *metav1.ListOptions) {
 			options.LabelSelector = modelDeploymentIDLabel
 		},
-	)
-	m.resources = m.factory.ForResource(modelDeploymentGVR).Informer()
+	).Informer()
 	if _, err := m.resources.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj any) { m.enqueue(obj, false) },
 		UpdateFunc: func(oldObj, newObj any) {
@@ -111,21 +110,20 @@ func (m *ModelDeploymentMonitor) Run(ctx context.Context) error {
 	defer runtime.HandleCrash()
 	defer m.queue.ShutDown()
 	log := ctrl.Log.WithName("model-deployment-monitor")
-
 	// OneLLM is optional. Discovering the API before listing avoids treating an
 	// authorization response as proof that a not-yet-installed CRD exists.
 	apiAvailable, err := m.apiAvailable()
 	if err != nil {
 		return fmt.Errorf("discover LLMInferenceService API: %w", err)
 	}
-	m.ready.Store(!apiAvailable)
 	defer m.ready.Store(false)
 
 	if !apiAvailable {
+		// OneLLM is optional; an absent CRD must not block monitor readiness.
+		m.ready.Store(true)
 		log.Info("LLMInferenceService API is not installed; waiting for OneLLM")
 		ticker := time.NewTicker(modelDeploymentDiscoveryInterval)
 		defer ticker.Stop()
-
 		for !apiAvailable {
 			select {
 			case <-ctx.Done():
@@ -139,8 +137,9 @@ func (m *ModelDeploymentMonitor) Run(ctx context.Context) error {
 		}
 	}
 
+	// Once the API is present, readiness requires a synchronized informer cache.
 	m.ready.Store(false)
-	m.factory.Start(ctx.Done())
+	go m.resources.Run(ctx.Done())
 	if !cache.WaitForCacheSync(ctx.Done(), m.resources.HasSynced) {
 		if ctx.Err() != nil {
 			return nil
@@ -149,7 +148,6 @@ func (m *ModelDeploymentMonitor) Run(ctx context.Context) error {
 	}
 	m.ready.Store(true)
 	log.Info("LLMInferenceService cache synchronized")
-
 	go func() {
 		<-ctx.Done()
 		m.queue.ShutDown()
@@ -208,17 +206,13 @@ func (m *ModelDeploymentMonitor) processNext(ctx context.Context) bool {
 		m.queue.Forget(key)
 		return true
 	}
-
 	deploymentID, event, err := modelDeploymentEvent(pending.resource, pending.deleted)
 	if err != nil {
 		ctrl.LoggerFrom(ctx).WithName("model-deployment-monitor").Error(
 			err, "invalid LLMInferenceService", "resource", key,
 		)
-		m.forgetPending(key, pending)
-		m.queue.Forget(key)
-		return true
 	}
-	if event.Event == "" {
+	if err != nil || event.Event == "" {
 		m.forgetPending(key, pending)
 		m.queue.Forget(key)
 		return true
@@ -303,7 +297,7 @@ func modelDeploymentEvent(
 		event.Payload.URL = url
 	case "False":
 		reason := strings.TrimSpace(stringValue(ready["reason"]))
-		if !strings.HasSuffix(reason, "Failed") {
+		if !modelDeploymentFailureReason(reason) {
 			return id, ModelDeploymentEvent{}, nil
 		}
 		event.Event = "deployment_failed"
@@ -316,6 +310,15 @@ func modelDeploymentEvent(
 		return id, ModelDeploymentEvent{}, nil
 	}
 	return id, event, nil
+}
+
+// KServe reports both failure and error reasons. Keep transient NotReady
+// reasons (such as WaitingForGateway) out of the failure notification path.
+func modelDeploymentFailureReason(reason string) bool {
+	return strings.HasSuffix(reason, "Failed") ||
+		strings.HasSuffix(reason, "Error") ||
+		reason == "ConfigNotFound" ||
+		reason == "ScalingCRDNotFound"
 }
 
 func kserveReadyCondition(resource *unstructured.Unstructured) map[string]any {
