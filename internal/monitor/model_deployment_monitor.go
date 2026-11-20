@@ -24,6 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
@@ -278,8 +279,7 @@ func modelDeploymentEvent(
 	}
 
 	// Retained conditions can describe an older spec or a terminating resource.
-	observed, found, err := unstructured.NestedInt64(resource.Object, "status", "observedGeneration")
-	if resource.GetDeletionTimestamp() != nil || err != nil || !found || observed != resource.GetGeneration() {
+	if resource.GetDeletionTimestamp() != nil || !modelDeploymentStatusIsCurrent(resource) {
 		return id, ModelDeploymentEvent{}, nil
 	}
 
@@ -332,24 +332,41 @@ func kserveReadyCondition(resource *unstructured.Unstructured) map[string]any {
 	return nil
 }
 
-func modelDeploymentEventSignature(obj any) string {
+func modelDeploymentStatusIsCurrent(resource *unstructured.Unstructured) bool {
+	observed, found, err := unstructured.NestedInt64(resource.Object, "status", "observedGeneration")
+	return err == nil && found && observed == resource.GetGeneration()
+}
+
+type modelDeploymentStatusSnapshot struct {
+	uid           types.UID
+	deploymentID  string
+	generation    int64
+	statusCurrent bool
+	terminating   bool
+	url           string
+	status        string
+	reason        string
+	message       string
+}
+
+func modelDeploymentEventSignature(obj any) modelDeploymentStatusSnapshot {
 	resource, ok := modelDeploymentFromEvent(obj)
 	if !ok {
-		return ""
+		return modelDeploymentStatusSnapshot{}
 	}
 	url, _, _ := unstructured.NestedString(resource.Object, "status", "url")
 	ready := kserveReadyCondition(resource)
-	var status, reason, message string
-	if ready != nil {
-		status = stringValue(ready["status"])
-		reason = stringValue(ready["reason"])
-		message = stringValue(ready["message"])
+	return modelDeploymentStatusSnapshot{
+		uid:           resource.GetUID(),
+		deploymentID:  resource.GetLabels()[modelDeploymentIDLabel],
+		generation:    resource.GetGeneration(),
+		statusCurrent: modelDeploymentStatusIsCurrent(resource),
+		terminating:   resource.GetDeletionTimestamp() != nil,
+		url:           url,
+		status:        stringValue(ready["status"]),
+		reason:        stringValue(ready["reason"]),
+		message:       stringValue(ready["message"]),
 	}
-	observed, _, _ := unstructured.NestedInt64(resource.Object, "status", "observedGeneration")
-	return fmt.Sprintf("%s\x00%d\x00%d\x00%s\x00%v\x00%s\x00%s\x00%s\x00%s",
-		resource.GetUID(), resource.GetGeneration(), observed,
-		resource.GetLabels()[modelDeploymentIDLabel], resource.GetDeletionTimestamp(),
-		url, status, reason, message)
 }
 
 func stringValue(value any) string {
