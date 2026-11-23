@@ -12,10 +12,7 @@ package monitor
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,7 +21,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
@@ -34,33 +30,25 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
+// modelDeploymentGVR identifies KServe LLMInferenceService resources.
 var modelDeploymentGVR = schema.GroupVersionResource{
 	Group: "serving.kserve.io", Version: "v1alpha2", Resource: "llminferenceservices",
 }
 
 const (
+	// modelDeploymentIDLabel maps a Kubernetes resource to OneKS.
 	modelDeploymentIDLabel           = "oneks.opennebula.io/model-deployment-id"
 	modelDeploymentDiscoveryInterval = 30 * time.Second
 )
 
-type ModelDeploymentEvent struct {
-	Event   string                      `json:"event"`
-	Payload ModelDeploymentEventPayload `json:"payload"`
-}
-
-type ModelDeploymentEventPayload struct {
-	URL             string      `json:"url,omitempty"`
-	ErrorMessage    string      `json:"error_msg,omitempty"`
-	Reason          string      `json:"reason,omitempty"`
-	ResourceVersion json.Number `json:"resource_version"`
-}
-
 type pendingModelDeployment struct {
+	// Informer objects are read-only, so the queue stores a copy.
 	resource *unstructured.Unstructured
 	deleted  bool
 }
 
 // ModelDeploymentMonitor converts LLMInferenceService status into OneKS events.
+// It coalesces updates and delivers the latest state when OneKS is unavailable.
 type ModelDeploymentMonitor struct {
 	resources cache.SharedIndexInformer
 	discovery discovery.DiscoveryInterface
@@ -86,6 +74,7 @@ func NewModelDeploymentMonitor(
 		),
 		pending: make(map[string]pendingModelDeployment),
 	}
+	// Watch the optional KServe CRD without importing its Go types.
 	m.resources = dynamicinformer.NewFilteredDynamicInformer(
 		dynamicClient, modelDeploymentGVR, metav1.NamespaceAll, 0, nil,
 		func(options *metav1.ListOptions) {
@@ -93,8 +82,10 @@ func NewModelDeploymentMonitor(
 		},
 	).Informer()
 	if _, err := m.resources.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		// Add also receives resources found by the informer's initial list.
 		AddFunc: func(obj any) { m.enqueue(obj, false) },
 		UpdateFunc: func(oldObj, newObj any) {
+			// Ignore updates that cannot alter the OneKS callback.
 			if modelDeploymentEventSignature(oldObj) != modelDeploymentEventSignature(newObj) {
 				m.enqueue(newObj, false)
 			}
@@ -159,6 +150,7 @@ func (m *ModelDeploymentMonitor) Run(ctx context.Context) error {
 }
 
 func (m *ModelDeploymentMonitor) apiAvailable() (bool, error) {
+	// Kubernetes discovery reports which API groups and resources are installed.
 	resources, err := m.discovery.ServerResourcesForGroupVersion(
 		modelDeploymentGVR.GroupVersion().String(),
 	)
@@ -187,6 +179,7 @@ func (m *ModelDeploymentMonitor) enqueue(obj any, deleted bool) {
 		return
 	}
 	key := resource.GetNamespace() + "/" + resource.GetName()
+	// Keep only the latest object for each namespace/name.
 	m.mu.Lock()
 	m.pending[key] = pendingModelDeployment{resource: resource.DeepCopy(), deleted: deleted}
 	m.mu.Unlock()
@@ -223,6 +216,7 @@ func (m *ModelDeploymentMonitor) processNext(ctx context.Context) bool {
 	)
 	if err := m.publisher.PublishModelDeploymentEvent(ctx, deploymentID, event); err != nil {
 		log.Error(err, "unable to send model deployment event")
+		// AddRateLimited retries transient HTTP failures with client-go backoff.
 		m.queue.AddRateLimited(key)
 		return true
 	}
@@ -244,6 +238,7 @@ func (m *ModelDeploymentMonitor) forgetPending(key string, processed pendingMode
 }
 
 func modelDeploymentFromEvent(obj any) (*unstructured.Unstructured, bool) {
+	// A tombstone represents an object already missing from the informer cache.
 	if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
 		obj = tombstone.Obj
 	}
@@ -252,124 +247,4 @@ func modelDeploymentFromEvent(obj any) (*unstructured.Unstructured, bool) {
 		return nil, false
 	}
 	return resource, true
-}
-
-func modelDeploymentEvent(
-	resource *unstructured.Unstructured,
-	deleted bool,
-) (int, ModelDeploymentEvent, error) {
-	id, err := strconv.Atoi(resource.GetLabels()[modelDeploymentIDLabel])
-	if err != nil || id < 0 {
-		return 0, ModelDeploymentEvent{}, fmt.Errorf(
-			"label %s must be a non-negative integer", modelDeploymentIDLabel,
-		)
-	}
-	version := resource.GetResourceVersion()
-	if !decimalNumber(version) {
-		return 0, ModelDeploymentEvent{}, fmt.Errorf(
-			"resourceVersion must be a non-negative integer: %q", version,
-		)
-	}
-	event := ModelDeploymentEvent{
-		Payload: ModelDeploymentEventPayload{ResourceVersion: json.Number(version)},
-	}
-	if deleted {
-		event.Event = "resources_deleted"
-		return id, event, nil
-	}
-
-	// Retained conditions can describe an older spec or a terminating resource.
-	if resource.GetDeletionTimestamp() != nil || !modelDeploymentStatusIsCurrent(resource) {
-		return id, ModelDeploymentEvent{}, nil
-	}
-
-	ready := kserveReadyCondition(resource)
-	if ready == nil {
-		return id, ModelDeploymentEvent{}, nil
-	}
-	switch stringValue(ready["status"]) {
-	case "True":
-		url, _, err := unstructured.NestedString(resource.Object, "status", "url")
-		if err != nil || strings.TrimSpace(url) == "" {
-			return id, ModelDeploymentEvent{}, err
-		}
-		event.Event = "inference_ready"
-		event.Payload.URL = url
-	case "False":
-		reason := strings.TrimSpace(stringValue(ready["reason"]))
-		if !modelDeploymentFailureReason(reason) {
-			return id, ModelDeploymentEvent{}, nil
-		}
-		event.Event = "deployment_failed"
-		event.Payload.Reason = reason
-		event.Payload.ErrorMessage = strings.TrimSpace(stringValue(ready["message"]))
-		if event.Payload.ErrorMessage == "" {
-			event.Payload.ErrorMessage = reason
-		}
-	default:
-		return id, ModelDeploymentEvent{}, nil
-	}
-	return id, event, nil
-}
-
-// KServe reports both failure and error reasons. Keep transient NotReady
-// reasons (such as WaitingForGateway) out of the failure notification path.
-func modelDeploymentFailureReason(reason string) bool {
-	return strings.HasSuffix(reason, "Failed") ||
-		strings.HasSuffix(reason, "Error") ||
-		reason == "ConfigNotFound" ||
-		reason == "ScalingCRDNotFound"
-}
-
-func kserveReadyCondition(resource *unstructured.Unstructured) map[string]any {
-	conditions, _, _ := unstructured.NestedSlice(resource.Object, "status", "conditions")
-	for _, raw := range conditions {
-		condition, ok := raw.(map[string]any)
-		if ok && stringValue(condition["type"]) == "Ready" {
-			return condition
-		}
-	}
-	return nil
-}
-
-func modelDeploymentStatusIsCurrent(resource *unstructured.Unstructured) bool {
-	observed, found, err := unstructured.NestedInt64(resource.Object, "status", "observedGeneration")
-	return err == nil && found && observed == resource.GetGeneration()
-}
-
-type modelDeploymentStatusSnapshot struct {
-	uid           types.UID
-	deploymentID  string
-	generation    int64
-	statusCurrent bool
-	terminating   bool
-	url           string
-	status        string
-	reason        string
-	message       string
-}
-
-func modelDeploymentEventSignature(obj any) modelDeploymentStatusSnapshot {
-	resource, ok := modelDeploymentFromEvent(obj)
-	if !ok {
-		return modelDeploymentStatusSnapshot{}
-	}
-	url, _, _ := unstructured.NestedString(resource.Object, "status", "url")
-	ready := kserveReadyCondition(resource)
-	return modelDeploymentStatusSnapshot{
-		uid:           resource.GetUID(),
-		deploymentID:  resource.GetLabels()[modelDeploymentIDLabel],
-		generation:    resource.GetGeneration(),
-		statusCurrent: modelDeploymentStatusIsCurrent(resource),
-		terminating:   resource.GetDeletionTimestamp() != nil,
-		url:           url,
-		status:        stringValue(ready["status"]),
-		reason:        stringValue(ready["reason"]),
-		message:       stringValue(ready["message"]),
-	}
-}
-
-func stringValue(value any) string {
-	text, _ := value.(string)
-	return text
 }
