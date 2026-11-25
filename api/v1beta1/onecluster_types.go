@@ -49,6 +49,11 @@ type ONEClusterSpec struct {
 
 	// +optional
 	Templates []*ONETemplate `json:"templates,omitempty"`
+
+	// MachinesReadyBeforeControlPlaneInitialized marks machines ready as soon as their VM exists.
+	// Needed by the Talos control plane provider, which uses the machine addresses to start the cluster.
+	// +optional
+	MachinesReadyBeforeControlPlaneInitialized bool `json:"machinesReadyBeforeControlPlaneInitialized,omitempty"`
 }
 
 type ONEVirtualRouter struct {

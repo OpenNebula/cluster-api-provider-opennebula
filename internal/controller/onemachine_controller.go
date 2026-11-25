@@ -252,13 +252,20 @@ func (r *ONEMachineReconciler) reconcileNormal(
 	}
 	setMachineAddress(oneMachine, externalMachine.Address4)
 
-	if cluster.Spec.ControlPlaneRef != nil && !conditions.IsTrue(cluster, clusterv1.ControlPlaneInitializedCondition) {
+	if waitForControlPlaneInitialized(cluster, oneCluster) {
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
 	oneMachine.Spec.ProviderID = externalMachine.ProviderID()
 	oneMachine.Status.Ready = true
 	return ctrl.Result{}, nil
+}
+
+// waitForControlPlaneInitialized keeps machines unready until the control plane is up, unless the ONECluster opts out.
+func waitForControlPlaneInitialized(cluster *clusterv1.Cluster, oneCluster *infrav1.ONECluster) bool {
+	return cluster.Spec.ControlPlaneRef != nil &&
+		!oneCluster.Spec.MachinesReadyBeforeControlPlaneInitialized &&
+		!conditions.IsTrue(cluster, clusterv1.ControlPlaneInitializedCondition)
 }
 
 func setMachineAddress(oneMachine *infrav1.ONEMachine, address string) {
