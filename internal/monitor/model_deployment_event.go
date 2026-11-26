@@ -15,9 +15,17 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+)
+
+const (
+	modelDeploymentFailureGracePeriod = 15 * time.Minute
+	modelLoadFailedReason             = "ModelLoadFailed"
+	kubernetesConditionFalse          = "False"
+	kubernetesConditionUnknown        = "Unknown"
 )
 
 // ModelDeploymentEvent is a serving lifecycle callback consumed by OneKS.
@@ -81,11 +89,9 @@ func modelDeploymentEvent(
 		event.Event = "inference_ready"
 		event.Payload.URL = url
 		return id, event, nil
-	case "False":
-		// Ready itself contains the terminal failure details.
-	case "Unknown":
-		// Ready=Unknown keeps the useful error on a component condition.
-		ready = kserveTerminalFailureCondition(resource)
+	case kubernetesConditionFalse, kubernetesConditionUnknown:
+		// Ready=Unknown may keep the useful error on a component condition.
+		ready = modelDeploymentFailureCondition(resource)
 		if ready == nil {
 			return id, ModelDeploymentEvent{}, nil
 		}
@@ -93,7 +99,8 @@ func modelDeploymentEvent(
 		return id, ModelDeploymentEvent{}, nil
 	}
 	reason := strings.TrimSpace(stringValue(ready["reason"]))
-	if !modelDeploymentFailureReason(reason) {
+	if modelDeploymentFailureNeedsGrace(reason) &&
+		modelDeploymentFailureRetryAfter(resource, ready, time.Now()) > 0 {
 		return id, ModelDeploymentEvent{}, nil
 	}
 	event.Event = "deployment_failed"
@@ -105,13 +112,68 @@ func modelDeploymentEvent(
 	return id, event, nil
 }
 
-// KServe reports both failure and error reasons. Keep transient NotReady
-// reasons (such as WaitingForGateway) out of the failure notification path.
+func modelDeploymentFailureCondition(resource *unstructured.Unstructured) map[string]any {
+	ready := kserveReadyCondition(resource)
+	switch stringValue(ready["status"]) {
+	case kubernetesConditionFalse:
+		if modelDeploymentFailureReason(strings.TrimSpace(stringValue(ready["reason"]))) {
+			return ready
+		}
+	case kubernetesConditionUnknown:
+		return kserveTerminalFailureCondition(resource)
+	}
+	return nil
+}
+
+// Keep this list explicit. KServe uses many Error/Failed reasons for
+// recoverable reconciliation attempts, so suffix matching creates false
+// deployment failures.
 func modelDeploymentFailureReason(reason string) bool {
-	return strings.HasSuffix(reason, "Failed") ||
-		strings.HasSuffix(reason, "Error") ||
-		reason == "ConfigNotFound" ||
-		reason == "ScalingCRDNotFound"
+	if modelDeploymentFailureNeedsGrace(reason) {
+		return true
+	}
+	switch reason {
+	case "CombineBaseError", "ConfigNotFound", modelLoadFailedReason,
+		"ProgressDeadlineExceeded", "ScalingCRDNotFound":
+		return true
+	default:
+		return false
+	}
+}
+
+func modelDeploymentFailureNeedsGrace(reason string) bool {
+	switch reason {
+	case "FailedGetExternalMetric", "HTTPRouteFetchError", "InferencePoolFetchError",
+		"MinimumReplicasUnavailable", "PlatformNetworkingReconcileError",
+		"ReconcileCertsError", "ReconcileSingleNodeWorkloadError",
+		"ReconcileWorkloadServiceError", "RefsInvalid", "SchedulerReconcileError":
+		return true
+	default:
+		return false
+	}
+}
+
+func modelDeploymentFailureRetryAfter(
+	resource *unstructured.Unstructured,
+	condition map[string]any,
+	now time.Time,
+) time.Duration {
+	reason := strings.TrimSpace(stringValue(condition["reason"]))
+	if !modelDeploymentFailureNeedsGrace(reason) {
+		return 0
+	}
+	transition, err := time.Parse(time.RFC3339, stringValue(condition["lastTransitionTime"]))
+	if err != nil {
+		transition = resource.GetCreationTimestamp().Time
+	}
+	if transition.IsZero() {
+		return 0
+	}
+	remaining := transition.Add(modelDeploymentFailureGracePeriod).Sub(now)
+	if remaining > 0 {
+		return remaining
+	}
+	return 0
 }
 
 func kserveReadyCondition(resource *unstructured.Unstructured) map[string]any {
@@ -126,17 +188,24 @@ func kserveReadyCondition(resource *unstructured.Unstructured) map[string]any {
 	return nil
 }
 
-// kserveTerminalFailureCondition finds a terminal component error.
+// kserveTerminalFailureCondition only examines workload rollup leaves and the
+// preset condition. Other conditions may be false without preventing serving.
 func kserveTerminalFailureCondition(resource *unstructured.Unstructured) map[string]any {
 	conditions, _, _ := unstructured.NestedSlice(resource.Object, "status", "conditions")
 	for _, raw := range conditions {
 		condition, ok := raw.(map[string]any)
-		if ok && stringValue(condition["status"]) == "False" &&
+		if ok && modelDeploymentFailureConditionType(stringValue(condition["type"])) &&
+			stringValue(condition["status"]) == kubernetesConditionFalse &&
 			modelDeploymentFailureReason(strings.TrimSpace(stringValue(condition["reason"]))) {
 			return condition
 		}
 	}
 	return nil
+}
+
+func modelDeploymentFailureConditionType(conditionType string) bool {
+	return conditionType == "PredictorReady" || conditionType == "PresetsCombined" ||
+		strings.HasSuffix(conditionType, "WorkloadReady")
 }
 
 func modelDeploymentStatusIsCurrent(resource *unstructured.Unstructured) bool {
@@ -146,15 +215,16 @@ func modelDeploymentStatusIsCurrent(resource *unstructured.Unstructured) bool {
 }
 
 type modelDeploymentStatusSnapshot struct {
-	uid           types.UID
-	deploymentID  string
-	generation    int64
-	statusCurrent bool
-	terminating   bool
-	url           string
-	status        string
-	reason        string
-	message       string
+	uid            types.UID
+	deploymentID   string
+	generation     int64
+	statusCurrent  bool
+	terminating    bool
+	url            string
+	status         string
+	reason         string
+	message        string
+	transitionTime string
 }
 
 // modelDeploymentEventSignature tracks fields relevant to OneKS.
@@ -164,17 +234,25 @@ func modelDeploymentEventSignature(obj any) modelDeploymentStatusSnapshot {
 		return modelDeploymentStatusSnapshot{}
 	}
 	url, _, _ := unstructured.NestedString(resource.Object, "status", "url")
-	ready := kserveReadyCondition(resource)
+	condition := kserveReadyCondition(resource)
+	// Keep this selection aligned with modelDeploymentEvent: when Ready remains
+	// Unknown, a terminal component transition is what changes the callback.
+	if stringValue(condition["status"]) == kubernetesConditionUnknown {
+		if failure := modelDeploymentFailureCondition(resource); failure != nil {
+			condition = failure
+		}
+	}
 	return modelDeploymentStatusSnapshot{
-		uid:           resource.GetUID(),
-		deploymentID:  resource.GetLabels()[modelDeploymentIDLabel],
-		generation:    resource.GetGeneration(),
-		statusCurrent: modelDeploymentStatusIsCurrent(resource),
-		terminating:   resource.GetDeletionTimestamp() != nil,
-		url:           url,
-		status:        stringValue(ready["status"]),
-		reason:        stringValue(ready["reason"]),
-		message:       stringValue(ready["message"]),
+		uid:            resource.GetUID(),
+		deploymentID:   resource.GetLabels()[modelDeploymentIDLabel],
+		generation:     resource.GetGeneration(),
+		statusCurrent:  modelDeploymentStatusIsCurrent(resource),
+		terminating:    resource.GetDeletionTimestamp() != nil,
+		url:            url,
+		status:         stringValue(condition["status"]),
+		reason:         stringValue(condition["reason"]),
+		message:        stringValue(condition["message"]),
+		transitionTime: stringValue(condition["lastTransitionTime"]),
 	}
 }
 

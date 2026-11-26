@@ -14,7 +14,8 @@ rules:
   verbs: ["get", "list", "watch"]
 - apiGroups: ["serving.kserve.io"]
   resources: ["llminferenceservices"]
-  verbs: ["get", "list", "watch"]
+  # The monitor removes its deletion finalizer after OneKS acknowledges it.
+  verbs: ["get", "list", "watch", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
