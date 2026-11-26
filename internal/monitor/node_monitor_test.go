@@ -26,6 +26,7 @@ type publisherStub struct {
 	pods         func(context.Context, PodSnapshot) error
 	observations func(context.Context, ObservationSnapshot) error
 	chart        func(context.Context, ChartEvent) error
+	deployment   func(context.Context, int, ModelDeploymentEvent) error
 }
 
 func (p publisherStub) PublishNodeReady(ctx context.Context, groupID int, event NodeReadyEvent) error {
@@ -54,6 +55,17 @@ func (p publisherStub) PublishChartEvent(ctx context.Context, event ChartEvent) 
 		return nil
 	}
 	return p.chart(ctx, event)
+}
+
+func (p publisherStub) PublishModelDeploymentEvent(
+	ctx context.Context,
+	deploymentID int,
+	event ModelDeploymentEvent,
+) error {
+	if p.deployment == nil {
+		return nil
+	}
+	return p.deployment(ctx, deploymentID, event)
 }
 
 type placementResolverFunc func(context.Context, int) (int, error)

@@ -18,6 +18,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,9 +31,10 @@ import (
 // publish domain data without knowing HTTP paths, authentication or encryption.
 //
 // ReplacePods and ReplaceObservations are authoritative replacements, not
-// patches. Their callers must not publish partial snapshots. PublishNodeReady
-// and PublishChartEvent report current state and may be delivered again after
-// an informer relist or process restart; OneKS must handle repeated reports.
+// patches. Their callers must not publish partial snapshots. PublishNodeReady,
+// PublishChartEvent and the event publishers report current state and may be
+// delivered again after an informer relist or process restart; OneKS must handle
+// repeated reports.
 type Publisher interface {
 	// PublishNodeReady posts a node_ready event to
 	// /clusters/{clusterID}/nodegroups/{groupID}/events.
@@ -46,10 +48,34 @@ type Publisher interface {
 	// PublishChartEvent posts an application lifecycle event to
 	// /clusters/{clusterID}/events.
 	PublishChartEvent(context.Context, ChartEvent) error
+	// PublishModelDeploymentEvent posts a serving lifecycle event to
+	// /model-deployments/{deploymentID}/events.
+	PublishModelDeploymentEvent(context.Context, int, ModelDeploymentEvent) error
 }
 
 type encryptedEnvelope struct {
 	Payload string `json:"payload"`
+}
+
+type endpointStatusError struct {
+	code    int
+	status  string
+	message string
+}
+
+func (e *endpointStatusError) Error() string {
+	return fmt.Sprintf("endpoint returned %s: %s", e.status, e.message)
+}
+
+// endpointStatusCode lets a caller distinguish an already-removed resource
+// from transport, authentication and retryable server failures without parsing
+// an error string.
+func endpointStatusCode(err error) (int, bool) {
+	var statusErr *endpointStatusError
+	if !errors.As(err, &statusErr) {
+		return 0, false
+	}
+	return statusErr.code, true
 }
 
 // OneKSClient implements Publisher for the OneKS callback API. It owns endpoint
@@ -115,6 +141,15 @@ func (c *OneKSClient) PublishChartEvent(ctx context.Context, event ChartEvent) e
 	return c.send(ctx, c.clusterPath()+"/events", event)
 }
 
+// PublishModelDeploymentEvent implements Publisher.PublishModelDeploymentEvent.
+func (c *OneKSClient) PublishModelDeploymentEvent(
+	ctx context.Context,
+	deploymentID int,
+	event ModelDeploymentEvent,
+) error {
+	return c.send(ctx, "/model-deployments/"+strconv.Itoa(deploymentID)+"/events", event)
+}
+
 func (c *OneKSClient) clusterPath() string {
 	return "/clusters/" + strconv.Itoa(c.clusterID)
 }
@@ -162,7 +197,9 @@ func (c *OneKSClient) send(ctx context.Context, path string, payload any) error 
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		message, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("endpoint returned %s: %s", resp.Status, string(message))
+		return &endpointStatusError{
+			code: resp.StatusCode, status: resp.Status, message: string(message),
+		}
 	}
 	return nil
 }

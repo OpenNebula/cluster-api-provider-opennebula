@@ -73,12 +73,19 @@ func main() {
 		os.Exit(1)
 	}
 	observations := monitor.NewObservationMonitor(client, dynamicClient, publisher, config)
+	modelDeployments, err := monitor.NewModelDeploymentMonitor(
+		dynamicClient, client.Discovery(), publisher,
+	)
+	if err != nil {
+		log.Error(err, "unable to create model deployment monitor")
+		os.Exit(1)
+	}
 	charts, err := monitor.NewChartMonitor(dynamicClient, publisher)
 	if err != nil {
 		log.Error(err, "unable to create HelmChart monitor")
 		os.Exit(1)
 	}
-	manager := monitor.NewManager(nodes, pods, observations, charts)
+	manager := monitor.NewManager(nodes, pods, observations, modelDeployments, charts)
 
 	ctx := ctrl.SetupSignalHandler()
 	health := &http.Server{Addr: config.HealthAddress, Handler: healthHandler(manager)}
